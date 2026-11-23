@@ -98,7 +98,18 @@ export type AivoraDesktopApi = {
     assetId: string;
   }) => Promise<{ ok: boolean; asset?: Asset; message: string }>;
 
-  createShot: (input: { projectId: string; episodeId: string; sceneId: string }) => Promise<Shot>;
+  createShot: (input: {
+    projectId: string;
+    episodeId: string;
+    sceneId: string;
+    beforeShotId?: string | null;
+  }) => Promise<Shot>;
+  moveShot: (input: {
+    projectId: string;
+    shotId: string;
+    direction: "up" | "down";
+  }) => Promise<ProjectWorkspace>;
+  deleteShot: (input: { projectId: string; shotId: string }) => Promise<ProjectWorkspace>;
   updateShot: (input: UpdateShotInput) => Promise<Shot>;
   selectTake: (input: {
     projectId: string;
@@ -205,6 +216,8 @@ export const IPC_CHANNELS = {
   TOGGLE_ASSET_LOCK: "aivora:assets:toggle-lock",
   IMPORT_ASSET_IMAGE: "aivora:assets:import-image",
   CREATE_SHOT: "aivora:shots:create",
+  MOVE_SHOT: "aivora:shots:move",
+  DELETE_SHOT: "aivora:shots:delete",
   UPDATE_SHOT: "aivora:shots:update",
   SELECT_TAKE: "aivora:takes:select",
   ADD_SYNTHETIC_TAKE: "aivora:takes:add-synthetic",

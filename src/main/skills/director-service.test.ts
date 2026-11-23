@@ -210,16 +210,16 @@ describe("DirectorService proposal, apply, and 1-click undo", () => {
                 characters: [],
               },
               {
-                title: "镜 02 · 顾沉舟推门",
-                scale: "中景",
+                title: "镜 02 · 林晚驻足橱窗",
+                scale: "近景",
                 cameraMove: "缓推",
                 durationSec: 4,
-                visualPrompt: "顾沉舟身穿黑色风衣推开木门，暖光落在肩头", // Modified prompt on Shot 2
-                dialogue: "请问还有旧版诗集吗？",
-                speaker: "顾沉舟",
-                subtitle: "请问还有旧版诗集吗？",
-                sourceExcerpt: "顾沉舟推门问道：请问还有旧版诗集吗？",
-                characters: ["顾沉舟"],
+                visualPrompt: "林晚停下旧自行车望向橱窗诗集，顾沉舟身穿黑色风衣从她身后走近", // Modified prompt on Shot 2
+                dialogue: "这家店居然还开着。",
+                speaker: "林晚",
+                subtitle: "这家店居然还开着。",
+                sourceExcerpt: "林晚驻足橱窗轻声说：这家店居然还开着。顾沉舟从身后走近。",
+                characters: ["林晚", "顾沉舟"],
               },
             ],
           },
@@ -261,6 +261,138 @@ describe("DirectorService proposal, apply, and 1-click undo", () => {
     const undone = service.undoApply({ projectId: demo.project.id, undoToken: applied.undoToken! });
     expect(undone.ok).toBe(true);
     expect(undone.workspace?.assets.some((a) => a.name === "顾沉舟")).toBe(false);
+
+    projects.closeAll();
+    globalConfig.close();
+  });
+
+  it("preserves shot-to-video-take binding and hand-edited subtitles across shot insertion before Shot 1, shot deletion, and reordering in《晚照书店》", () => {
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-director-reorder-"));
+    tempDirs.push(base);
+    const projects = new ProjectStore(path.join(base, "ws"));
+    const globalConfig = new GlobalConfigStore(path.join(base, "app"), mockVault);
+    const oauth = new OAuthManager(globalConfig, async () => undefined);
+
+    const demo = projects.openDemoProject();
+    const epId = demo.episodes[0]!.id;
+    const origShots = demo.shots
+      .filter((s) => s.episodeId === epId)
+      .sort((a, b) => a.orderIndex - b.orderIndex);
+    const [shot1, shot2, shot3] = [origShots[0]!, origShots[1]!, origShots[2]!];
+
+    // Attach distinct selected video takes and hand-customized subtitles to all 3 shots of《晚照书店》
+    projects.addSyntheticTake({ projectId: demo.project.id, shotId: shot1.id, kind: "video", label: "v_shot1" });
+    projects.addSyntheticTake({ projectId: demo.project.id, shotId: shot2.id, kind: "video", label: "v_shot2" });
+    projects.addSyntheticTake({ projectId: demo.project.id, shotId: shot3.id, kind: "video", label: "v_shot3" });
+
+    projects.updateShot({ projectId: demo.project.id, shotId: shot1.id, subtitle: "【手修字幕A】雨后初晴的老街" });
+    projects.updateShot({ projectId: demo.project.id, shotId: shot2.id, subtitle: "【手修字幕B】林晚橱窗驻足" });
+    projects.updateShot({ projectId: demo.project.id, shotId: shot3.id, subtitle: "【手修字幕C】陈伯留书三年" });
+
+    const prepared = projects.openProject(demo.project.id);
+    const prepShots = prepared.shots
+      .filter((s) => s.episodeId === epId)
+      .sort((a, b) => a.orderIndex - b.orderIndex);
+    const vidTake1 = prepShots[0]!.selectedVideoTakeId!;
+    const vidTake2 = prepShots[1]!.selectedVideoTakeId!;
+    const vidTake3 = prepShots[2]!.selectedVideoTakeId!;
+    expect(vidTake1).toBeTruthy();
+    expect(vidTake2).toBeTruthy();
+    expect(vidTake3).toBeTruthy();
+
+    // Proposal inserts a brand-new opening shot BEFORE original Shot 1, deletes Shot 2, and swaps Shot 3 ahead of Shot 1
+    const service = new DirectorService(projects, globalConfig, oauth);
+    const proposal = parseDirectorProposalJson(
+      JSON.stringify({
+        scenes: [
+          {
+            title: "第一场 · 晚照书店",
+            summary: "插镜、删镜与调序复测",
+            shots: [
+              {
+                title: "镜 01 · 车站钟楼远眺",
+                scale: "远景",
+                cameraMove: "固定",
+                durationSec: 3,
+                visualPrompt: "清晨车站钟楼白鸽飞过灰色天际线",
+                dialogue: "列车刚刚驶离站台。",
+                speaker: "旁白",
+                subtitle: "列车刚刚驶离站台。",
+                sourceExcerpt: "清晨车站钟楼下，列车刚刚驶离站台。",
+                characters: [],
+              },
+              {
+                title: "镜 02 · 推门铜铃轻响",
+                scale: "中景",
+                cameraMove: "横摇",
+                durationSec: 5,
+                visualPrompt: shot3.visualPrompt,
+                dialogue: shot3.dialogue,
+                speaker: shot3.speaker,
+                subtitle: "AI试图覆盖为默认长句但应被拦截",
+                sourceExcerpt: "木门推开，陈伯站在木书架梯子上回头微笑。",
+                characters: ["林晚", "陈伯"],
+              },
+              {
+                title: "镜 03 · 雨后书店外景",
+                scale: "远景",
+                cameraMove: "缓推",
+                durationSec: 4,
+                visualPrompt: shot1.visualPrompt,
+                dialogue: shot1.dialogue,
+                speaker: shot1.speaker,
+                subtitle: "AI默认旁白字幕",
+                sourceExcerpt: "橘红色的夕阳斜斜洒在老街湿润的青石板上。",
+                characters: [],
+              },
+            ],
+          },
+        ],
+      }),
+      "DeepSeek",
+    );
+
+    const applied = service.applyProposal({
+      projectId: demo.project.id,
+      episodeId: epId,
+      proposal,
+    });
+    expect(applied.ok).toBe(true);
+    const afterShots = applied.workspace!.shots
+      .filter((s) => s.episodeId === epId)
+      .sort((a, b) => a.orderIndex - b.orderIndex);
+    expect(afterShots).toHaveLength(3);
+
+    // 1. Newly inserted opening shot must NOT steal original Shot 1's ID, video take, or subtitle
+    expect(afterShots[0]!.id).not.toBe(shot1.id);
+    expect(afterShots[0]!.id).not.toBe(shot2.id);
+    expect(afterShots[0]!.id).not.toBe(shot3.id);
+    expect(afterShots[0]!.selectedVideoTakeId).toBeNull();
+    expect(afterShots[0]!.subtitle).toBe("列车刚刚驶离站台。");
+
+    // 2. Reordered original Shot 3 (now at index 1) keeps its own ID, video take, and hand-edited subtitle
+    expect(afterShots[1]!.id).toBe(shot3.id);
+    expect(afterShots[1]!.selectedVideoTakeId).toBe(vidTake3);
+    expect(afterShots[1]!.subtitle).toBe("【手修字幕C】陈伯留书三年");
+
+    // 3. Shifted original Shot 1 (now at index 2) keeps its own ID, video take, and hand-edited subtitle
+    expect(afterShots[2]!.id).toBe(shot1.id);
+    expect(afterShots[2]!.selectedVideoTakeId).toBe(vidTake1);
+    expect(afterShots[2]!.subtitle).toBe("【手修字幕A】雨后初晴的老街");
+
+    // 4. 1-click undo restores all 3 original shots in original order [shot1, shot2, shot3] with takes & subtitles
+    const undone = service.undoApply({ projectId: demo.project.id, undoToken: applied.undoToken! });
+    expect(undone.ok).toBe(true);
+    const restoredShots = undone.workspace!.shots
+      .filter((s) => s.episodeId === epId)
+      .sort((a, b) => a.orderIndex - b.orderIndex);
+    expect(restoredShots.map((s) => s.id)).toEqual([shot1.id, shot2.id, shot3.id]);
+    expect(restoredShots.map((s) => s.selectedVideoTakeId)).toEqual([vidTake1, vidTake2, vidTake3]);
+    expect(restoredShots.map((s) => s.subtitle)).toEqual([
+      "【手修字幕A】雨后初晴的老街",
+      "【手修字幕B】林晚橱窗驻足",
+      "【手修字幕C】陈伯留书三年",
+    ]);
 
     projects.closeAll();
     globalConfig.close();

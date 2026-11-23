@@ -183,9 +183,41 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     importAssetImage: async () => ({ ok: false, message: "请在桌面端导入本地定妆参考图" }),
     createShot: async (input) => {
       const ws = workspaces.get(input.projectId)!;
-      const shot: Shot = { id: `sh_${Date.now()}`, sceneId: input.sceneId, episodeId: input.episodeId, orderIndex: ws.shots.length, title: `镜 ${String(ws.shots.length + 1).padStart(2, "0")} · 新镜头`, scale: "中景", cameraMove: "固定", durationSec: 3, trimInSec: 0, trimOutSec: 0, visualPrompt: "", negativePrompt: "", dialogue: "", speaker: "", subtitle: "", characterAssetIds: [], selectedImageTakeId: null, selectedVideoTakeId: null, selectedSpeechTakeId: null, updatedAt: new Date().toISOString() };
+      const epShots = ws.shots.filter((s) => s.episodeId === input.episodeId).sort((a, b) => a.orderIndex - b.orderIndex);
+      const targetIdx = input.beforeShotId ? epShots.findIndex((s) => s.id === input.beforeShotId) : -1;
+      const insertIdx = targetIdx >= 0 ? targetIdx : epShots.length;
+      for (const s of epShots) if (s.orderIndex >= insertIdx) s.orderIndex += 1;
+      const shot: Shot = { id: `sh_${Date.now()}`, sceneId: input.sceneId, episodeId: input.episodeId, orderIndex: insertIdx, title: `镜 ${String(insertIdx + 1).padStart(2, "0")} · 新镜头`, scale: "中景", cameraMove: "固定", durationSec: 3, trimInSec: 0, trimOutSec: 0, visualPrompt: "", negativePrompt: "", dialogue: "", speaker: "", subtitle: "", characterAssetIds: [], selectedImageTakeId: null, selectedVideoTakeId: null, selectedSpeechTakeId: null, updatedAt: new Date().toISOString() };
       ws.shots.push(shot);
       return structuredClone(shot);
+    },
+    moveShot: async (input) => {
+      const ws = workspaces.get(input.projectId)!;
+      const target = ws.shots.find((s) => s.id === input.shotId)!;
+      const epShots = ws.shots.filter((s) => s.episodeId === target.episodeId).sort((a, b) => a.orderIndex - b.orderIndex);
+      const idx = epShots.findIndex((s) => s.id === input.shotId);
+      const swapIdx = input.direction === "up" ? idx - 1 : idx + 1;
+      if (idx >= 0 && swapIdx >= 0 && swapIdx < epShots.length) {
+        const tmp = epShots[idx]!;
+        epShots[idx] = epShots[swapIdx]!;
+        epShots[swapIdx] = tmp;
+        epShots.forEach((s, i) => {
+          s.orderIndex = i;
+        });
+      }
+      return structuredClone(ws);
+    },
+    deleteShot: async (input) => {
+      const ws = workspaces.get(input.projectId)!;
+      const target = ws.shots.find((s) => s.id === input.shotId)!;
+      ws.shots = ws.shots.filter((s) => s.id !== input.shotId);
+      ws.shots
+        .filter((s) => s.episodeId === target.episodeId)
+        .sort((a, b) => a.orderIndex - b.orderIndex)
+        .forEach((s, i) => {
+          s.orderIndex = i;
+        });
+      return structuredClone(ws);
     },
     updateShot: async (input) => {
       const ws = workspaces.get(input.projectId)!;
@@ -380,7 +412,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     cancelEpisodeExport: async () => ({ ok: false, message: "浏览器预览模式无导出任务" }),
     onFlushBeforeClose: () => () => undefined,
     notifyFlushComplete: () => undefined,
-    getAppInfo: async () => ({ version: "1.1.0", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "1.1.1", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
   };
 }

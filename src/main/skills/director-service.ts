@@ -13,6 +13,11 @@ import {
   DIRECTOR_SYSTEM_PROMPT,
   parseDirectorProposalJson,
 } from "./director-prompt";
+import {
+  matchProposedShotsToExisting,
+  resolveMergedSubtitle,
+  type FlatProposedShot,
+} from "./director-shot-matcher";
 
 type UndoSnapshot = {
   projectId: string;
@@ -186,6 +191,17 @@ export class DirectorService {
 
     let preservedShotsCount = 0;
 
+    // Content-anchored shot alignment (dialogue / coreTitle / visualPrompt / sourceExcerpt / speaker)
+    // Ensures inserting a shot before Shot 1, deleting a middle shot, or reordering shots never
+    // shifts an existing shot's selected video take or hand-edited subtitle onto the wrong shot.
+    const flatProposed: FlatProposedShot[] = [];
+    valid.scenes.forEach((sc, scIdx) => {
+      for (const sh of sc.shots) {
+        flatProposed.push({ flatIndex: flatProposed.length, sceneIndex: scIdx, shot: sh });
+      }
+    });
+    const matchedByFlatIndex = matchProposedShotsToExisting(flatProposed, prevShots);
+
     this.projects.withProjectDb(input.projectId, (db) => {
       db.transaction(() => {
         const prevScenes = before.scenes
@@ -221,15 +237,20 @@ export class DirectorService {
 
           for (const sh of sc.shots) {
             const idx = globalShotIdx++;
-            const existingShot = prevShots[idx];
+            const existingShot = matchedByFlatIndex.get(idx);
             const charIds = sh.characters
               .map((name) => assetNameToId.get(name.trim()))
               .filter((id): id is string => Boolean(id));
 
             if (existingShot) {
-              // Incremental merge: preserve shot ID, all existing takes, and selected take IDs!
+              // Content-matched shot: preserve shot ID, all existing takes, selected takes, trim window, and hand-edited subtitle!
               keptShotIds.add(existingShot.id);
               preservedShotsCount += 1;
+              const mergedSubtitle = resolveMergedSubtitle(sh, existingShot);
+              const hasActiveTrim = existingShot.trimOutSec > existingShot.trimInSec + 0.2;
+              const mergedDurationSec = hasActiveTrim ? existingShot.durationSec : sh.durationSec;
+              const mergedCharIds =
+                charIds.length > 0 ? charIds : existingShot.characterAssetIds;
               db.run(
                 `UPDATE shots SET
                    scene_id = ?, order_index = ?, title = ?, scale = ?, camera_move = ?,
@@ -241,12 +262,12 @@ export class DirectorService {
                 sh.title,
                 sh.scale,
                 sh.cameraMove,
-                sh.durationSec,
+                mergedDurationSec,
                 sh.visualPrompt,
                 sh.dialogue,
                 sh.speaker,
-                sh.subtitle || sh.dialogue,
-                JSON.stringify(charIds),
+                mergedSubtitle,
+                JSON.stringify(mergedCharIds),
                 now,
                 existingShot.id,
               );
@@ -295,7 +316,7 @@ export class DirectorService {
     const fresh = this.projects.openProject(input.projectId);
     const assetNote = createdAssetIds.length > 0 ? `，自动建档 ${createdAssetIds.length} 个新角色/场景` : "";
     const preserveNote =
-      preservedShotsCount > 0 ? `，无损保留前 ${preservedShotsCount} 镜已有历史版本` : "";
+      preservedShotsCount > 0 ? `，按内容对齐无损保留 ${preservedShotsCount} 镜已有版本与手修字幕` : "";
     return {
       ok: true,
       workspace: fresh,

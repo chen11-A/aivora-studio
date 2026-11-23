@@ -167,4 +167,57 @@ describe("ProjectStore & VACUUM INTO ZIP archive", () => {
     expect(() => sanitizeArchiveEntryName("assets\\bad.png")).toThrow();
     expect(() => sanitizeArchiveEntryName("assets/CON.txt")).toThrow();
   });
+
+  it("supports manual shot insertion before Shot 1, reordering, and deletion in《晚照书店》without cross-wiring selected video takes or subtitles", () => {
+    const base = makeTempDir("aivora-manual-shots-");
+    const store = new ProjectStore(join(base, "手动插删调序 空间"));
+    const demo = store.openDemoProject();
+    const epId = demo.episodes[0]!.id;
+    const scId = demo.scenes[0]!.id;
+    const orig = demo.shots
+      .filter((s) => s.episodeId === epId)
+      .sort((a, b) => a.orderIndex - b.orderIndex);
+    const [s1, s2, s3] = [orig[0]!, orig[1]!, orig[2]!];
+
+    store.addSyntheticTake({ projectId: demo.project.id, shotId: s1.id, kind: "video", label: "v1" });
+    store.addSyntheticTake({ projectId: demo.project.id, shotId: s3.id, kind: "video", label: "v3" });
+    store.updateShot({ projectId: demo.project.id, shotId: s1.id, subtitle: "【手修1】" });
+    store.updateShot({ projectId: demo.project.id, shotId: s3.id, subtitle: "【手修3】" });
+
+    const beforeEdit = store.openProject(demo.project.id).shots
+      .filter((s) => s.episodeId === epId)
+      .sort((a, b) => a.orderIndex - b.orderIndex);
+    const v1Id = beforeEdit[0]!.selectedVideoTakeId!;
+    const v3Id = beforeEdit[2]!.selectedVideoTakeId!;
+
+    // 1. Insert a new shot BEFORE Shot 1
+    const inserted = store.createShot({
+      projectId: demo.project.id,
+      episodeId: epId,
+      sceneId: scId,
+      beforeShotId: s1.id,
+    });
+    expect(inserted.orderIndex).toBe(0);
+
+    // 2. Delete original Shot 2
+    store.deleteShot({ projectId: demo.project.id, shotId: s2.id });
+
+    // 3. Move original Shot 3 up ahead of original Shot 1
+    const afterSwap = store.moveShot({
+      projectId: demo.project.id,
+      shotId: s3.id,
+      direction: "up",
+    });
+
+    const finalShots = afterSwap.shots
+      .filter((s) => s.episodeId === epId)
+      .sort((a, b) => a.orderIndex - b.orderIndex);
+    expect(finalShots.map((s) => s.id)).toEqual([inserted.id, s3.id, s1.id]);
+    expect(finalShots[0]!.selectedVideoTakeId).toBeNull();
+    expect(finalShots[1]!.selectedVideoTakeId).toBe(v3Id);
+    expect(finalShots[1]!.subtitle).toBe("【手修3】");
+    expect(finalShots[2]!.selectedVideoTakeId).toBe(v1Id);
+    expect(finalShots[2]!.subtitle).toBe("【手修1】");
+    store.closeAll();
+  });
 });

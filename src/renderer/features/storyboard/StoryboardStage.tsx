@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Film, Image as ImageIcon, Mic, Plus, Sparkles, Upload, Video } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronLeft, ChevronRight, Film, Image as ImageIcon, Mic, Plus, Sparkles, Trash2, Upload, Video } from "lucide-react";
 import { evaluateShotVisualStatus, isVideoMediaPath, resolveActiveVisualTake, resolveSelectedSpeechTake, resolveShotTrimWindow } from "@shared/media-selection";
 import type { CameraMove, ShotScale } from "@shared/types/domain";
 import { getDesktopClient } from "../../lib/desktop-client";
@@ -18,6 +18,8 @@ export function StoryboardStage() {
   const toggleSidebar = useStudioStore((s) => s.toggleSidebar);
   const selectShot = useStudioStore((s) => s.selectShot);
   const createShot = useStudioStore((s) => s.createShot);
+  const moveShot = useStudioStore((s) => s.moveShot);
+  const deleteShot = useStudioStore((s) => s.deleteShot);
   const editShot = useStudioStore((s) => s.editShot);
   const selectTake = useStudioStore((s) => s.selectTake);
   const addSyntheticTake = useStudioStore((s) => s.addSyntheticTake);
@@ -236,28 +238,15 @@ export function StoryboardStage() {
             </span>
             {currentShot && (
               <div className="flex items-center gap-3 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => void importShotTake(currentShot.id, "video")}
-                  className="text-[11px] text-[#a4aec0] hover:text-[#f3f5f9] flex items-center gap-1 cursor-pointer"
-                >
+                <button type="button" onClick={() => void importShotTake(currentShot.id, "video")} className="text-[11px] text-[#a4aec0] hover:text-[#f3f5f9] flex items-center gap-1 cursor-pointer">
                   <Upload className="w-3 h-3" />
                   <span>导入视频</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => void importShotTake(currentShot.id, "image")}
-                  className="text-[11px] text-[#a4aec0] hover:text-[#f3f5f9] flex items-center gap-1 cursor-pointer"
-                >
+                <button type="button" onClick={() => void importShotTake(currentShot.id, "image")} className="text-[11px] text-[#a4aec0] hover:text-[#f3f5f9] flex items-center gap-1 cursor-pointer">
                   <Upload className="w-3 h-3" />
                   <span>导入图片</span>
                 </button>
-                <button
-                  type="button"
-                  data-testid="add-take-btn"
-                  onClick={() => void addSyntheticTake(currentShot.id, "image")}
-                  className="text-[11px] text-[#60a5fa] hover:underline flex items-center gap-1 cursor-pointer"
-                >
+                <button type="button" data-testid="add-take-btn" onClick={() => void addSyntheticTake(currentShot.id, "image")} className="text-[11px] text-[#60a5fa] hover:underline flex items-center gap-1 cursor-pointer">
                   <Plus className="w-3 h-3" />
                   <span>新增一版</span>
                 </button>
@@ -274,13 +263,9 @@ export function StoryboardStage() {
                   key={take.id}
                   type="button"
                   data-testid={`take-card-${take.versionNumber}`}
-                  onClick={() =>
-                    currentShot && void selectTake(currentShot.id, take.id, take.kind)
-                  }
+                  onClick={() => currentShot && void selectTake(currentShot.id, take.id, take.kind)}
                   className={`relative shrink-0 w-[128px] h-[68px] rounded-lg overflow-hidden border-2 cursor-pointer transition-all ${
-                    selected
-                      ? "border-[#10b981] ring-1 ring-[#10b981]/40"
-                      : "border-[#252b37] opacity-80 hover:opacity-100"
+                    selected ? "border-[#10b981] ring-1 ring-[#10b981]/40" : "border-[#252b37] opacity-80 hover:opacity-100"
                   }`}
                 >
                   {src && isVid ? (
@@ -311,10 +296,28 @@ export function StoryboardStage() {
 
       {/* Right Concise Inspector (280px, Visible Cast Pills & Dialogue) */}
       <aside className="bg-[#14171e] border-l border-[#252b37] flex flex-col min-h-0 overflow-hidden">
-        <div className="h-10 px-4 border-b border-[#252b37] flex items-center justify-between shrink-0">
+        <div className="h-10 px-3.5 border-b border-[#252b37] flex items-center justify-between gap-1.5 shrink-0">
           <span className="text-[12px] font-semibold text-[#f3f5f9] truncate">
             {currentShot?.title ?? "镜头属性"}
           </span>
+          {currentShot && epScene && (
+            <div className="flex items-center gap-0.5 shrink-0">
+              <button type="button" data-testid="insert-shot-before-btn" onClick={() => void createShot(epScene.id, currentShot.id)} className="p-1 rounded hover:bg-[#222834] text-[#a4aec0] hover:text-[#f3f5f9] cursor-pointer" title="在当前镜前插入一镜">
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+              <button type="button" data-testid="move-shot-up-btn" onClick={() => void moveShot(currentShot.id, "up")} className="p-1 rounded hover:bg-[#222834] text-[#a4aec0] hover:text-[#f3f5f9] cursor-pointer" title="上移当前镜头">
+                <ArrowUp className="w-3.5 h-3.5" />
+              </button>
+              <button type="button" data-testid="move-shot-down-btn" onClick={() => void moveShot(currentShot.id, "down")} className="p-1 rounded hover:bg-[#222834] text-[#a4aec0] hover:text-[#f3f5f9] cursor-pointer" title="下移当前镜头">
+                <ArrowDown className="w-3.5 h-3.5" />
+              </button>
+              {epShots.length > 1 && (
+                <button type="button" data-testid="delete-shot-btn" onClick={() => void deleteShot(currentShot.id)} className="p-1 rounded hover:bg-[#222834] text-[#f87171] cursor-pointer" title="删除当前镜头">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {currentShot && (

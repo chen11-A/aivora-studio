@@ -31,6 +31,8 @@ import { initProjectSchema } from "./schema";
 import {
   addSyntheticTakeInDb,
   createShotInDb,
+  deleteShotInDb,
+  moveShotInDb,
   selectTakeInDb,
   updateShotInDb,
 } from "./shot-mutations";
@@ -395,8 +397,23 @@ export class ProjectStore {
     };
   }
 
-  createShot(input: { projectId: string; episodeId: string; sceneId: string }): Shot {
+  createShot(input: {
+    projectId: string;
+    episodeId: string;
+    sceneId: string;
+    beforeShotId?: string | null;
+  }): Shot {
     return createShotInDb(this.getDb(input.projectId), input);
+  }
+
+  moveShot(input: { projectId: string; shotId: string; direction: "up" | "down" }): ProjectWorkspace {
+    moveShotInDb(this.getDb(input.projectId), input);
+    return this.openProject(input.projectId);
+  }
+
+  deleteShot(input: { projectId: string; shotId: string }): ProjectWorkspace {
+    deleteShotInDb(this.getDb(input.projectId), input);
+    return this.openProject(input.projectId);
   }
 
   updateShot(rawInput: UpdateShotInput): Shot {

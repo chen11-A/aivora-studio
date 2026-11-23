@@ -67,7 +67,9 @@ interface StudioStore {
   editAsset: (patch: Omit<UpdateAssetInput, "projectId">) => void;
   toggleAssetLock: (assetId: string) => Promise<void>;
   importAssetImage: (assetId: string) => Promise<void>;
-  createShot: (sceneId: string) => Promise<void>;
+  createShot: (sceneId: string, beforeShotId?: string | null) => Promise<void>;
+  moveShot: (shotId: string, direction: "up" | "down") => Promise<void>;
+  deleteShot: (shotId: string) => Promise<void>;
   editShot: (patch: Omit<UpdateShotInput, "projectId">) => void;
   selectTake: (shotId: string, takeId: string, kind: TakeKind) => Promise<void>;
   addSyntheticTake: (shotId: string, kind: TakeKind, label?: string) => Promise<void>;
@@ -283,13 +285,29 @@ export const useStudioStore = create<StudioStore>((set, get) => {
       });
     },
 
-    async createShot(sceneId) {
+    async createShot(sceneId, beforeShotId) {
       const ws = get().workspace;
       const epId = get().activeEpisodeId;
-      if (!ws || !epId) return;
-      const shot = await client.createShot({ projectId: ws.project.id, episodeId: epId, sceneId });
+      if (!ws || !epId || !(await guardFlush())) return;
+      const shot = await client.createShot({ projectId: ws.project.id, episodeId: epId, sceneId, beforeShotId });
       const fresh = await client.openProject(ws.project.id);
       set({ workspace: fresh, activeShotId: shot.id });
+    },
+
+    async moveShot(shotId, direction) {
+      const ws = get().workspace;
+      if (!ws || !(await guardFlush())) return;
+      const fresh = await client.moveShot({ projectId: ws.project.id, shotId, direction });
+      set({ workspace: fresh, activeShotId: shotId });
+    },
+
+    async deleteShot(shotId) {
+      const ws = get().workspace;
+      const epId = get().activeEpisodeId;
+      if (!ws || !(await guardFlush())) return;
+      const fresh = await client.deleteShot({ projectId: ws.project.id, shotId });
+      const nextShot = fresh.shots.filter((s) => s.episodeId === epId).sort((a, b) => a.orderIndex - b.orderIndex)[0]?.id ?? null;
+      set({ workspace: fresh, activeShotId: nextShot });
     },
 
     editShot(patch) {

@@ -21,6 +21,8 @@ const api: AivoraDesktopApi = {
     ipcRenderer.invoke(IPC_CHANNELS.TOGGLE_ASSET_LOCK, projectId, assetId),
   importAssetImage: (input) => ipcRenderer.invoke(IPC_CHANNELS.IMPORT_ASSET_IMAGE, input),
   createShot: (input) => ipcRenderer.invoke(IPC_CHANNELS.CREATE_SHOT, input),
+  moveShot: (input) => ipcRenderer.invoke(IPC_CHANNELS.MOVE_SHOT, input),
+  deleteShot: (input) => ipcRenderer.invoke(IPC_CHANNELS.DELETE_SHOT, input),
   updateShot: (input) => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_SHOT, input),
   selectTake: (input) => ipcRenderer.invoke(IPC_CHANNELS.SELECT_TAKE, input),
   addSyntheticTake: (input) => ipcRenderer.invoke(IPC_CHANNELS.ADD_SYNTHETIC_TAKE, input),

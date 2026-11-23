@@ -16,21 +16,33 @@ function takeColumn(kind: TakeKind): string {
 
 export function createShotInDb(
   db: SqliteDriver,
-  input: { projectId: string; episodeId: string; sceneId: string },
+  input: { projectId: string; episodeId: string; sceneId: string; beforeShotId?: string | null },
 ): Shot {
   const now = new Date().toISOString();
-  const count = db.get<{ c: number }>(`SELECT COUNT(*) AS c FROM shots WHERE episode_id = ?`, input.episodeId)?.c ?? 0;
+  const existing = db.all<{ id: string; scene_id: string }>(
+    `SELECT id, scene_id FROM shots WHERE episode_id = ? ORDER BY order_index ASC, id ASC`,
+    input.episodeId,
+  );
   const id = `sh_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
-  const idx = Number(count);
-  const title = `镜 ${String(idx + 1).padStart(2, "0")} · 新镜头`;
+  const targetIdx = input.beforeShotId
+    ? existing.findIndex((s) => s.id === input.beforeShotId)
+    : -1;
+  const insertIdx = targetIdx >= 0 ? targetIdx : existing.length;
+  const sceneId =
+    targetIdx >= 0 ? existing[targetIdx]!.scene_id : input.sceneId;
+  const title = `镜 ${String(insertIdx + 1).padStart(2, "0")} · 新镜头`;
+
   db.transaction(() => {
+    for (let i = existing.length - 1; i >= insertIdx; i -= 1) {
+      db.run(`UPDATE shots SET order_index = ? WHERE id = ?`, i + 1, existing[i]!.id);
+    }
     db.run(
       `INSERT INTO shots (id, scene_id, episode_id, order_index, title, scale, camera_move, duration_sec, visual_prompt, updated_at)
        VALUES (?, ?, ?, ?, ?, '中景', '固定', 3, '', ?)`,
       id,
-      input.sceneId,
+      sceneId,
       input.episodeId,
-      idx,
+      insertIdx,
       title,
       now,
     );
@@ -38,9 +50,9 @@ export function createShotInDb(
   });
   return {
     id,
-    sceneId: input.sceneId,
+    sceneId,
     episodeId: input.episodeId,
-    orderIndex: idx,
+    orderIndex: insertIdx,
     title,
     scale: "中景",
     cameraMove: "固定",
@@ -58,6 +70,55 @@ export function createShotInDb(
     selectedSpeechTakeId: null,
     updatedAt: now,
   };
+}
+
+export function moveShotInDb(
+  db: SqliteDriver,
+  input: { projectId: string; shotId: string; direction: "up" | "down" },
+): void {
+  const row = db.get<{ episode_id: string }>(`SELECT episode_id FROM shots WHERE id = ?`, input.shotId);
+  if (!row) throw new Error("镜头不存在");
+  const list = db.all<{ id: string }>(
+    `SELECT id FROM shots WHERE episode_id = ? ORDER BY order_index ASC, id ASC`,
+    row.episode_id,
+  );
+  const idx = list.findIndex((s) => s.id === input.shotId);
+  const swapIdx = input.direction === "up" ? idx - 1 : idx + 1;
+  if (idx < 0 || swapIdx < 0 || swapIdx >= list.length) return;
+  const temp = list[idx]!;
+  list[idx] = list[swapIdx]!;
+  list[swapIdx] = temp;
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    list.forEach((item, i) => {
+      db.run(`UPDATE shots SET order_index = ? WHERE id = ?`, i, item.id);
+    });
+    db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
+  });
+}
+
+export function deleteShotInDb(
+  db: SqliteDriver,
+  input: { projectId: string; shotId: string },
+): void {
+  const row = db.get<{ episode_id: string }>(`SELECT episode_id FROM shots WHERE id = ?`, input.shotId);
+  if (!row) throw new Error("镜头不存在");
+  const list = db.all<{ id: string }>(
+    `SELECT id FROM shots WHERE episode_id = ? ORDER BY order_index ASC, id ASC`,
+    row.episode_id,
+  );
+  if (list.length <= 1) {
+    throw new Error("当前分集至少需保留 1 个镜头");
+  }
+  const remaining = list.filter((s) => s.id !== input.shotId);
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    db.run(`DELETE FROM shots WHERE id = ?`, input.shotId);
+    remaining.forEach((item, i) => {
+      db.run(`UPDATE shots SET order_index = ? WHERE id = ?`, i, item.id);
+    });
+    db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
+  });
 }
 
 export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): string {

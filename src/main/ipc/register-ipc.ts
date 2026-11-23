@@ -105,8 +105,18 @@ export function registerIpcHandlers(deps: {
     return { ok: true, asset, message: "定妆参考图已更新" };
   });
 
-  handle(IPC_CHANNELS.CREATE_SHOT, (input: { projectId: string; episodeId: string; sceneId: string }) =>
-    deps.projects.createShot(input),
+  handle(
+    IPC_CHANNELS.CREATE_SHOT,
+    (input: { projectId: string; episodeId: string; sceneId: string; beforeShotId?: string | null }) =>
+      deps.projects.createShot(input),
+  );
+  handle(
+    IPC_CHANNELS.MOVE_SHOT,
+    (input: { projectId: string; shotId: string; direction: "up" | "down" }) =>
+      deps.projects.moveShot(input),
+  );
+  handle(IPC_CHANNELS.DELETE_SHOT, (input: { projectId: string; shotId: string }) =>
+    deps.projects.deleteShot(input),
   );
   handle(IPC_CHANNELS.UPDATE_SHOT, (input: UpdateShotInput) => deps.projects.updateShot(input));
   handle(
