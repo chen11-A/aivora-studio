@@ -37,6 +37,44 @@ function resolveWorkspaceRoot(): string {
 }
 
 async function runHeadlessSmokeTest(workspaceRoot: string, reportPath: string): Promise<void> {
+  if (process.env.AIVORA_SMOKE_VERIFY_EXISTING === "1") {
+    const existingStore = new ProjectStore(workspaceRoot);
+    try {
+      const summaries = existingStore.listProjects();
+      const target = summaries.find((p) => p.name === "冒烟测试 晚照书店");
+      const reopened = target ? existingStore.openProject(target.id) : null;
+      const ok = Boolean(reopened && reopened.episodes[0]?.scriptText.includes("重启读回通过"));
+      writeFileSync(
+        reportPath,
+        JSON.stringify(
+          {
+            ok,
+            mode: "verify_existing_after_upgrade",
+            version: app.getVersion(),
+            sqliteEngine: "node:sqlite",
+            foundProjects: summaries.length,
+            projectDir: reopened?.dirPath ?? null,
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+      app.exit(ok ? 0 : 1);
+      return;
+    } catch (error) {
+      writeFileSync(
+        reportPath,
+        JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+        "utf8",
+      );
+      app.exit(1);
+      return;
+    } finally {
+      existingStore.closeAll();
+    }
+  }
+
   const store = new ProjectStore(workspaceRoot);
   try {
     const created = store.createProject({
@@ -50,7 +88,22 @@ async function runHeadlessSmokeTest(workspaceRoot: string, reportPath: string): 
       episodeId: ep.id,
       scriptText: "第一场：中文与空格路径持久化校验。\n第二行：重启读回通过。",
     });
+    const archiveZip = join(workspaceRoot, ".smoke-backup.zip");
+    await store.exportArchiveToPath(created.project.id, archiveZip);
     store.closeAll();
+
+    // Verify ZIP restore into a clean sibling workspace
+    const restoreRoot = join(workspaceRoot, ".smoke-restore");
+    const restoreStore = new ProjectStore(restoreRoot);
+    let archiveRoundtripOk = false;
+    try {
+      const restored = await restoreStore.importArchiveFromPath(archiveZip);
+      archiveRoundtripOk =
+        restored.project.name === "冒烟测试 晚照书店" &&
+        Boolean(restored.episodes[0]?.scriptText.includes("重启读回通过"));
+    } finally {
+      restoreStore.closeAll();
+    }
 
     const reopenedStore = new ProjectStore(workspaceRoot);
     try {
@@ -72,7 +125,8 @@ async function runHeadlessSmokeTest(workspaceRoot: string, reportPath: string): 
 
       const ok =
         reopened.project.name === "冒烟测试 晚照书店" &&
-        reopened.episodes[0]?.scriptText.includes("重启读回通过") &&
+        Boolean(reopened.episodes[0]?.scriptText.includes("重启读回通过")) &&
+        archiveRoundtripOk &&
         (exportOk === null || exportOk === true);
 
       const report = {
@@ -83,6 +137,7 @@ async function runHeadlessSmokeTest(workspaceRoot: string, reportPath: string): 
         sqliteEngine: "node:sqlite",
         workspaceRoot,
         projectDir: reopened.dirPath,
+        archiveRoundtripOk,
         ffmpegAvailable: ffmpegStatus.available,
         exportOk,
         exportedPath,

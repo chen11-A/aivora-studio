@@ -366,7 +366,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       throw new Error("请在桌面端使用查单找回");
     },
     listProjectJobs: async () => [],
-    getAppInfo: async () => ({ version: "1.0.0-alpha.3", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "1.0.0", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
   };
 }
