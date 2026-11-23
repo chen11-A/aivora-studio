@@ -36,13 +36,37 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck, lint, and unit tests
+      - name: Fetch and SHA-256 verify pinned Windows FFmpeg 8.1.2 into resources/media
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://github.com/GyanD/codexffmpeg/releases/download/8.1.2/ffmpeg-8.1.2-full_build.7z"
+          $expectedSha = "0fff188997a499b5382e0f66e845d4556c48c54f0113ebed4853d556dbdd7059"
+          $archive = Join-Path $env:RUNNER_TEMP "ffmpeg-8.1.2-full_build.7z"
+          $extractDir = Join-Path $env:RUNNER_TEMP "ffmpeg-extract"
+
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          $actualSha = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha -ne $expectedSha) {
+            throw "FFmpeg 压缩包 SHA-256 校验失败: $actualSha != $expectedSha"
+          }
+
+          New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+          7z e $archive "ffmpeg-8.1.2-full_build\bin\ffmpeg.exe" "ffmpeg-8.1.2-full_build\bin\ffprobe.exe" "-o$extractDir" -y | Out-Null
+
+          $mediaDir = Join-Path (Get-Location) "resources\media"
+          New-Item -ItemType Directory -Path $mediaDir -Force | Out-Null
+          Copy-Item (Join-Path $extractDir "ffmpeg.exe") (Join-Path $mediaDir "ffmpeg.exe") -Force
+          Copy-Item (Join-Path $extractDir "ffprobe.exe") (Join-Path $mediaDir "ffprobe.exe") -Force
+          & (Join-Path $mediaDir "ffmpeg.exe") -version | Select-Object -First 2
+
+      - name: Typecheck, lint, and unit tests (with real Windows FFmpeg)
         run: |
           pnpm typecheck
           pnpm lint
           pnpm test
 
-      - name: Build Windows x64 NSIS installer
+      - name: Build Windows x64 NSIS installer (with bundled FFmpeg)
         run: pnpm build:win
 
       - name: Verify installer output and compute SHA-256
@@ -59,7 +83,7 @@ jobs:
           "name=$($exe.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Non-admin HKCU silent install, Chinese+space path startup smoke, and uninstall
+      - name: Non-admin HKCU silent install, Chinese+space path & bundled FFmpeg MP4 export smoke
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -101,7 +125,7 @@ jobs:
             throw "检测到 HKLM 注册表写入，违反普通用户 HKCU 安装规范"
           }
 
-          # Launch installed app in headless smoke mode with Chinese + space workspace path
+          # Launch installed app in headless smoke mode with Chinese + space workspace path + bundled FFmpeg export
           $workspaceDir = Join-Path $env:RUNNER_TEMP "测试 作品 空间"
           $smokeReport = Join-Path $env:RUNNER_TEMP "aivora-smoke-report.json"
           New-Item -ItemType Directory -Path $workspaceDir -Force | Out-Null
@@ -118,9 +142,13 @@ jobs:
           }
           $report = Get-Content -Path $smokeReport -Raw -Encoding UTF8 | ConvertFrom-Json
           Write-Host ($report | ConvertTo-Json -Depth 4)
-          if (-not $report.ok -or $report.sqliteEngine -ne "node:sqlite") {
-            throw "冒烟报告校验未通过"
+          if (-not $report.ok -or $report.sqliteEngine -ne "node:sqlite" -or -not $report.ffmpegAvailable -or -not $report.exportOk) {
+            throw "冒烟报告校验未通过（SQLite 或内置 FFmpeg 成片导出未通过）"
           }
+          if (-not (Test-Path $report.exportedPath)) {
+            throw "未找到导出的中文名 MP4 成片：$($report.exportedPath)"
+          }
+          Write-Host "Verified real exported MP4: $($report.exportedPath) ($([Math]::Round((Get-Item $report.exportedPath).Length / 1KB, 1)) KB)"
 
           # Silent uninstall and confirm user project workspace is preserved
           if (Test-Path $uninstallExe) {
@@ -131,7 +159,7 @@ jobs:
           }
           Write-Host "Uninstall preserved user project directory: $($report.projectDir)"
 
-      - name: Upload Stage 1 Windows NSIS installer artifact
+      - name: Upload Stage 2 Windows NSIS installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: AIVORA-Studio-Setup-win-x64
