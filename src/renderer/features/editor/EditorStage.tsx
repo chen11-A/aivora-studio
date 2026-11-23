@@ -1,19 +1,29 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
-  Download,
-  Film,
+  AlertTriangle,
+  CheckCircle2,
   Monitor,
   Music,
   Pause,
   Play,
-  ShieldCheck,
+  RotateCcw,
   Smartphone,
   Subtitles,
-  Volume2,
+  Trash2,
+  Upload,
 } from "lucide-react";
+import {
+  evaluateEpisodeExportReadiness,
+  isVideoMediaPath,
+  resolveActiveVisualTake,
+  resolveSelectedSpeechTake,
+} from "@shared/media-selection";
 import type { SubtitleStyle } from "@shared/types/domain";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useStudioStore } from "../../store/useStudioStore";
+import { EditorTimeline } from "./EditorTimeline";
+import { ExportModal } from "./ExportModal";
+import { useTimelinePlayback } from "./useTimelinePlayback";
 
 const SUB_STYLES: Array<{ id: SubtitleStyle; label: string }> = [
   { id: "white", label: "经典白字黑边" },
@@ -22,89 +32,158 @@ const SUB_STYLES: Array<{ id: SubtitleStyle; label: string }> = [
   { id: "variety", label: "醒目粗描边" },
 ];
 
+function fmtTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  const tenth = Math.floor((sec % 1) * 10);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${tenth}`;
+}
+
+function subtitlePreviewClass(style: SubtitleStyle): string {
+  if (style === "yellow") return "bg-black/60 text-[#fde047] font-semibold";
+  if (style === "bar") return "bg-black/85 text-white px-4 py-1.5";
+  if (style === "variety") return "bg-black/70 text-white font-bold tracking-wide text-[14px]";
+  return "bg-black/75 text-white font-medium";
+}
+
 export function EditorStage() {
   const workspace = useStudioStore((s) => s.workspace);
   const activeEpisodeId = useStudioStore((s) => s.activeEpisodeId);
-  const exportModalOpen = useStudioStore((s) => s.exportModalOpen);
-  const setExportModalOpen = useStudioStore((s) => s.setExportModalOpen);
   const updateProjectSettings = useStudioStore((s) => s.updateProjectSettings);
+  const importProjectBgm = useStudioStore((s) => s.importProjectBgm);
+  const clearProjectBgm = useStudioStore((s) => s.clearProjectBgm);
+  const jumpToShot = useStudioStore((s) => s.jumpToShot);
 
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [playing, setPlaying] = useState(false);
-  const [exportFileName, setExportFileName] = useState("");
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const speechRef = useRef<HTMLAudioElement | null>(null);
+  const bgmRef = useRef<HTMLAudioElement | null>(null);
+
+  const epShots = useMemo(
+    () =>
+      workspace
+        ? workspace.shots
+            .filter((s) => s.episodeId === activeEpisodeId)
+            .sort((a, b) => a.orderIndex - b.orderIndex)
+        : [],
+    [workspace, activeEpisodeId],
+  );
+
+  const playback = useTimelinePlayback(epShots);
+
   const client = getDesktopClient();
+  const resolveSrc = (mediaPath: string | null | undefined) => {
+    if (!mediaPath || !workspace) return null;
+    return mediaPath.startsWith("data:") ? mediaPath : client.mediaUrl(workspace.project.id, mediaPath);
+  };
+
+  const currentShot = playback.activeSegment?.shot ?? null;
+  const currentTake =
+    workspace && currentShot ? resolveActiveVisualTake(currentShot, workspace.takes) : null;
+  const currentSpeech =
+    workspace && currentShot ? resolveSelectedSpeechTake(currentShot, workspace.takes) : null;
+  const previewSrc = resolveSrc(currentTake?.mediaPath);
+  const previewIsVideo = isVideoMediaPath(currentTake?.mediaPath);
+  const speechSrc = resolveSrc(currentSpeech?.mediaPath);
+  const bgmAsset =
+    workspace?.project.bgmAssetId
+      ? (workspace.assets.find((a) => a.id === workspace.project.bgmAssetId) ?? null)
+      : null;
+  const bgmSrc = resolveSrc(bgmAsset?.mediaPath);
+
+  // Sync HTML5 <video> element with timeline playback clock
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el || !previewIsVideo) return;
+    if (Math.abs(el.currentTime - playback.offsetInShotSec) > 0.35) {
+      el.currentTime = playback.offsetInShotSec;
+    }
+    if (playback.playing) {
+      void el.play().catch(() => undefined);
+    } else {
+      el.pause();
+    }
+  }, [playback.playing, playback.offsetInShotSec, currentTake?.id, previewIsVideo]);
+
+  // Sync shot speech <audio> with timeline clock
+  useEffect(() => {
+    const el = speechRef.current;
+    if (!el || !speechSrc) return;
+    if (Math.abs(el.currentTime - playback.offsetInShotSec) > 0.35) {
+      el.currentTime = playback.offsetInShotSec;
+    }
+    if (playback.playing) {
+      void el.play().catch(() => undefined);
+    } else {
+      el.pause();
+    }
+  }, [playback.playing, playback.offsetInShotSec, currentSpeech?.id, speechSrc]);
+
+  // Sync project BGM <audio> and live dB gain
+  useEffect(() => {
+    const el = bgmRef.current;
+    if (!el || !bgmSrc || !workspace) return;
+    const linear = Math.min(1, Math.max(0, Math.pow(10, workspace.project.bgmVolumeDb / 20)));
+    el.volume = linear;
+    if (playback.playing) {
+      void el.play().catch(() => undefined);
+    } else {
+      el.pause();
+    }
+  }, [playback.playing, bgmSrc, workspace?.project.bgmVolumeDb]);
 
   if (!workspace) return null;
-  const epId = activeEpisodeId ?? workspace.episodes[0]?.id ?? null;
-  const shots = workspace.shots.filter((s) => s.episodeId === epId);
-  const currentShot = shots[selectedIndex] ?? shots[0] ?? null;
-  const totalSec = shots.reduce((sum, s) => sum + s.durationSec, 0);
-  const currentStartSec = shots.slice(0, selectedIndex).reduce((sum, s) => sum + s.durationSec, 0);
 
-  const resolveSrc = (path: string | null | undefined) => {
-    if (!path) return null;
-    return path.startsWith("data:") ? path : client.mediaUrl(workspace.project.id, path);
-  };
-
-  const activeTake = currentShot
-    ? workspace.takes.find((t) => t.id === currentShot.selectedImageTakeId)
-    : null;
-
-  const fmtTime = (sec: number) => {
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  };
-
+  const readiness = evaluateEpisodeExportReadiness(workspace, activeEpisodeId);
   const isPortrait = workspace.project.aspectRatio === "9:16";
 
   return (
-    <div
-      className="h-full w-full grid overflow-hidden"
-      style={{ gridTemplateRows: "minmax(0, 1fr) 208px" }}
-      data-testid="stage-editor"
-    >
-      {/* Top Half: Media Bin | Preview Monitor | Export & Audio Inspector */}
-      <div
-        className="grid min-h-0 overflow-hidden"
-        style={{ gridTemplateColumns: "200px minmax(0, 1fr) 280px" }}
-      >
+    <div className="h-full grid grid-rows-[minmax(0,1fr)_206px] min-h-0 overflow-hidden">
+      {/* Top 3-Column Row */}
+      <div className="grid grid-cols-[200px_minmax(0,1fr)_292px] min-h-0 overflow-hidden">
         {/* Top-Left Selected Clips Bin */}
         <aside className="bg-[#14171e] border-r border-[#252b37] flex flex-col min-h-0 overflow-hidden">
-          <div className="h-10 px-3 border-b border-[#252b37] flex items-center text-[12px] font-semibold text-[#a4aec0] shrink-0">
-            已选素材（{shots.length} 镜）
+          <div className="h-10 px-3.5 border-b border-[#252b37] flex items-center text-[12px] font-semibold text-[#a4aec0] shrink-0">
+            当前选用版本 ({epShots.length} 镜)
           </div>
           <div className="panel-scroll flex-1 p-2 flex flex-col gap-1.5">
-            {shots.map((shot, i) => (
-              <button
-                key={shot.id}
-                type="button"
-                onClick={() => setSelectedIndex(i)}
-                className={`w-full text-left px-2.5 py-2 rounded-lg border cursor-pointer transition-colors ${
-                  i === selectedIndex
-                    ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]"
-                    : "bg-[#0f1218] border-[#252b37] text-[#a4aec0] hover:border-[#343d4e]"
-                }`}
-              >
-                <div className="text-[11px] font-medium truncate">{shot.title}</div>
-                <div className="text-[10px] text-[#768196] flex items-center justify-between mt-0.5">
-                  <span>{shot.durationSec}s</span>
-                  <span>{shot.dialogue ? "含对白" : "纯画面"}</span>
-                </div>
-              </button>
-            ))}
+            {epShots.map((shot, idx) => {
+              const tk = resolveActiveVisualTake(shot, workspace.takes);
+              const active = idx === playback.activeSegment?.index;
+              return (
+                <button
+                  key={shot.id}
+                  type="button"
+                  onClick={() => playback.seekToShot(idx)}
+                  className={`w-full text-left px-2.5 py-2 rounded-lg border cursor-pointer transition-colors ${
+                    active
+                      ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]"
+                      : "bg-[#0f1218] border-[#252b37] text-[#a4aec0] hover:border-[#343d4e]"
+                  }`}
+                >
+                  <div className="text-[12px] font-medium truncate">{shot.title}</div>
+                  <div className="text-[10px] text-[#768196] flex items-center justify-between mt-0.5">
+                    <span>{tk ? `版本 ${tk.versionNumber}` : "缺失画面"}</span>
+                    <span>{shot.durationSec}s</span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </aside>
 
-        {/* Top-Center Large Preview Player */}
-        <section className="bg-[#0d0f13] flex flex-col min-h-0 min-w-0 overflow-hidden">
+        {/* Top-Center Real Playback Preview */}
+        <section className="bg-[#0d0f13] flex flex-col min-h-0 overflow-hidden">
           <div className="h-10 px-4 border-b border-[#252b37] flex items-center justify-between shrink-0">
-            <span className="text-[12px] font-medium text-[#a4aec0]">成片代理预览</span>
-            <div className="flex items-center gap-1.5">
+            <span className="text-[12px] text-[#a4aec0] truncate">
+              {currentShot && currentTake
+                ? `正在预览：${currentShot.title}（版本 ${currentTake.versionNumber}）`
+                : "成片时间轴预览"}
+            </span>
+            <div className="flex items-center gap-1.5 shrink-0">
               <button
                 type="button"
                 onClick={() => void updateProjectSettings({ aspectRatio: "16:9" })}
-                className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] border cursor-pointer ${
+                className={`h-7 px-2.5 rounded-md text-[11px] flex items-center gap-1 border cursor-pointer ${
                   !isPortrait
                     ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]"
                     : "bg-[#14171e] border-[#252b37] text-[#a4aec0]"
@@ -116,7 +195,7 @@ export function EditorStage() {
               <button
                 type="button"
                 onClick={() => void updateProjectSettings({ aspectRatio: "9:16" })}
-                className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] border cursor-pointer ${
+                className={`h-7 px-2.5 rounded-md text-[11px] flex items-center gap-1 border cursor-pointer ${
                   isPortrait
                     ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]"
                     : "bg-[#14171e] border-[#252b37] text-[#a4aec0]"
@@ -131,21 +210,33 @@ export function EditorStage() {
           <div className="flex-1 min-h-0 p-4 flex items-center justify-center overflow-hidden">
             <div
               className={`relative rounded-xl overflow-hidden bg-[#14171e] border border-[#252b37] shadow-2xl flex items-center justify-center ${
-                isPortrait ? "h-full max-h-[360px] aspect-[9/16]" : "h-full max-h-[360px] aspect-video"
+                isPortrait ? "h-full max-h-[340px] aspect-[9/16]" : "w-full max-w-[600px] aspect-video"
               }`}
             >
-              {activeTake && resolveSrc(activeTake.mediaPath) ? (
+              {previewSrc && previewIsVideo ? (
+                <video
+                  ref={videoRef}
+                  key={currentTake?.id}
+                  src={previewSrc}
+                  playsInline
+                  className="w-full h-full object-contain bg-black"
+                />
+              ) : previewSrc ? (
                 <img
-                  src={resolveSrc(activeTake.mediaPath)!}
+                  src={previewSrc}
                   alt={currentShot?.title ?? "预览"}
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <Film className="w-8 h-8 text-[#5c6577]" />
+                <div className="text-[12px] text-[#768196]">当前镜头暂无画面版本</div>
               )}
               {currentShot?.subtitle && (
-                <div className="absolute bottom-3 inset-x-4 text-center">
-                  <span className="inline-block px-3 py-1 rounded bg-black/75 text-[12px] text-white">
+                <div className="absolute bottom-3 inset-x-4 text-center pointer-events-none">
+                  <span
+                    className={`inline-block px-3 py-1 rounded text-[13px] ${subtitlePreviewClass(
+                      workspace.project.subtitleStyle,
+                    )}`}
+                  >
                     {currentShot.subtitle}
                   </span>
                 </div>
@@ -153,27 +244,78 @@ export function EditorStage() {
             </div>
           </div>
 
-          <div className="h-9 px-4 border-t border-[#252b37] bg-[#11141a] flex items-center justify-center gap-4 shrink-0">
+          {speechSrc && <audio ref={speechRef} key={currentSpeech?.id} src={speechSrc} />}
+          {bgmSrc && <audio ref={bgmRef} src={bgmSrc} loop />}
+
+          <div className="h-10 px-4 border-t border-[#252b37] bg-[#14171e] flex items-center justify-center gap-3 shrink-0">
             <button
               type="button"
-              onClick={() => setPlaying((p) => !p)}
-              className="w-7 h-7 rounded-full bg-[#3b82f6] hover:bg-[#2563eb] text-white flex items-center justify-center cursor-pointer"
-              title={playing ? "暂停预览" : "播放预览"}
+              onClick={playback.resetToStart}
+              className="p-1.5 rounded hover:bg-[#222834] text-[#a4aec0] cursor-pointer"
+              title="回到片头"
             >
-              {playing ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
+              <RotateCcw className="w-3.5 h-3.5" />
             </button>
-            <span className="font-mono text-[12px] text-[#f3f5f9]">
-              {fmtTime(currentStartSec)} / {fmtTime(totalSec)}
+            <button
+              type="button"
+              data-testid="editor-play-toggle"
+              onClick={playback.togglePlay}
+              className="w-7 h-7 rounded-full bg-[#3b82f6] hover:bg-[#2563eb] text-white flex items-center justify-center cursor-pointer"
+              title={playback.playing ? "暂停预览" : "连续播放成片"}
+            >
+              {playback.playing ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
+            </button>
+            <span className="font-mono text-[12px] text-[#f3f5f9]" data-testid="editor-timecode">
+              {fmtTime(playback.playheadSec)} / {fmtTime(playback.totalSec)}
             </span>
           </div>
         </section>
 
-        {/* Top-Right Mix, Subtitle & Loudness Inspector */}
+        {/* Top-Right Readiness Checklist + Mix & Subtitle Inspector (NO duplicate export button) */}
         <aside className="bg-[#14171e] border-l border-[#252b37] flex flex-col min-h-0 overflow-hidden">
           <div className="h-10 px-4 border-b border-[#252b37] flex items-center text-[12px] font-semibold text-[#f3f5f9] shrink-0">
-            音画与字幕参数
+            成片就绪检查与混音
           </div>
-          <div className="panel-scroll flex-1 p-3.5 flex flex-col gap-4">
+          <div className="panel-scroll flex-1 p-3.5 flex flex-col gap-3.5">
+            {/* Readiness Checklist */}
+            <div
+              data-testid="export-readiness-card"
+              className={`rounded-lg p-3 border text-[11px] flex flex-col gap-1.5 ${
+                readiness.canExport
+                  ? "bg-[#10b981]/10 border-[#10b981]/40 text-[#d1fae5]"
+                  : "bg-[#f59e0b]/10 border-[#f59e0b]/40 text-[#fef3c7]"
+              }`}
+            >
+              <div className="flex items-center gap-1.5 font-semibold text-[12px]">
+                {readiness.canExport ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-[#34d399]" />
+                ) : (
+                  <AlertTriangle className="w-3.5 h-3.5 text-[#fbbf24]" />
+                )}
+                <span>{readiness.canExport ? "可导出 MP4（点击顶栏「导出成片」）" : "尚有缺项未就绪"}</span>
+              </div>
+              <div className="text-[11px] opacity-90">
+                已选定画面：{readiness.visualReadyCount}/{readiness.totalShots} 镜（视频 {readiness.realVideoCount} · 图 {readiness.realImageCount} · 画板 {readiness.placeholderCount}）
+              </div>
+              <div className="text-[11px] opacity-90">
+                字幕覆盖：{readiness.subtitleCount}/{readiness.totalShots} 镜 · 配音：{readiness.speechCount} 镜
+              </div>
+              {readiness.missingVisualShots.length > 0 && (
+                <div className="flex flex-wrap gap-1 pt-1">
+                  {readiness.missingVisualShots.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => void jumpToShot(m.id)}
+                      className="px-2 py-0.5 rounded bg-black/30 hover:bg-black/50 underline cursor-pointer"
+                    >
+                      去补齐：{m.title}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div className="flex flex-col gap-1.5">
               <label className="text-[11px] text-[#a4aec0] flex items-center gap-1.5">
                 <Subtitles className="w-3.5 h-3.5 text-[#f59e0b]" />
@@ -201,9 +343,32 @@ export function EditorStage() {
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-[#a4aec0] flex items-center gap-1.5">
                   <Music className="w-3.5 h-3.5 text-[#38bdf8]" />
-                  <span>背景音乐音量</span>
+                  <span>背景配乐</span>
                 </span>
                 <span className="font-mono text-[#f3f5f9]">{workspace.project.bgmVolumeDb} dB</span>
+              </div>
+              <div className="flex items-center justify-between gap-2 rounded-md bg-[#0f1218] border border-[#252b37] px-2.5 py-1.5 text-[11px]">
+                <span className="text-[#cbd5e1] truncate">{bgmAsset ? bgmAsset.name : "未导入背景音乐"}</span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => void importProjectBgm()}
+                    className="text-[#60a5fa] hover:underline flex items-center gap-0.5 cursor-pointer"
+                  >
+                    <Upload className="w-3 h-3" />
+                    <span>{bgmAsset ? "更换" : "导入"}</span>
+                  </button>
+                  {bgmAsset && (
+                    <button
+                      type="button"
+                      onClick={() => void clearProjectBgm()}
+                      className="text-[#f87171] hover:underline cursor-pointer"
+                      title="移除背景音乐"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
               </div>
               <input
                 type="range"
@@ -226,172 +391,27 @@ export function EditorStage() {
               <div>
                 <div className="text-[12px] font-medium text-[#f3f5f9]">自动响度统一（-16 LUFS）</div>
                 <div className="text-[11px] text-[#768196]">
-                  采用两遍 loudnorm 校准，确保成片人声清晰、不爆音。
+                  导出采用两遍 loudnorm 校准，人声清晰不爆音。
                 </div>
               </div>
             </label>
-
-            <button
-              type="button"
-              className="btn-primary w-full"
-              onClick={() => setExportModalOpen(true)}
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>导出 MP4 成片</span>
-            </button>
           </div>
         </aside>
       </div>
 
-      {/* Bottom Full-Width 4-Track Timeline */}
-      <section
-        className="bg-[#11141a] border-t border-[#252b37] flex flex-col min-h-0 overflow-hidden"
-        data-testid="editor-timeline"
-      >
-        <div className="h-8 px-4 border-b border-[#252b37] flex items-center justify-between text-[11px] text-[#768196] shrink-0">
-          <span>四轨时间轴（视频 · 对白 · 配乐 · 字幕）</span>
-          <span className="font-mono">总时长：{fmtTime(totalSec)}</span>
-        </div>
+      <EditorTimeline
+        shots={epShots}
+        takes={workspace.takes}
+        segments={playback.segments}
+        activeIndex={playback.activeSegment?.index ?? null}
+        playheadSec={playback.playheadSec}
+        totalSec={playback.totalSec}
+        bgmAsset={bgmAsset}
+        bgmVolumeDb={workspace.project.bgmVolumeDb}
+        onSeekShot={playback.seekToShot}
+      />
 
-        <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden px-3 py-2 flex flex-col gap-1.5">
-          {/* Video Track */}
-          <div className="grid grid-cols-[64px_minmax(0,1fr)] items-center gap-2 h-9">
-            <span className="text-[11px] text-[#a4aec0] flex items-center gap-1">
-              <Film className="w-3 h-3 text-[#60a5fa]" /> 视频
-            </span>
-            <div className="flex items-center gap-1 h-full">
-              {shots.map((shot, idx) => (
-                <button
-                  key={shot.id}
-                  type="button"
-                  onClick={() => setSelectedIndex(idx)}
-                  title={`${shot.title} (${shot.durationSec}s)`}
-                  style={{ width: `${Math.max(148, shot.durationSec * 48)}px` }}
-                  className={`h-full px-2 rounded border text-left flex items-center overflow-hidden text-[11px] cursor-pointer shrink-0 ${
-                    idx === selectedIndex
-                      ? "bg-[#2b4c7e] border-[#60a5fa] text-white font-medium"
-                      : "bg-[#1e3150] border-[#2f4b78] text-[#cbd5e1]"
-                  }`}
-                >
-                  <span className="block truncate min-w-0">
-                    {shot.title} ({shot.durationSec}s)
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Dialogue Track */}
-          <div className="grid grid-cols-[64px_minmax(0,1fr)] items-center gap-2 h-7">
-            <span className="text-[11px] text-[#a4aec0] flex items-center gap-1">
-              <Volume2 className="w-3 h-3 text-[#34d399]" /> 对白
-            </span>
-            <div className="flex items-center gap-1 h-full">
-              {shots.map((shot) => (
-                <div
-                  key={shot.id}
-                  title={shot.dialogue ? `${shot.speaker || "旁白"}：${shot.dialogue}` : "无对白"}
-                  style={{ width: `${Math.max(148, shot.durationSec * 48)}px` }}
-                  className={`h-full px-2 rounded flex items-center overflow-hidden text-[10px] shrink-0 ${
-                    shot.dialogue
-                      ? "bg-[#165b49] border border-[#10b981]/50 text-[#d1fae5]"
-                      : "bg-[#14171e] border border-dashed border-[#252b37] text-[#5c6577]"
-                  }`}
-                >
-                  <span className="block truncate min-w-0">
-                    {shot.dialogue ? `${shot.speaker || "旁白"}：${shot.dialogue}` : "无对白"}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* BGM Track */}
-          <div className="grid grid-cols-[64px_minmax(0,1fr)] items-center gap-2 h-7">
-            <span className="text-[11px] text-[#a4aec0] flex items-center gap-1">
-              <Music className="w-3 h-3 text-[#38bdf8]" /> 配乐
-            </span>
-            <div className="h-full rounded bg-[#182f3c] border border-[#2c5770] px-2.5 flex items-center overflow-hidden text-[10px] text-[#bae6fd]">
-              <span className="block truncate min-w-0">
-                背景配乐轨 · {workspace.project.bgmVolumeDb} dB（可在阶段 3 导入本地音乐混音）
-              </span>
-            </div>
-          </div>
-
-          {/* Subtitle Track */}
-          <div className="grid grid-cols-[64px_minmax(0,1fr)] items-center gap-2 h-7">
-            <span className="text-[11px] text-[#a4aec0] flex items-center gap-1">
-              <Subtitles className="w-3 h-3 text-[#f59e0b]" /> 字幕
-            </span>
-            <div className="flex items-center gap-1 h-full">
-              {shots.map((shot) => (
-                <div
-                  key={shot.id}
-                  title={shot.subtitle || "无字幕"}
-                  style={{ width: `${Math.max(148, shot.durationSec * 48)}px` }}
-                  className={`h-full px-2 rounded flex items-center overflow-hidden text-[10px] shrink-0 ${
-                    shot.subtitle
-                      ? "bg-[#553c12] border border-[#f59e0b]/45 text-[#fef3c7]"
-                      : "bg-[#14171e] border border-dashed border-[#252b37] text-[#5c6577]"
-                  }`}
-                >
-                  <span className="block truncate min-w-0">{shot.subtitle || "—"}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {exportModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div
-            role="dialog"
-            aria-label="导出 MP4 成片"
-            className="w-full max-w-[440px] rounded-xl bg-[#14171e] border border-[#343d4e] shadow-2xl p-5 flex flex-col gap-4"
-          >
-            <div className="flex items-center justify-between">
-              <h2 className="text-[15px] font-semibold text-[#f3f5f9]">导出 MP4 成片</h2>
-              <button
-                type="button"
-                className="text-[12px] text-[#768196] hover:text-[#f3f5f9] cursor-pointer"
-                onClick={() => setExportModalOpen(false)}
-              >
-                关闭
-              </button>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[12px] text-[#a4aec0]">成片文件名（支持中文）</label>
-              <input
-                className="input-field"
-                value={exportFileName || `${workspace.project.name}-${workspace.project.aspectRatio.replace(":", "x")}.mp4`}
-                onChange={(e) => setExportFileName(e.target.value)}
-              />
-            </div>
-            <div className="rounded-lg bg-[#0f1218] border border-[#252b37] p-3 text-[12px] text-[#a4aec0] flex flex-col gap-1.5">
-              <div className="flex items-center gap-1.5 text-[#34d399] font-medium">
-                <ShieldCheck className="w-4 h-4" />
-                <span>导出保护已启用</span>
-              </div>
-              <div>画幅：{workspace.project.aspectRatio} · 镜头数：{shots.length} · 预计 {fmtTime(totalSec)}</div>
-              <div>响度：{workspace.project.loudnessNormalize ? "-16 LUFS 自动统一" : "保留原音量"} · 写盘期间自动拦截误关软件</div>
-            </div>
-            <div className="flex items-center justify-end gap-2">
-              <button type="button" className="btn-secondary" onClick={() => setExportModalOpen(false)}>
-                取消
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => setExportModalOpen(false)}
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>确认导出（阶段 3 接真 FFmpeg）</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ExportModal readiness={readiness} />
     </div>
   );
 }

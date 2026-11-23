@@ -1,11 +1,17 @@
 import { create } from "zustand";
 import type {
+  ExportEpisodeResult,
+  ExportProgressEvent,
+  FfmpegStatus,
+} from "../../shared/ipc-contract";
+import type {
   AssetKind,
   CreateProjectInput,
   ProjectSummary,
   ProjectWorkspace,
   StageId,
   TakeKind,
+  UpdateAssetInput,
   UpdateProjectSettingsInput,
   UpdateShotInput,
 } from "../../shared/types/domain";
@@ -25,6 +31,10 @@ interface StudioStore {
   modelCenterOpen: boolean;
   exportModalOpen: boolean;
   modelCenter: ModelCenterSnapshot | null;
+  ffmpegStatus: FfmpegStatus | null;
+  exporting: boolean;
+  exportProgress: ExportProgressEvent | null;
+  lastExportResult: ExportEpisodeResult | null;
   saveState: SaveState;
   saveError: string | null;
   toast: string | null;
@@ -38,6 +48,7 @@ interface StudioStore {
   deleteProject: (projectId: string) => Promise<void>;
   returnHome: () => Promise<boolean>;
   setStage: (stage: StageId) => Promise<boolean>;
+  jumpToShot: (shotId: string) => Promise<void>;
   selectEpisode: (episodeId: string) => Promise<boolean>;
   selectShot: (shotId: string) => void;
   toggleSidebar: () => void;
@@ -48,11 +59,18 @@ interface StudioStore {
   createEpisode: (title?: string) => Promise<void>;
   editEpisodeScript: (episodeId: string, scriptText: string) => void;
   createAsset: (input: { kind: AssetKind; name: string; description?: string; voiceId?: string | null }) => Promise<void>;
+  editAsset: (patch: Omit<UpdateAssetInput, "projectId">) => void;
   toggleAssetLock: (assetId: string) => Promise<void>;
+  importAssetImage: (assetId: string) => Promise<void>;
   createShot: (sceneId: string) => Promise<void>;
   editShot: (patch: Omit<UpdateShotInput, "projectId">) => void;
   selectTake: (shotId: string, takeId: string, kind: TakeKind) => Promise<void>;
   addSyntheticTake: (shotId: string, kind: TakeKind, label?: string) => Promise<void>;
+  importShotTake: (shotId: string, kind: TakeKind) => Promise<void>;
+  importProjectBgm: () => Promise<void>;
+  clearProjectBgm: () => Promise<void>;
+  exportCurrentEpisode: () => Promise<void>;
+  revealPath: (filePath: string) => Promise<void>;
   updateProjectSettings: (patch: Omit<UpdateProjectSettingsInput, "projectId">) => Promise<void>;
   exportArchive: () => Promise<void>;
   importArchive: () => Promise<void>;
@@ -107,18 +125,23 @@ export const useStudioStore = create<StudioStore>((set, get) => {
     modelCenterOpen: false,
     exportModalOpen: false,
     modelCenter: null,
+    ffmpegStatus: null,
+    exporting: false,
+    exportProgress: null,
+    lastExportResult: null,
     saveState: "idle",
     saveError: null,
     toast: null,
     sqliteEngine: "node:sqlite",
 
     async bootstrap() {
-      const [projects, modelCenter, info] = await Promise.all([
+      const [projects, modelCenter, info, ffmpegStatus] = await Promise.all([
         client.listProjects(),
         client.getModelCenter(),
         client.getAppInfo(),
+        client.checkFfmpegStatus(),
       ]);
-      set({ projects, modelCenter, sqliteEngine: info.sqliteEngine });
+      set({ projects, modelCenter, sqliteEngine: info.sqliteEngine, ffmpegStatus });
     },
 
     async refreshProjects() {
@@ -152,7 +175,7 @@ export const useStudioStore = create<StudioStore>((set, get) => {
 
     async returnHome() {
       if (!(await guardFlush())) return false;
-      set({ workspace: null, activeEpisodeId: null, activeShotId: null });
+      set({ workspace: null, activeEpisodeId: null, activeShotId: null, lastExportResult: null });
       await get().refreshProjects();
       return true;
     },
@@ -161,6 +184,11 @@ export const useStudioStore = create<StudioStore>((set, get) => {
       if (!(await guardFlush())) return false;
       set({ activeStage: stage });
       return true;
+    },
+
+    async jumpToShot(shotId) {
+      if (!(await guardFlush())) return;
+      set({ activeStage: "storyboard", activeShotId: shotId });
     },
 
     async selectEpisode(episodeId) {
@@ -298,6 +326,104 @@ export const useStudioStore = create<StudioStore>((set, get) => {
       const fresh = await client.addSyntheticTake({ projectId: ws.project.id, shotId, kind, label });
       set({ workspace: fresh, saveState: "saved" });
       flashToast("已新增候选版本并切换使用");
+    },
+
+    editAsset(patch) {
+      const ws = get().workspace;
+      if (!ws) return;
+      set({
+        saveState: "saving",
+        saveError: null,
+        workspace: {
+          ...ws,
+          assets: ws.assets.map((a) => (a.id === patch.assetId ? { ...a, ...patch } : a)),
+        },
+      });
+      void queue
+        .enqueue(`asset:${patch.assetId}`, () =>
+          client.updateAsset({ projectId: ws.project.id, ...patch }),
+        )
+        .then(() => {
+          if (!queue.hasPending()) set({ saveState: "saved" });
+        })
+        .catch((err: unknown) => {
+          set({
+            saveState: "error",
+            saveError: err instanceof Error ? err.message : "资产写入失败",
+          });
+        });
+    },
+
+    async importAssetImage(assetId) {
+      const ws = get().workspace;
+      if (!ws || !(await guardFlush())) return;
+      const res = await client.importAssetImage({ projectId: ws.project.id, assetId });
+      if (res.ok && res.asset) {
+        set({
+          workspace: {
+            ...ws,
+            assets: ws.assets.map((a) => (a.id === assetId ? res.asset! : a)),
+          },
+          saveState: "saved",
+        });
+      }
+      flashToast(res.message);
+    },
+
+    async importShotTake(shotId, kind) {
+      const ws = get().workspace;
+      if (!ws || !(await guardFlush())) return;
+      const res = await client.importShotTake({ projectId: ws.project.id, shotId, kind });
+      if (res.ok && res.workspace) {
+        set({ workspace: res.workspace, saveState: "saved" });
+      }
+      flashToast(res.message);
+    },
+
+    async importProjectBgm() {
+      const ws = get().workspace;
+      if (!ws || !(await guardFlush())) return;
+      const res = await client.importProjectBgm(ws.project.id);
+      if (res.ok && res.workspace) {
+        set({ workspace: res.workspace, saveState: "saved" });
+      }
+      flashToast(res.message);
+    },
+
+    async clearProjectBgm() {
+      const ws = get().workspace;
+      if (!ws || !(await guardFlush())) return;
+      const fresh = await client.clearProjectBgm(ws.project.id);
+      set({ workspace: fresh, saveState: "saved" });
+      flashToast("已移除背景音乐");
+    },
+
+    async exportCurrentEpisode() {
+      const ws = get().workspace;
+      const epId = get().activeEpisodeId ?? ws?.episodes[0]?.id;
+      if (!ws || !epId || get().exporting) return;
+      if (!(await guardFlush())) return;
+      set({
+        exporting: true,
+        lastExportResult: null,
+        exportProgress: { percent: 2, stage: "准备导出", detail: "请选择 MP4 成片保存路径…" },
+      });
+      const unsub = client.onExportProgress((ev) => set({ exportProgress: ev }));
+      try {
+        const res = await client.exportEpisodeVideo({ projectId: ws.project.id, episodeId: epId });
+        set({ lastExportResult: res, exporting: false });
+        if (!res.canceled) flashToast(res.message);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "导出失败";
+        set({ exporting: false, lastExportResult: { ok: false, message: msg } });
+        flashToast(msg);
+      } finally {
+        unsub();
+      }
+    },
+
+    async revealPath(filePath) {
+      await client.revealPathInFolder(filePath);
     },
 
     async updateProjectSettings(patch) {

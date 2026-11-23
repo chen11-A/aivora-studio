@@ -1,21 +1,27 @@
-import { dialog, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from "electron";
-import { IPC_CHANNELS } from "../../shared/ipc-contract";
+import { dialog, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from "electron";
+import path from "node:path";
+import { IPC_CHANNELS, type ExportProgressEvent } from "../../shared/ipc-contract";
 import type {
   AssetKind,
   CreateProjectInput,
   TakeKind,
+  UpdateAssetInput,
   UpdateEpisodeInput,
   UpdateProjectSettingsInput,
   UpdateShotInput,
 } from "../../shared/types/domain";
 import type { ModelRouting, SaveProviderConfigInput } from "../../shared/types/provider";
+import type { ExportWriteGuard } from "../media/export-guard";
+import { exportEpisodeToMp4 } from "../media/export-pipeline";
+import { probeFfmpegStatus } from "../media/ffmpeg-locator";
 import type { GlobalConfigStore } from "../storage/global-store";
-import type { ProjectStore } from "../storage/project-store";
+import { safeFolderSegment, type ProjectStore } from "../storage/project-store";
 
 export function registerIpcHandlers(deps: {
   getWindow: () => BrowserWindow | null;
   projects: ProjectStore;
   globalConfig: GlobalConfigStore;
+  exportGuard: ExportWriteGuard;
   appVersion: string;
 }): void {
   const assertAuthorized = (event: IpcMainInvokeEvent) => {
@@ -65,9 +71,29 @@ export function registerIpcHandlers(deps: {
       voiceId?: string | null;
     }) => deps.projects.createAsset(input),
   );
+  handle(IPC_CHANNELS.UPDATE_ASSET, (input: UpdateAssetInput) => deps.projects.updateAsset(input));
   handle(IPC_CHANNELS.TOGGLE_ASSET_LOCK, (projectId: string, assetId: string) =>
     deps.projects.toggleAssetLock(projectId, assetId),
   );
+  handle(IPC_CHANNELS.IMPORT_ASSET_IMAGE, async (input: { projectId: string; assetId: string }) => {
+    const win = deps.getWindow();
+    if (!win) return { ok: false, message: "窗口不可用" };
+    const chosen = await dialog.showOpenDialog(win, {
+      title: "选择角色或场景定妆参考图",
+      properties: ["openFile"],
+      filters: [{ name: "图片素材", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (chosen.canceled || !chosen.filePaths[0]) {
+      return { ok: false, message: "已取消选择参考图" };
+    }
+    const asset = deps.projects.importAssetImageFromPath({
+      projectId: input.projectId,
+      assetId: input.assetId,
+      sourceFilePath: chosen.filePaths[0],
+    });
+    return { ok: true, asset, message: "定妆参考图已更新" };
+  });
+
   handle(IPC_CHANNELS.CREATE_SHOT, (input: { projectId: string; episodeId: string; sceneId: string }) =>
     deps.projects.createShot(input),
   );
@@ -82,6 +108,108 @@ export function registerIpcHandlers(deps: {
     (input: { projectId: string; shotId: string; kind: TakeKind; label?: string }) =>
       deps.projects.addSyntheticTake(input),
   );
+  handle(
+    IPC_CHANNELS.IMPORT_SHOT_TAKE,
+    async (input: { projectId: string; shotId: string; kind: TakeKind }) => {
+      const win = deps.getWindow();
+      if (!win) return { ok: false, message: "窗口不可用" };
+      const filters =
+        input.kind === "video"
+          ? [{ name: "视频素材", extensions: ["mp4", "webm", "mov", "m4v", "mkv"] }]
+          : input.kind === "image"
+            ? [{ name: "图片素材", extensions: ["png", "jpg", "jpeg", "webp"] }]
+            : [{ name: "音频素材", extensions: ["mp3", "wav", "m4a", "aac", "ogg", "flac"] }];
+      const chosen = await dialog.showOpenDialog(win, {
+        title:
+          input.kind === "video"
+            ? "导入镜头视频作为新版本"
+            : input.kind === "image"
+              ? "导入镜头图片作为新版本"
+              : "导入镜头对白配音",
+        properties: ["openFile"],
+        filters,
+      });
+      if (chosen.canceled || !chosen.filePaths[0]) {
+        return { ok: false, message: "已取消导入素材" };
+      }
+      const workspace = deps.projects.importShotTakeFromPath({
+        projectId: input.projectId,
+        shotId: input.shotId,
+        kind: input.kind,
+        sourceFilePath: chosen.filePaths[0],
+      });
+      return { ok: true, workspace, message: "已导入本地素材并设为当前选用版本" };
+    },
+  );
+
+  handle(IPC_CHANNELS.IMPORT_PROJECT_BGM, async (projectId: string) => {
+    const win = deps.getWindow();
+    if (!win) return { ok: false, message: "窗口不可用" };
+    const chosen = await dialog.showOpenDialog(win, {
+      title: "选择项目背景音乐（BGM）",
+      properties: ["openFile"],
+      filters: [{ name: "音频文件", extensions: ["mp3", "wav", "m4a", "aac", "ogg", "flac"] }],
+    });
+    if (chosen.canceled || !chosen.filePaths[0]) {
+      return { ok: false, message: "已取消导入背景音乐" };
+    }
+    const workspace = deps.projects.importProjectBgmFromPath(projectId, chosen.filePaths[0]);
+    return { ok: true, workspace, message: "已导入背景音乐并绑定至配乐轨" };
+  });
+
+  handle(IPC_CHANNELS.CLEAR_PROJECT_BGM, (projectId: string) =>
+    deps.projects.updateProjectSettings({ projectId, bgmAssetId: null }),
+  );
+
+  handle(IPC_CHANNELS.CHECK_FFMPEG_STATUS, () => probeFfmpegStatus());
+
+  handle(
+    IPC_CHANNELS.EXPORT_EPISODE_VIDEO,
+    async (input: { projectId: string; episodeId: string }) => {
+      const win = deps.getWindow();
+      if (!win) return { ok: false, message: "窗口不可用" };
+      if (deps.exportGuard.isExporting()) {
+        return { ok: false, message: "当前已有成片正在导出，请稍候完成后再试。" };
+      }
+      const projectDir = deps.projects.resolveProjectDir(input.projectId);
+      if (!projectDir) return { ok: false, message: "找不到作品目录" };
+      const workspace = deps.projects.openProject(input.projectId);
+      const episode = workspace.episodes.find((e) => e.id === input.episodeId);
+      const baseName = safeFolderSegment(`${workspace.project.name}-${episode?.title ?? "成片"}`);
+      const defaultPath = path.join(projectDir, "exports", `${baseName}.mp4`);
+
+      const chosen = await dialog.showSaveDialog(win, {
+        title: "导出 MP4 成片",
+        defaultPath,
+        filters: [{ name: "MP4 视频", extensions: ["mp4"] }],
+      });
+      if (chosen.canceled || !chosen.filePath) {
+        return { ok: false, canceled: true, message: "已取消导出成片" };
+      }
+
+      const emitProgress = (event: ExportProgressEvent) => {
+        const w = deps.getWindow();
+        if (w && !w.isDestroyed()) {
+          w.webContents.send(IPC_CHANNELS.EXPORT_PROGRESS_EVENT, event);
+        }
+      };
+
+      return deps.exportGuard.runGuarded(() =>
+        exportEpisodeToMp4({
+          workspace,
+          projectDir,
+          episodeId: input.episodeId,
+          outputPath: chosen.filePath!,
+          onProgress: emitProgress,
+        }),
+      );
+    },
+  );
+
+  handle(IPC_CHANNELS.REVEAL_PATH, (filePath: string) => {
+    shell.showItemInFolder(path.resolve(filePath));
+    return { ok: true };
+  });
 
   handle(IPC_CHANNELS.EXPORT_ARCHIVE, async (projectId: string) => {
     const win = deps.getWindow();

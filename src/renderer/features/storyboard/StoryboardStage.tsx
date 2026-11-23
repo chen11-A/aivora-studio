@@ -6,10 +6,17 @@ import {
   ChevronRight,
   Film,
   Image as ImageIcon,
+  Mic,
   Plus,
   Sparkles,
+  Upload,
   Video,
 } from "lucide-react";
+import {
+  isVideoMediaPath,
+  resolveActiveVisualTake,
+  resolveSelectedSpeechTake,
+} from "@shared/media-selection";
 import type { CameraMove, ShotScale } from "@shared/types/domain";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useStudioStore } from "../../store/useStudioStore";
@@ -29,62 +36,72 @@ export function StoryboardStage() {
   const editShot = useStudioStore((s) => s.editShot);
   const selectTake = useStudioStore((s) => s.selectTake);
   const addSyntheticTake = useStudioStore((s) => s.addSyntheticTake);
+  const importShotTake = useStudioStore((s) => s.importShotTake);
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const client = getDesktopClient();
 
   if (!workspace) return null;
-  const epId = activeEpisodeId ?? workspace.episodes[0]?.id ?? null;
-  const epShots = workspace.shots.filter((s) => s.episodeId === epId);
-  const epScene = workspace.scenes.find((sc) => sc.episodeId === epId) ?? workspace.scenes[0];
+  const client = getDesktopClient();
+
+  const epShots = workspace.shots
+    .filter((s) => s.episodeId === activeEpisodeId)
+    .sort((a, b) => a.orderIndex - b.orderIndex);
+  const epScene =
+    workspace.scenes.find((s) => s.episodeId === activeEpisodeId) ?? workspace.scenes[0];
   const currentShot = epShots.find((s) => s.id === activeShotId) ?? epShots[0] ?? null;
 
   const shotTakes = currentShot
-    ? workspace.takes.filter((t) => t.shotId === currentShot.id && t.kind === "image")
+    ? workspace.takes
+        .filter((t) => t.shotId === currentShot.id && (t.kind === "image" || t.kind === "video"))
+        .sort((a, b) => a.versionNumber - b.versionNumber)
     : [];
-  const activeTake =
-    shotTakes.find((t) => t.id === currentShot?.selectedImageTakeId) ??
-    shotTakes.find((t) => t.isSelected) ??
-    shotTakes[shotTakes.length - 1] ??
-    null;
 
-  const resolveSrc = (path: string | null | undefined) => {
-    if (!path) return null;
-    return path.startsWith("data:") ? path : client.mediaUrl(workspace.project.id, path);
+  const activeTake = currentShot ? resolveActiveVisualTake(currentShot, workspace.takes) : null;
+  const speechTake = currentShot ? resolveSelectedSpeechTake(currentShot, workspace.takes) : null;
+
+  const resolveSrc = (mediaPath: string | null | undefined) => {
+    if (!mediaPath) return null;
+    return mediaPath.startsWith("data:") ? mediaPath : client.mediaUrl(workspace.project.id, mediaPath);
   };
 
   const isPortrait = workspace.project.aspectRatio === "9:16";
-  const dialogueEstSec = currentShot?.dialogue ? Math.ceil(currentShot.dialogue.length / 4.2) : 0;
+  const dialogueEstSec = currentShot?.dialogue
+    ? Math.ceil(currentShot.dialogue.replace(/\s+/g, "").length / 4.5)
+    : 0;
+  const activeSrc = resolveSrc(activeTake?.mediaPath);
+  const activeIsVideo = isVideoMediaPath(activeTake?.mediaPath);
 
   return (
     <div
-      className="h-full w-full grid overflow-hidden"
-      style={{
-        gridTemplateColumns: `${sidebarCollapsed ? "48px" : "200px"} minmax(0, 1fr) 280px`,
-      }}
-      data-testid="stage-storyboard"
+      className={`h-full min-h-0 overflow-hidden grid ${
+        sidebarCollapsed
+          ? "grid-cols-[56px_minmax(0,1fr)_280px]"
+          : "grid-cols-[200px_minmax(0,1fr)_280px]"
+      }`}
     >
-      {/* Left Collapsible Shot Thumbnail Strip */}
+      {/* Left Shot List */}
       <aside className="bg-[#14171e] border-r border-[#252b37] flex flex-col min-h-0 overflow-hidden">
-        <div className="h-10 px-2.5 flex items-center justify-between border-b border-[#252b37] shrink-0">
+        <div className="h-10 px-3 border-b border-[#252b37] flex items-center justify-between shrink-0">
           {!sidebarCollapsed && (
-            <span className="text-[12px] font-semibold text-[#a4aec0]">镜头列表（{epShots.length}）</span>
+            <span className="text-[12px] font-semibold text-[#a4aec0]">
+              镜头列表 ({epShots.length})
+            </span>
           )}
           <button
             type="button"
             onClick={toggleSidebar}
             className="p-1 rounded hover:bg-[#222834] text-[#a4aec0] cursor-pointer"
-            title={sidebarCollapsed ? "展开镜头列表" : "折叠镜头列表"}
+            title={sidebarCollapsed ? "展开镜头列表" : "收起镜头列表"}
           >
-            {sidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+            {sidebarCollapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
           </button>
         </div>
 
-        <div className="panel-scroll flex-1 p-2 flex flex-col gap-2">
+        <div className="panel-scroll flex-1 p-2 flex flex-col gap-1.5">
           {epShots.map((shot, idx) => {
+            const take = resolveActiveVisualTake(shot, workspace.takes);
+            const thumbSrc = resolveSrc(take?.mediaPath);
             const active = shot.id === currentShot?.id;
-            const thumb = workspace.takes.find((t) => t.id === shot.selectedImageTakeId);
-            const thumbSrc = resolveSrc(thumb?.mediaPath);
             return (
               <button
                 key={shot.id}
@@ -105,12 +122,24 @@ export function StoryboardStage() {
                 ) : (
                   <>
                     <div className="aspect-video w-full bg-[#0b0d11] overflow-hidden relative">
-                      {thumbSrc ? (
+                      {thumbSrc && !isVideoMediaPath(take?.mediaPath) ? (
                         <img src={thumbSrc} alt={shot.title} className="w-full h-full object-cover" />
+                      ) : thumbSrc ? (
+                        <video
+                          src={thumbSrc}
+                          muted
+                          preload="metadata"
+                          className="w-full h-full object-cover"
+                        />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-[#5c6577]">
                           <Film className="w-4 h-4" />
                         </div>
+                      )}
+                      {take && (
+                        <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-black/70 text-[10px] text-[#34d399]">
+                          v{take.versionNumber}
+                        </span>
                       )}
                       <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/70 text-[10px] text-[#e2e8f0]">
                         {shot.durationSec}s
@@ -143,7 +172,6 @@ export function StoryboardStage() {
 
       {/* Center Visual Preview + Horizontal Take Filmstrip */}
       <section className="bg-[#0d0f13] flex flex-col min-h-0 min-w-0 overflow-hidden">
-        {/* Main Preview Canvas */}
         <div className="flex-1 min-h-0 p-5 flex items-center justify-center overflow-hidden">
           {currentShot ? (
             <div
@@ -151,16 +179,20 @@ export function StoryboardStage() {
                 isPortrait ? "h-full max-h-[480px] aspect-[9/16]" : "w-full max-w-[780px] aspect-video"
               }`}
             >
-              {activeTake && resolveSrc(activeTake.mediaPath) ? (
-                <img
-                  src={resolveSrc(activeTake.mediaPath)!}
-                  alt={currentShot.title}
-                  className="w-full h-full object-cover"
+              {activeSrc && activeIsVideo ? (
+                <video
+                  key={activeTake?.id}
+                  src={activeSrc}
+                  controls
+                  playsInline
+                  className="w-full h-full object-contain bg-black"
                 />
+              ) : activeSrc ? (
+                <img src={activeSrc} alt={currentShot.title} className="w-full h-full object-cover" />
               ) : (
                 <div className="flex flex-col items-center gap-2 text-[#768196]">
                   <ImageIcon className="w-8 h-8" />
-                  <span className="text-[12px]">点击右侧「生成首帧图」创建候选画面</span>
+                  <span className="text-[12px]">点击下方导入素材或右侧创建候选画面</span>
                 </div>
               )}
               {currentShot.subtitle && (
@@ -181,41 +213,69 @@ export function StoryboardStage() {
           className="h-[118px] shrink-0 bg-[#14171e] border-t border-[#252b37] px-4 py-2.5 flex flex-col gap-2"
           data-testid="take-filmstrip"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-[#a4aec0]">
-              版本胶片条（{shotTakes.length} 个候选 · 点击即切换，旧版永久保留）
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold text-[#a4aec0] truncate">
+              版本胶片条（{shotTakes.length} 个候选 · 切换后剪辑与导出同步生效）
             </span>
             {currentShot && (
-              <button
-                type="button"
-                data-testid="add-take-btn"
-                onClick={() => void addSyntheticTake(currentShot.id, "image")}
-                className="text-[11px] text-[#60a5fa] hover:underline flex items-center gap-1 cursor-pointer"
-              >
-                <Plus className="w-3 h-3" />
-                <span>模拟新增一版</span>
-              </button>
+              <div className="flex items-center gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => void importShotTake(currentShot.id, "video")}
+                  className="text-[11px] text-[#a4aec0] hover:text-[#f3f5f9] flex items-center gap-1 cursor-pointer"
+                >
+                  <Upload className="w-3 h-3" />
+                  <span>导入视频</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void importShotTake(currentShot.id, "image")}
+                  className="text-[11px] text-[#a4aec0] hover:text-[#f3f5f9] flex items-center gap-1 cursor-pointer"
+                >
+                  <Upload className="w-3 h-3" />
+                  <span>导入图片</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="add-take-btn"
+                  onClick={() => void addSyntheticTake(currentShot.id, "image")}
+                  className="text-[11px] text-[#60a5fa] hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>新增一版</span>
+                </button>
+              </div>
             )}
           </div>
           <div className="flex items-center gap-2.5 overflow-x-auto pb-0.5">
             {shotTakes.map((take) => {
               const selected = take.id === activeTake?.id;
               const src = resolveSrc(take.mediaPath);
+              const isVid = isVideoMediaPath(take.mediaPath);
               return (
                 <button
                   key={take.id}
                   type="button"
                   data-testid={`take-card-${take.versionNumber}`}
                   onClick={() =>
-                    currentShot && void selectTake(currentShot.id, take.id, "image")
+                    currentShot && void selectTake(currentShot.id, take.id, take.kind)
                   }
-                  className={`relative shrink-0 w-[124px] h-[68px] rounded-lg overflow-hidden border-2 cursor-pointer transition-all ${
+                  className={`relative shrink-0 w-[128px] h-[68px] rounded-lg overflow-hidden border-2 cursor-pointer transition-all ${
                     selected
                       ? "border-[#10b981] ring-1 ring-[#10b981]/40"
                       : "border-[#252b37] opacity-80 hover:opacity-100"
                   }`}
                 >
-                  {src && <img src={src} alt={`版本 ${take.versionNumber}`} className="w-full h-full object-cover" />}
+                  {src && isVid ? (
+                    <video src={src} muted preload="metadata" className="w-full h-full object-cover" />
+                  ) : src ? (
+                    <img src={src} alt={`版本 ${take.versionNumber}`} className="w-full h-full object-cover" />
+                  ) : null}
+                  {isVid && (
+                    <span className="absolute top-1 right-1 px-1 py-0.5 rounded bg-black/75 text-[9px] text-[#60a5fa]">
+                      视频
+                    </span>
+                  )}
                   <div className="absolute inset-x-0 bottom-0 px-1.5 py-0.5 bg-black/75 flex items-center justify-between text-[10px]">
                     <span className="text-[#f3f5f9] font-medium">版本 {take.versionNumber}</span>
                     {selected && (
@@ -330,21 +390,20 @@ export function StoryboardStage() {
               <button
                 type="button"
                 className="btn-primary"
-                onClick={() => void addSyntheticTake(currentShot.id, "image", "视频预览")}
+                onClick={() => void importShotTake(currentShot.id, "video")}
               >
                 <Video className="w-3.5 h-3.5" />
-                <span>生成视频</span>
+                <span>导入/生成视频</span>
               </button>
             </div>
 
-            {/* Folded Advanced Parameters */}
             <div className="border-t border-[#252b37] pt-2.5">
               <button
                 type="button"
                 onClick={() => setAdvancedOpen((v) => !v)}
                 className="w-full flex items-center justify-between text-[11px] text-[#a4aec0] hover:text-[#f3f5f9] cursor-pointer"
               >
-                <span>高级参数（对白、字幕与反向提示词）</span>
+                <span>高级参数（对白、配音与反向词）</span>
                 <ChevronDown className={`w-3.5 h-3.5 transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
               </button>
               {advancedOpen && (
@@ -362,6 +421,19 @@ export function StoryboardStage() {
                         })
                       }
                     />
+                  </div>
+                  <div className="flex items-center justify-between gap-2 rounded-md bg-[#0f1218] border border-[#252b37] px-2.5 py-2">
+                    <span className="text-[11px] text-[#a4aec0] truncate">
+                      {speechTake ? `已绑定配音 v${speechTake.versionNumber}` : "暂无对白音频"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void importShotTake(currentShot.id, "speech")}
+                      className="text-[11px] text-[#60a5fa] hover:underline flex items-center gap-1 shrink-0 cursor-pointer"
+                    >
+                      <Mic className="w-3 h-3" />
+                      <span>导入配音</span>
+                    </button>
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-[11px] text-[#768196]">反向提示词（避免元素）</label>

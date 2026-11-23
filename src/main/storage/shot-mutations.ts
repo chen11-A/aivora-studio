@@ -100,11 +100,38 @@ export function selectTakeInDb(
   input: { projectId: string; shotId: string; takeId: string; kind: TakeKind },
 ): void {
   const now = new Date().toISOString();
-  const col = takeColumn(input.kind);
   db.transaction(() => {
-    db.run(`UPDATE takes SET is_selected = 0 WHERE shot_id = ? AND kind = ?`, input.shotId, input.kind);
-    db.run(`UPDATE takes SET is_selected = 1 WHERE id = ? AND shot_id = ?`, input.takeId, input.shotId);
-    db.run(`UPDATE shots SET ${col} = ?, updated_at = ? WHERE id = ?`, input.takeId, now, input.shotId);
+    if (input.kind === "speech") {
+      db.run(`UPDATE takes SET is_selected = 0 WHERE shot_id = ? AND kind = 'speech'`, input.shotId);
+      db.run(`UPDATE takes SET is_selected = 1 WHERE id = ? AND shot_id = ?`, input.takeId, input.shotId);
+      db.run(
+        `UPDATE shots SET selected_speech_take_id = ?, updated_at = ? WHERE id = ?`,
+        input.takeId,
+        now,
+        input.shotId,
+      );
+    } else {
+      db.run(
+        `UPDATE takes SET is_selected = 0 WHERE shot_id = ? AND kind IN ('image', 'video')`,
+        input.shotId,
+      );
+      db.run(`UPDATE takes SET is_selected = 1 WHERE id = ? AND shot_id = ?`, input.takeId, input.shotId);
+      if (input.kind === "video") {
+        db.run(
+          `UPDATE shots SET selected_video_take_id = ?, updated_at = ? WHERE id = ?`,
+          input.takeId,
+          now,
+          input.shotId,
+        );
+      } else {
+        db.run(
+          `UPDATE shots SET selected_image_take_id = ?, selected_video_take_id = NULL, updated_at = ? WHERE id = ?`,
+          input.takeId,
+          now,
+          input.shotId,
+        );
+      }
+    }
     db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
   });
 }

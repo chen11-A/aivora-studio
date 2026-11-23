@@ -168,12 +168,19 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       ws.assets.unshift(asset);
       return structuredClone(asset);
     },
+    updateAsset: async (input) => {
+      const ws = workspaces.get(input.projectId)!;
+      const asset = ws.assets.find((a) => a.id === input.assetId)!;
+      Object.assign(asset, input, { updatedAt: new Date().toISOString() });
+      return structuredClone(asset);
+    },
     toggleAssetLock: async (projectId, assetId) => {
       const ws = workspaces.get(projectId)!;
       const asset = ws.assets.find((a) => a.id === assetId)!;
       asset.lockedRef = !asset.lockedRef;
       return structuredClone(asset);
     },
+    importAssetImage: async () => ({ ok: false, message: "请在桌面端导入本地定妆参考图" }),
     createShot: async (input) => {
       const ws = workspaces.get(input.projectId)!;
       const shot: Shot = { id: `sh_${Date.now()}`, sceneId: input.sceneId, episodeId: input.episodeId, orderIndex: ws.shots.length, title: `镜 ${String(ws.shots.length + 1).padStart(2, "0")} · 新镜头`, scale: "中景", cameraMove: "固定", durationSec: 3, visualPrompt: "", negativePrompt: "", dialogue: "", speaker: "", subtitle: "", characterAssetIds: [], selectedImageTakeId: null, selectedVideoTakeId: null, selectedSpeechTakeId: null, updatedAt: new Date().toISOString() };
@@ -189,24 +196,55 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     selectTake: async (input) => {
       const ws = workspaces.get(input.projectId)!;
       for (const t of ws.takes) {
-        if (t.shotId === input.shotId && t.kind === input.kind) t.isSelected = t.id === input.takeId;
+        if (t.shotId !== input.shotId) continue;
+        if (input.kind === "speech" && t.kind === "speech") t.isSelected = t.id === input.takeId;
+        if (input.kind !== "speech" && (t.kind === "image" || t.kind === "video")) {
+          t.isSelected = t.id === input.takeId;
+        }
       }
       const shot = ws.shots.find((s) => s.id === input.shotId)!;
-      if (input.kind === "image") shot.selectedImageTakeId = input.takeId;
+      if (input.kind === "image") {
+        shot.selectedImageTakeId = input.takeId;
+        shot.selectedVideoTakeId = null;
+      }
       if (input.kind === "video") shot.selectedVideoTakeId = input.takeId;
       if (input.kind === "speech") shot.selectedSpeechTakeId = input.takeId;
       return structuredClone(ws);
     },
     addSyntheticTake: async (input) => {
       const ws = workspaces.get(input.projectId)!;
-      const ver = ws.takes.filter((t) => t.shotId === input.shotId && t.kind === input.kind).length + 1;
+      const ver = ws.takes.filter((t) => t.shotId === input.shotId && (t.kind === "image" || t.kind === "video")).length + 1;
       const id = `tk_${Date.now()}`;
-      for (const t of ws.takes) if (t.shotId === input.shotId && t.kind === input.kind) t.isSelected = false;
+      for (const t of ws.takes) if (t.shotId === input.shotId && (t.kind === "image" || t.kind === "video")) t.isSelected = false;
       ws.takes.push({ id, shotId: input.shotId, kind: input.kind, versionNumber: ver, mediaPath: makeDemoSvgDataUrl(`版本 ${ver}`, "新候选画面", `版本 ${ver}`, "#111C1B", "#134E4A", "#10B981"), mediaSha256: null, promptSnapshot: "", providerInfo: "本地候选", isSelected: true, durationSec: null, createdAt: new Date().toISOString() });
       const shot = ws.shots.find((s) => s.id === input.shotId)!;
-      if (input.kind === "image") shot.selectedImageTakeId = id;
+      if (input.kind === "image") {
+        shot.selectedImageTakeId = id;
+        shot.selectedVideoTakeId = null;
+      }
+      if (input.kind === "video") shot.selectedVideoTakeId = id;
       return structuredClone(ws);
     },
+    importShotTake: async () => ({ ok: false, message: "请在桌面端导入本地视频/图片/音频素材" }),
+    importProjectBgm: async () => ({ ok: false, message: "请在桌面端导入本地背景音乐" }),
+    clearProjectBgm: async (projectId) => {
+      const ws = workspaces.get(projectId)!;
+      ws.project.bgmAssetId = null;
+      return structuredClone(ws);
+    },
+    checkFfmpegStatus: async () => ({
+      available: true,
+      ffmpegPath: "ffmpeg",
+      ffprobePath: "ffprobe",
+      version: "browser-preview",
+      message: "FFmpeg 导出引擎已就绪（桌面端执行真实编码）",
+    }),
+    exportEpisodeVideo: async () => ({
+      ok: false,
+      message: "浏览器预览模式不调用本地 FFmpeg，请在桌面端导出真实 MP4。",
+    }),
+    onExportProgress: () => () => undefined,
+    revealPathInFolder: async () => ({ ok: false }),
     exportProjectArchive: async () => ({ ok: true, message: "浏览器预览模式不写入磁盘" }),
     importProjectArchive: async () => ({ ok: false, message: "请在桌面端使用工程包导入" }),
     getModelCenter: async () => structuredClone(modelCenter),
@@ -235,7 +273,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       modelCenter.routing = structuredClone(routing);
       return structuredClone(routing);
     },
-    getAppInfo: async () => ({ version: "1.0.0-alpha.1", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "1.0.0-alpha.2", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
   };
 }

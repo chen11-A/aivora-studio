@@ -13,11 +13,18 @@ import {
   type ProjectWorkspace,
   type Shot,
   type TakeKind,
+  type UpdateAssetInput,
   type UpdateEpisodeInput,
   type UpdateProjectSettingsInput,
   type UpdateShotInput,
 } from "../../shared/types/domain";
 import { DEMO_SCRIPT_EP1, populateDemoProject, writeCinematicFrameSvg } from "./demo-seed";
+import {
+  importAssetImageInDb,
+  importProjectBgmInDb,
+  importShotTakeInDb,
+  updateAssetInDb,
+} from "./media-import";
 import { exportProjectArchive, importProjectArchive } from "./project-archive";
 import { readWorkspaceFromDb } from "./project-reader";
 import { initProjectSchema } from "./schema";
@@ -243,12 +250,13 @@ export class ProjectStore {
       if (!current) throw new Error("作品不存在");
       db.run(
         `UPDATE projects SET name = ?, aspect_ratio = ?, style_preset = ?, subtitle_style = ?,
-         loudness_normalize = ?, bgm_volume_db = ?, updated_at = ? WHERE id = ?`,
+         loudness_normalize = ?, bgm_asset_id = ?, bgm_volume_db = ?, updated_at = ? WHERE id = ?`,
         input.name ?? String(current.name),
         input.aspectRatio ?? String(current.aspect_ratio),
         input.stylePreset ?? String(current.style_preset),
         input.subtitleStyle ?? String(current.subtitle_style),
         input.loudnessNormalize === undefined ? Number(current.loudness_normalize) : input.loudnessNormalize ? 1 : 0,
+        input.bgmAssetId !== undefined ? input.bgmAssetId : (current.bgm_asset_id as string | null),
         input.bgmVolumeDb ?? Number(current.bgm_volume_db),
         now,
         input.projectId,
@@ -402,6 +410,39 @@ export class ProjectStore {
     if (!dir) throw new Error("作品不存在");
     addSyntheticTakeInDb(this.getDb(input.projectId), dir, input);
     return this.openProject(input.projectId);
+  }
+
+  updateAsset(rawInput: UpdateAssetInput): Asset {
+    return updateAssetInDb(this.getDb(rawInput.projectId), rawInput);
+  }
+
+  importAssetImageFromPath(input: {
+    projectId: string;
+    assetId: string;
+    sourceFilePath: string;
+  }): Asset {
+    const dir = this.resolveProjectDir(input.projectId);
+    if (!dir) throw new Error("作品不存在");
+    return importAssetImageInDb(this.getDb(input.projectId), dir, input);
+  }
+
+  importShotTakeFromPath(input: {
+    projectId: string;
+    shotId: string;
+    kind: TakeKind;
+    sourceFilePath: string;
+  }): ProjectWorkspace {
+    const dir = this.resolveProjectDir(input.projectId);
+    if (!dir) throw new Error("作品不存在");
+    importShotTakeInDb(this.getDb(input.projectId), dir, input);
+    return this.openProject(input.projectId);
+  }
+
+  importProjectBgmFromPath(projectId: string, sourceFilePath: string): ProjectWorkspace {
+    const dir = this.resolveProjectDir(projectId);
+    if (!dir) throw new Error("作品不存在");
+    importProjectBgmInDb(this.getDb(projectId), dir, { projectId, sourceFilePath });
+    return this.openProject(projectId);
   }
 
   async exportArchiveToPath(projectId: string, outputZipPath: string): Promise<void> {

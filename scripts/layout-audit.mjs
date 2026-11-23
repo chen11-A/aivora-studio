@@ -198,12 +198,34 @@ async function runAudit() {
       await checkAndSnap("script");
 
       await page.click('[data-testid="stage-tab-cast"]');
+      await page.waitForSelector('[data-testid="cast-inspector"]');
       await checkAndSnap("cast");
 
       await page.click('[data-testid="stage-tab-storyboard"]');
       await checkAndSnap("storyboard");
 
+      // Switch Shot 1 from Version 2 -> Version 1, then verify Editor reflects Version 1 & advances playback timecode live!
+      if (vp.capture) {
+        await page.click('[data-testid="take-card-1"]');
+        await page.waitForTimeout(150);
+      }
+
       await page.click('[data-testid="stage-tab-editor"]');
+      await page.waitForSelector('[data-testid="export-readiness-card"]');
+      if (vp.capture) {
+        const previewHeading = await page.locator("main section").first().textContent();
+        if (!previewHeading?.includes("版本 1")) {
+          runtimeErrors.push(`[${vp.width}x${vp.height}] Editor did not reflect switched take 版本 1: ${previewHeading}`);
+        }
+        const beforeTime = await page.locator('[data-testid="editor-timecode"]').textContent();
+        await page.click('[data-testid="editor-play-toggle"]');
+        await page.waitForTimeout(650);
+        const afterTime = await page.locator('[data-testid="editor-timecode"]').textContent();
+        await page.click('[data-testid="editor-play-toggle"]');
+        if (!afterTime || afterTime === beforeTime || afterTime.startsWith("00:00.0")) {
+          runtimeErrors.push(`[${vp.width}x${vp.height}] Editor playback timecode did not advance (${beforeTime} -> ${afterTime})`);
+        }
+      }
       await checkAndSnap("editor");
 
       await page.click('[data-testid="open-model-center"]');

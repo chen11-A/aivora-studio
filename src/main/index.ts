@@ -1,8 +1,11 @@
-import { app, BrowserWindow, protocol, safeStorage } from "electron";
+import { app, BrowserWindow, dialog, protocol, safeStorage } from "electron";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createSecretVault } from "./auth/secret-vault";
 import { registerIpcHandlers } from "./ipc/register-ipc";
+import { ExportWriteGuard } from "./media/export-guard";
+import { exportEpisodeToMp4 } from "./media/export-pipeline";
+import { probeFfmpegStatus } from "./media/ffmpeg-locator";
 import { createMediaProtocolHandler } from "./media/media-protocol";
 import { GlobalConfigStore } from "./storage/global-store";
 import { ProjectStore } from "./storage/project-store";
@@ -22,6 +25,7 @@ protocol.registerSchemesAsPrivileged([
 let mainWindow: BrowserWindow | null = null;
 let projects: ProjectStore | null = null;
 let globalConfig: GlobalConfigStore | null = null;
+const exportGuard = new ExportWriteGuard();
 
 function resolveWorkspaceRoot(): string {
   const override = process.env.AIVORA_WORKSPACE_DIR?.trim();
@@ -29,7 +33,7 @@ function resolveWorkspaceRoot(): string {
   return join(app.getPath("documents"), "AIVORA Studio 作品");
 }
 
-function runHeadlessSmokeTest(workspaceRoot: string, reportPath: string): void {
+async function runHeadlessSmokeTest(workspaceRoot: string, reportPath: string): Promise<void> {
   const store = new ProjectStore(workspaceRoot);
   try {
     const created = store.createProject({
@@ -48,9 +52,26 @@ function runHeadlessSmokeTest(workspaceRoot: string, reportPath: string): void {
     const reopenedStore = new ProjectStore(workspaceRoot);
     try {
       const reopened = reopenedStore.openProject(created.project.id);
+      const ffmpegStatus = await probeFfmpegStatus();
+      let exportOk: boolean | null = null;
+      let exportedPath: string | null = null;
+      if (ffmpegStatus.available) {
+        const outMp4 = join(reopened.dirPath, "exports", "冒烟测试 成片.mp4");
+        const exp = await exportEpisodeToMp4({
+          workspace: reopened,
+          projectDir: reopened.dirPath,
+          episodeId: ep.id,
+          outputPath: outMp4,
+        });
+        exportOk = exp.ok;
+        exportedPath = exp.outputPath ?? null;
+      }
+
       const ok =
         reopened.project.name === "冒烟测试 晚照书店" &&
-        reopened.episodes[0]?.scriptText.includes("重启读回通过");
+        reopened.episodes[0]?.scriptText.includes("重启读回通过") &&
+        (exportOk === null || exportOk === true);
+
       const report = {
         ok,
         version: app.getVersion(),
@@ -59,6 +80,9 @@ function runHeadlessSmokeTest(workspaceRoot: string, reportPath: string): void {
         sqliteEngine: "node:sqlite",
         workspaceRoot,
         projectDir: reopened.dirPath,
+        ffmpegAvailable: ffmpegStatus.available,
+        exportOk,
+        exportedPath,
       };
       writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf8");
       app.exit(ok ? 0 : 1);
@@ -97,6 +121,19 @@ function createMainWindow(): void {
     mainWindow?.show();
   });
 
+  mainWindow.on("close", (event) => {
+    if (!exportGuard.isExporting()) return;
+    event.preventDefault();
+    if (mainWindow) {
+      void dialog.showMessageBox(mainWindow, {
+        type: "warning",
+        title: "正在导出成片",
+        message: "MP4 成片正在写入磁盘，请等待导出完成后再关闭软件，以免产生损坏文件。",
+        buttons: ["知道了"],
+      });
+    }
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -111,9 +148,11 @@ function createMainWindow(): void {
 
 app.whenReady().then(() => {
   const workspaceRoot = resolveWorkspaceRoot();
+  exportGuard.cleanupStaleTempDirs([workspaceRoot]);
+
   const smokeReport = process.env.AIVORA_SMOKE_REPORT?.trim();
   if (smokeReport) {
-    runHeadlessSmokeTest(workspaceRoot, smokeReport);
+    void runHeadlessSmokeTest(workspaceRoot, smokeReport);
     return;
   }
 
@@ -130,6 +169,7 @@ app.whenReady().then(() => {
     getWindow: () => mainWindow,
     projects,
     globalConfig,
+    exportGuard,
     appVersion: app.getVersion(),
   });
 

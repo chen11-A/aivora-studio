@@ -206,6 +206,16 @@ export const UpdateShotInputSchema = z.object({
 });
 export type UpdateShotInput = z.infer<typeof UpdateShotInputSchema>;
 
+export const UpdateAssetInputSchema = z.object({
+  projectId: z.string().min(1),
+  assetId: z.string().min(1),
+  name: z.string().trim().min(1).max(120).optional(),
+  description: z.string().optional(),
+  voiceId: z.string().nullable().optional(),
+  lockedRef: z.boolean().optional(),
+});
+export type UpdateAssetInput = z.infer<typeof UpdateAssetInputSchema>;
+
 export const UpdateProjectSettingsInputSchema = z.object({
   projectId: z.string().min(1),
   name: z.string().trim().min(1).max(120).optional(),
@@ -213,6 +223,7 @@ export const UpdateProjectSettingsInputSchema = z.object({
   stylePreset: z.string().max(120).optional(),
   subtitleStyle: SubtitleStyleSchema.optional(),
   loudnessNormalize: z.boolean().optional(),
+  bgmAssetId: z.string().nullable().optional(),
   bgmVolumeDb: z.number().min(-36).max(6).optional(),
 });
 export type UpdateProjectSettingsInput = z.infer<typeof UpdateProjectSettingsInputSchema>;
