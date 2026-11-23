@@ -10,10 +10,15 @@ import type {
   UpdateProjectSettingsInput,
   UpdateShotInput,
 } from "../../shared/types/domain";
-import type { ModelRouting, SaveProviderConfigInput } from "../../shared/types/provider";
+import type { DirectorProposal, GenerationPlan } from "../../shared/types/jobs";
+import type { ModelRouting, OAuthProviderId, SaveProviderConfigInput } from "../../shared/types/provider";
+import type { OAuthManager } from "../auth/auth-manager";
+import type { GenerationJobQueue } from "../jobs/job-queue";
 import type { ExportWriteGuard } from "../media/export-guard";
 import { exportEpisodeToMp4 } from "../media/export-pipeline";
 import { probeFfmpegStatus } from "../media/ffmpeg-locator";
+import { testProviderConnectivity } from "../providers/openai-compat-adapter";
+import type { DirectorService } from "../skills/director-service";
 import type { GlobalConfigStore } from "../storage/global-store";
 import { safeFolderSegment, type ProjectStore } from "../storage/project-store";
 
@@ -21,6 +26,9 @@ export function registerIpcHandlers(deps: {
   getWindow: () => BrowserWindow | null;
   projects: ProjectStore;
   globalConfig: GlobalConfigStore;
+  oauth: OAuthManager;
+  director: DirectorService;
+  jobQueue: GenerationJobQueue;
   exportGuard: ExportWriteGuard;
   appVersion: string;
 }): void {
@@ -253,6 +261,52 @@ export function registerIpcHandlers(deps: {
   handle(IPC_CHANNELS.UPDATE_MODEL_ROUTING, (routing: ModelRouting) =>
     deps.globalConfig.updateRouting(routing),
   );
+  handle(IPC_CHANNELS.TEST_PROVIDER, async (providerId: string) => {
+    const creds = deps.globalConfig.getProviderCredentials(providerId);
+    if (!creds) {
+      return { ok: false, providerId, latencyMs: 0, message: "找不到指定厂家配置" };
+    }
+    const res = await testProviderConnectivity({
+      providerId,
+      protocol: creds.view.protocol,
+      baseUrl: creds.view.baseUrl,
+      apiKey: creds.apiKey,
+      secondaryKey: creds.secondaryKey,
+    });
+    deps.globalConfig.recordProviderTestResult(providerId, res.ok, res.message);
+    return res;
+  });
+  handle(IPC_CHANNELS.OAUTH_START_LOGIN, (providerId: OAuthProviderId) =>
+    deps.oauth.startLogin(providerId),
+  );
+  handle(IPC_CHANNELS.OAUTH_DISCONNECT, (providerId: OAuthProviderId) =>
+    deps.oauth.disconnect(providerId),
+  );
+
+  handle(IPC_CHANNELS.DIRECTOR_PROPOSE, (input: { projectId: string; episodeId: string }) =>
+    deps.director.proposeSplit(input),
+  );
+  handle(
+    IPC_CHANNELS.DIRECTOR_APPLY,
+    (input: { projectId: string; episodeId: string; proposal: DirectorProposal }) =>
+      deps.director.applyProposal(input),
+  );
+  handle(IPC_CHANNELS.DIRECTOR_UNDO, (input: { projectId: string; undoToken: string }) =>
+    deps.director.undoApply(input),
+  );
+
+  handle(
+    IPC_CHANNELS.JOB_PREPARE_PLAN,
+    (input: { projectId: string; shotId: string; kind: "image" | "video" | "speech" }) =>
+      deps.jobQueue.preparePlan(input),
+  );
+  handle(IPC_CHANNELS.JOB_CONFIRM_RUN, (plan: GenerationPlan) => deps.jobQueue.confirmAndRun(plan));
+  handle(
+    IPC_CHANNELS.JOB_RECOVER_UNKNOWN,
+    (input: { projectId: string; jobId: string; remoteTaskId?: string }) =>
+      deps.jobQueue.recoverUnknownJob(input),
+  );
+  handle(IPC_CHANNELS.JOB_LIST, (projectId: string) => deps.jobQueue.listJobs(projectId));
 
   handle(IPC_CHANNELS.GET_APP_INFO, () => ({
     version: deps.appVersion,

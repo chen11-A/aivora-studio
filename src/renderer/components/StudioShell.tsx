@@ -13,8 +13,10 @@ import {
   Sparkles,
   Users,
   AlertTriangle,
+  Clock,
 } from "lucide-react";
 import type { StageId } from "../../shared/types/domain";
+import { useAiGenerationStore } from "../store/useAiGenerationStore";
 import { useStudioStore } from "../store/useStudioStore";
 
 const STAGES: Array<{ id: StageId; step: string; label: string; icon: typeof ScrollText }> = [
@@ -37,6 +39,8 @@ export function StudioShell({ children }: { children: ReactNode }) {
   const setModelCenterOpen = useStudioStore((s) => s.setModelCenterOpen);
   const setExportModalOpen = useStudioStore((s) => s.setExportModalOpen);
   const exportArchive = useStudioStore((s) => s.exportArchive);
+  const setJobDrawerOpen = useAiGenerationStore((s) => s.setJobDrawerOpen);
+  const runningJob = useAiGenerationStore((s) => s.runningJob);
 
   const currentEp = workspace?.episodes.find((e) => e.id === activeEpisodeId) ?? workspace?.episodes[0];
 
@@ -122,15 +126,31 @@ export function StudioShell({ children }: { children: ReactNode }) {
 
         <div className="flex items-center justify-end gap-2 min-w-0">
           {workspace && (
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => void exportArchive()}
-              title="打包导出工程 ZIP 备份"
-            >
-              <Archive className="w-3.5 h-3.5 shrink-0" />
-              <span className="hidden xl:inline">备份</span>
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn-secondary"
+                data-testid="open-job-drawer"
+                onClick={() => setJobDrawerOpen(true)}
+                title="查看 AI 生成任务与状态未知查单找回"
+              >
+                {runningJob ? (
+                  <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-[#60a5fa]" />
+                ) : (
+                  <Clock className="w-3.5 h-3.5 shrink-0 text-[#a4aec0]" />
+                )}
+                <span className="hidden xl:inline">任务</span>
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => void exportArchive()}
+                title="打包导出工程 ZIP 备份"
+              >
+                <Archive className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden xl:inline">备份</span>
+              </button>
+            </>
           )}
           <button
             type="button"
@@ -214,7 +234,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <span>存储引擎：{sqliteEngine}</span>
-          <span>v1.0.0-alpha.2</span>
+          <span>v1.0.0-alpha.3</span>
         </div>
       </footer>
     </div>

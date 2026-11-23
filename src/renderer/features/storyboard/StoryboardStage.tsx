@@ -19,6 +19,7 @@ import {
 } from "@shared/media-selection";
 import type { CameraMove, ShotScale } from "@shared/types/domain";
 import { getDesktopClient } from "../../lib/desktop-client";
+import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
 
 const SCALES: ShotScale[] = ["远景", "全景", "中景", "近景", "特写"];
@@ -37,6 +38,7 @@ export function StoryboardStage() {
   const selectTake = useStudioStore((s) => s.selectTake);
   const addSyntheticTake = useStudioStore((s) => s.addSyntheticTake);
   const importShotTake = useStudioStore((s) => s.importShotTake);
+  const openGenerationConfirm = useAiGenerationStore((s) => s.openGenerationConfirm);
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
@@ -381,19 +383,21 @@ export function StoryboardStage() {
             <div className="grid grid-cols-2 gap-2 pt-1">
               <button
                 type="button"
+                data-testid="btn-generate-image"
                 className="btn-secondary"
-                onClick={() => void addSyntheticTake(currentShot.id, "image", "首帧候选")}
+                onClick={() => void openGenerationConfirm(currentShot.id, "image")}
               >
                 <Sparkles className="w-3.5 h-3.5 text-[#60a5fa]" />
-                <span>生成首帧图</span>
+                <span>AI 生首帧</span>
               </button>
               <button
                 type="button"
+                data-testid="btn-generate-video"
                 className="btn-primary"
-                onClick={() => void importShotTake(currentShot.id, "video")}
+                onClick={() => void openGenerationConfirm(currentShot.id, "video")}
               >
                 <Video className="w-3.5 h-3.5" />
-                <span>导入/生成视频</span>
+                <span>AI 生视频</span>
               </button>
             </div>
 
@@ -426,14 +430,23 @@ export function StoryboardStage() {
                     <span className="text-[11px] text-[#a4aec0] truncate">
                       {speechTake ? `已绑定配音 v${speechTake.versionNumber}` : "暂无对白音频"}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => void importShotTake(currentShot.id, "speech")}
-                      className="text-[11px] text-[#60a5fa] hover:underline flex items-center gap-1 shrink-0 cursor-pointer"
-                    >
-                      <Mic className="w-3 h-3" />
-                      <span>导入配音</span>
-                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => void openGenerationConfirm(currentShot.id, "speech")}
+                        className="text-[11px] text-[#34d399] hover:underline cursor-pointer"
+                      >
+                        AI 配音
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void importShotTake(currentShot.id, "speech")}
+                        className="text-[11px] text-[#60a5fa] hover:underline flex items-center gap-0.5 cursor-pointer"
+                      >
+                        <Mic className="w-3 h-3" />
+                        <span>导入</span>
+                      </button>
+                    </div>
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-[11px] text-[#768196]">反向提示词（避免元素）</label>

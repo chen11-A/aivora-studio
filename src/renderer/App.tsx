@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import { ConfirmJobModal } from "./components/ConfirmJobModal";
+import { JobDrawer } from "./components/JobDrawer";
 import { StudioShell } from "./components/StudioShell";
 import { CastStage } from "./features/cast/CastStage";
 import { EditorStage } from "./features/editor/EditorStage";
@@ -33,6 +35,8 @@ export function App() {
         )}
       </StudioShell>
       <ModelCenterModal />
+      <ConfirmJobModal />
+      <JobDrawer />
     </>
   );
 }

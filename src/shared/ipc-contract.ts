@@ -3,6 +3,7 @@ import type {
   AssetKind,
   CreateProjectInput,
   Episode,
+  Job,
   ProjectSummary,
   ProjectWorkspace,
   Shot,
@@ -13,8 +14,16 @@ import type {
   UpdateShotInput,
 } from "./types/domain";
 import type {
+  DirectorProposal,
+  GenerationPlan,
+  JobExecutionResult,
+  OAuthLoginResult,
+  ProviderTestResult,
+} from "./types/jobs";
+import type {
   ModelCenterSnapshot,
   ModelRouting,
+  OAuthProviderId,
   ProviderConfigView,
   SaveProviderConfigInput,
 } from "./types/provider";
@@ -113,11 +122,43 @@ export type AivoraDesktopApi = {
   exportProjectArchive: (projectId: string) => Promise<ArchiveResult>;
   importProjectArchive: () => Promise<{ ok: boolean; project?: ProjectWorkspace; message: string }>;
 
-  // Model center (global.db)
+  // Model center & OAuth (global.db)
   getModelCenter: () => Promise<ModelCenterSnapshot>;
   saveProviderConfig: (input: SaveProviderConfigInput) => Promise<ProviderConfigView>;
   deleteProviderConfig: (providerId: string) => Promise<{ ok: boolean }>;
   updateModelRouting: (routing: ModelRouting) => Promise<ModelRouting>;
+  testProviderConnection: (providerId: string) => Promise<ProviderTestResult>;
+  oauthStartLogin: (providerId: OAuthProviderId) => Promise<OAuthLoginResult>;
+  oauthDisconnect: (providerId: OAuthProviderId) => Promise<{ ok: boolean; message: string }>;
+
+  // Director skill (proposal-only, undoable)
+  proposeDirectorSplit: (input: {
+    projectId: string;
+    episodeId: string;
+  }) => Promise<{ ok: boolean; proposal?: DirectorProposal; message: string }>;
+  applyDirectorProposal: (input: {
+    projectId: string;
+    episodeId: string;
+    proposal: DirectorProposal;
+  }) => Promise<{ ok: boolean; workspace?: ProjectWorkspace; undoToken?: string; message: string }>;
+  undoDirectorApply: (input: {
+    projectId: string;
+    undoToken: string;
+  }) => Promise<{ ok: boolean; workspace?: ProjectWorkspace; message: string }>;
+
+  // Anti-duplicate-charge Job Queue (confirm -> lock snapshot -> run / GET-only recover)
+  prepareGenerationPlan: (input: {
+    projectId: string;
+    shotId: string;
+    kind: "image" | "video" | "speech";
+  }) => Promise<GenerationPlan>;
+  confirmAndRunJob: (plan: GenerationPlan) => Promise<JobExecutionResult>;
+  recoverUnknownJob: (input: {
+    projectId: string;
+    jobId: string;
+    remoteTaskId?: string;
+  }) => Promise<JobExecutionResult>;
+  listProjectJobs: (projectId: string) => Promise<Job[]>;
 
   // App lifecycle & diagnostics
   getAppInfo: () => Promise<{
@@ -159,5 +200,15 @@ export const IPC_CHANNELS = {
   SAVE_PROVIDER_CONFIG: "aivora:models:save-provider",
   DELETE_PROVIDER_CONFIG: "aivora:models:delete-provider",
   UPDATE_MODEL_ROUTING: "aivora:models:update-routing",
+  TEST_PROVIDER: "aivora:models:test-provider",
+  OAUTH_START_LOGIN: "aivora:oauth:start",
+  OAUTH_DISCONNECT: "aivora:oauth:disconnect",
+  DIRECTOR_PROPOSE: "aivora:director:propose",
+  DIRECTOR_APPLY: "aivora:director:apply",
+  DIRECTOR_UNDO: "aivora:director:undo",
+  JOB_PREPARE_PLAN: "aivora:jobs:prepare-plan",
+  JOB_CONFIRM_RUN: "aivora:jobs:confirm-run",
+  JOB_RECOVER_UNKNOWN: "aivora:jobs:recover-unknown",
+  JOB_LIST: "aivora:jobs:list",
   GET_APP_INFO: "aivora:app:info",
 } as const;

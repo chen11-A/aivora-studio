@@ -273,7 +273,100 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       modelCenter.routing = structuredClone(routing);
       return structuredClone(routing);
     },
-    getAppInfo: async () => ({ version: "1.0.0-alpha.2", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    testProviderConnection: async (providerId) => ({
+      ok: true,
+      providerId,
+      latencyMs: 42,
+      message: "浏览器预览模式：接口连通模拟通过（42ms）",
+    }),
+    oauthStartLogin: async (providerId) => ({
+      ok: false,
+      providerId,
+      status: "disconnected",
+      message: "请在桌面端打开系统浏览器完成网页 OAuth 授权",
+    }),
+    oauthDisconnect: async () => ({ ok: true, message: "已断开授权" }),
+    proposeDirectorSplit: async ({ projectId, episodeId }) => {
+      const ws = workspaces.get(projectId);
+      const ep = ws?.episodes.find((e) => e.id === episodeId);
+      const lines = (ep?.scriptText || "开场画面").split(/\n+/).map((l) => l.trim()).filter(Boolean);
+      return {
+        ok: true,
+        message: "已生成导演拆镜提案预览",
+        proposal: {
+          sourceMode: "offline_preview",
+          providerSummary: "预览模式 · 导演拆镜提案",
+          scenes: [
+            {
+              title: `第一场 · ${ep?.title || "第 1 集"}`,
+              summary: `按原文 ${lines.length} 段生成结构化镜头提案`,
+              shots: lines.slice(0, 6).map((line, i) => ({
+                title: `镜 ${String(i + 1).padStart(2, "0")} · ${line.slice(0, 8)}`,
+                scale: i === 0 ? "远景" : "中景",
+                cameraMove: i === 0 ? "缓推" : "固定",
+                durationSec: 4,
+                visualPrompt: line,
+                dialogue: "",
+                speaker: "",
+                subtitle: line.slice(0, 24),
+                characters: [],
+              })),
+            },
+          ],
+        },
+      };
+    },
+    applyDirectorProposal: async ({ projectId }) => ({
+      ok: true,
+      workspace: structuredClone(workspaces.get(projectId)!),
+      undoToken: "preview_undo",
+      message: "已采纳导演拆镜提案（随时可一键撤销）",
+    }),
+    undoDirectorApply: async ({ projectId }) => ({
+      ok: true,
+      workspace: structuredClone(workspaces.get(projectId)!),
+      message: "已撤销拆镜提案",
+    }),
+    prepareGenerationPlan: async ({ projectId, shotId, kind }) => {
+      const ws = workspaces.get(projectId)!;
+      const shot = ws.shots.find((s) => s.id === shotId)!;
+      const locked = ws.assets
+        .filter((a) => a.lockedRef && (a.kind === "character" || a.kind === "scene" || a.kind === "prop"))
+        .map((a) => ({
+          assetId: a.id,
+          name: a.name,
+          kind: a.kind as "character" | "scene" | "prop",
+          mediaPath: a.mediaPath,
+          description: a.description,
+        }));
+      return {
+        planId: `pln_${Date.now()}`,
+        projectId,
+        shotId,
+        shotTitle: shot.title,
+        kind,
+        capability: kind === "speech" ? "tts" : kind,
+        providerLabel: "未配置模型",
+        protocol: "none",
+        modelId: "",
+        estimatedSec: kind === "video" ? 60 : 12,
+        promptPreview: shot.visualPrompt || shot.title,
+        injectedRefs: locked,
+        idempotencyKey: `idem_${Date.now()}`,
+        inputSha256: "preview",
+        providerSnapshotJson: "",
+        canRun: false,
+        blockingReason: "请先在「模型中心」配置对应环节的模型路由与密钥，再确认发起生成。",
+      };
+    },
+    confirmAndRunJob: async () => {
+      throw new Error("请在桌面端配置模型后发起真实生成");
+    },
+    recoverUnknownJob: async () => {
+      throw new Error("请在桌面端使用查单找回");
+    },
+    listProjectJobs: async () => [],
+    getAppInfo: async () => ({ version: "1.0.0-alpha.3", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
   };
 }

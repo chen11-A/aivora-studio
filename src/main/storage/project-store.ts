@@ -74,6 +74,12 @@ export class ProjectStore {
     return this.dirByProjectId.get(projectId) ?? null;
   }
 
+  withProjectDb<T>(projectId: string, fn: (db: SqliteDriver, dirPath: string) => T): T {
+    const dir = this.resolveProjectDir(projectId);
+    if (!dir) throw new Error("找不到指定作品目录");
+    return fn(this.getDb(projectId), dir);
+  }
+
   private getDb(projectId: string): SqliteDriver {
     const existing = this.openDbs.get(projectId);
     if (existing) return existing;

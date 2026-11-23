@@ -6,7 +6,9 @@ import {
   Plus,
   Sparkles,
 } from "lucide-react";
+import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
+import { DirectorProposalModal } from "./DirectorProposalModal";
 
 export function ScriptStage() {
   const workspace = useStudioStore((s) => s.workspace);
@@ -16,7 +18,10 @@ export function ScriptStage() {
   const selectEpisode = useStudioStore((s) => s.selectEpisode);
   const createEpisode = useStudioStore((s) => s.createEpisode);
   const editEpisodeScript = useStudioStore((s) => s.editEpisodeScript);
-  const setStage = useStudioStore((s) => s.setStage);
+  const directorLoading = useAiGenerationStore((s) => s.directorLoading);
+  const lastUndoToken = useAiGenerationStore((s) => s.lastUndoToken);
+  const proposeDirector = useAiGenerationStore((s) => s.proposeDirector);
+  const undoDirector = useAiGenerationStore((s) => s.undoDirector);
 
   if (!workspace) return null;
   const episode = workspace.episodes.find((e) => e.id === activeEpisodeId) ?? workspace.episodes[0];
@@ -127,12 +132,23 @@ export function ScriptStage() {
             </p>
             <button
               type="button"
+              data-testid="run-director-split"
+              disabled={directorLoading}
               className="btn-primary w-full"
-              onClick={() => void setStage("storyboard")}
+              onClick={() => void proposeDirector()}
             >
               <Sparkles className="w-3.5 h-3.5" />
-              <span>前往分镜核对镜头表</span>
+              <span>{directorLoading ? "导演拆镜中…" : "生成导演拆镜提案"}</span>
             </button>
+            {lastUndoToken && (
+              <button
+                type="button"
+                onClick={() => void undoDirector()}
+                className="btn-secondary w-full text-[11px]"
+              >
+                撤销上次拆镜（恢复原镜头表）
+              </button>
+            )}
           </div>
 
           <div className="flex flex-col gap-2">
@@ -151,6 +167,7 @@ export function ScriptStage() {
           </div>
         </div>
       </aside>
+      <DirectorProposalModal />
     </div>
   );
 }

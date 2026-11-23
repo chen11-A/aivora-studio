@@ -204,6 +204,82 @@ export class GlobalConfigStore {
     return this.getSnapshot().routing;
   }
 
+  getProviderCredentials(providerId: string): {
+    view: ProviderConfigView;
+    apiKey: string;
+    secondaryKey: string | null;
+  } | null {
+    const row = this.db.get<ProviderRow>(`SELECT * FROM provider_configs WHERE id = ?`, providerId);
+    if (!row) return null;
+    const apiKey = row.secret_cipher_b64 ? this.vault.decryptFromBase64(row.secret_cipher_b64) : "";
+    const secondaryKey = row.secondary_cipher_b64
+      ? this.vault.decryptFromBase64(row.secondary_cipher_b64)
+      : null;
+    return { view: this.toProviderView(row), apiKey, secondaryKey };
+  }
+
+  recordProviderTestResult(providerId: string, ok: boolean, message: string): void {
+    const now = new Date().toISOString();
+    this.db.run(
+      `UPDATE provider_configs SET last_test_ok = ?, last_test_message = ?, updated_at = ? WHERE id = ?`,
+      ok ? 1 : 0,
+      message,
+      now,
+      providerId,
+    );
+  }
+
+  saveOAuthSession(input: {
+    providerId: OAuthAccountView["providerId"];
+    status: OAuthAccountView["status"];
+    accountLabel: string | null;
+    models: string[];
+    sessionPayload: Record<string, unknown> | null;
+    note?: string;
+  }): void {
+    const now = new Date().toISOString();
+    const cipher = input.sessionPayload
+      ? this.vault.encryptToBase64(JSON.stringify(input.sessionPayload))
+      : null;
+    this.db.run(
+      `UPDATE oauth_accounts
+       SET status = ?, account_label = ?, models_json = ?, session_cipher_b64 = ?, note = COALESCE(?, note), updated_at = ?
+       WHERE provider_id = ?`,
+      input.status,
+      input.accountLabel,
+      JSON.stringify(input.models),
+      cipher,
+      input.note ?? null,
+      now,
+      input.providerId,
+    );
+  }
+
+  loadOAuthSession<T = Record<string, unknown>>(
+    providerId: OAuthAccountView["providerId"],
+  ): { status: OAuthAccountView["status"]; payload: T | null } {
+    const row = this.db.get<{ status: OAuthAccountView["status"]; session_cipher_b64: string | null }>(
+      `SELECT status, session_cipher_b64 FROM oauth_accounts WHERE provider_id = ?`,
+      providerId,
+    );
+    if (!row || !row.session_cipher_b64) return { status: row?.status ?? "disconnected", payload: null };
+    const plain = this.vault.decryptFromBase64(row.session_cipher_b64);
+    return { status: row.status, payload: JSON.parse(plain) as T };
+  }
+
+  clearOAuthSession(providerId: OAuthAccountView["providerId"]): void {
+    const now = new Date().toISOString();
+    this.db.transaction(() => {
+      this.db.run(
+        `UPDATE oauth_accounts SET status = 'disconnected', account_label = NULL, models_json = '[]', session_cipher_b64 = NULL, updated_at = ?
+         WHERE provider_id = ?`,
+        now,
+        providerId,
+      );
+      this.db.run(`DELETE FROM model_routing WHERE source = 'oauth' AND source_id = ?`, providerId);
+    });
+  }
+
   close(): void {
     this.db.close();
   }

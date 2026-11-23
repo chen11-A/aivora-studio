@@ -197,12 +197,26 @@ async function runAudit() {
       await page.waitForSelector('[data-testid="stage-tab-script"]');
       await checkAndSnap("script");
 
+      if (vp.capture) {
+        await page.click('[data-testid="run-director-split"]');
+        await page.waitForSelector('[data-testid="director-proposal-modal"]');
+        await checkAndSnap("director-proposal");
+        await page.getByRole("button", { name: "放弃提案" }).click();
+      }
+
       await page.click('[data-testid="stage-tab-cast"]');
       await page.waitForSelector('[data-testid="cast-inspector"]');
       await checkAndSnap("cast");
 
       await page.click('[data-testid="stage-tab-storyboard"]');
       await checkAndSnap("storyboard");
+
+      if (vp.capture) {
+        await page.click('[data-testid="btn-generate-video"]');
+        await page.waitForSelector('[data-testid="confirm-job-modal"]');
+        await checkAndSnap("confirm-job");
+        await page.getByRole("button", { name: "取消" }).click();
+      }
 
       // Switch Shot 1 from Version 2 -> Version 1, then verify Editor reflects Version 1 & advances playback timecode live!
       if (vp.capture) {

@@ -44,6 +44,16 @@ const api: AivoraDesktopApi = {
   deleteProviderConfig: (providerId) =>
     ipcRenderer.invoke(IPC_CHANNELS.DELETE_PROVIDER_CONFIG, providerId),
   updateModelRouting: (routing) => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_MODEL_ROUTING, routing),
+  testProviderConnection: (providerId) => ipcRenderer.invoke(IPC_CHANNELS.TEST_PROVIDER, providerId),
+  oauthStartLogin: (providerId) => ipcRenderer.invoke(IPC_CHANNELS.OAUTH_START_LOGIN, providerId),
+  oauthDisconnect: (providerId) => ipcRenderer.invoke(IPC_CHANNELS.OAUTH_DISCONNECT, providerId),
+  proposeDirectorSplit: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_PROPOSE, input),
+  applyDirectorProposal: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_APPLY, input),
+  undoDirectorApply: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_UNDO, input),
+  prepareGenerationPlan: (input) => ipcRenderer.invoke(IPC_CHANNELS.JOB_PREPARE_PLAN, input),
+  confirmAndRunJob: (plan) => ipcRenderer.invoke(IPC_CHANNELS.JOB_CONFIRM_RUN, plan),
+  recoverUnknownJob: (input) => ipcRenderer.invoke(IPC_CHANNELS.JOB_RECOVER_UNKNOWN, input),
+  listProjectJobs: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.JOB_LIST, projectId),
   getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.GET_APP_INFO),
   mediaUrl: (projectId, relativePath) =>
     `aivora-media://${encodeURIComponent(projectId)}/${relativePath

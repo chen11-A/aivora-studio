@@ -1,12 +1,15 @@
-import { app, BrowserWindow, dialog, protocol, safeStorage } from "electron";
+import { app, BrowserWindow, dialog, protocol, safeStorage, shell } from "electron";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { OAuthManager } from "./auth/auth-manager";
 import { createSecretVault } from "./auth/secret-vault";
 import { registerIpcHandlers } from "./ipc/register-ipc";
+import { GenerationJobQueue } from "./jobs/job-queue";
 import { ExportWriteGuard } from "./media/export-guard";
 import { exportEpisodeToMp4 } from "./media/export-pipeline";
 import { probeFfmpegStatus } from "./media/ffmpeg-locator";
 import { createMediaProtocolHandler } from "./media/media-protocol";
+import { DirectorService } from "./skills/director-service";
 import { GlobalConfigStore } from "./storage/global-store";
 import { ProjectStore } from "./storage/project-store";
 
@@ -159,6 +162,9 @@ app.whenReady().then(() => {
   projects = new ProjectStore(workspaceRoot);
   const vault = createSecretVault(safeStorage);
   globalConfig = new GlobalConfigStore(join(app.getPath("userData"), "app-data"), vault);
+  const oauth = new OAuthManager(globalConfig, (url) => shell.openExternal(url));
+  const director = new DirectorService(projects, globalConfig, oauth);
+  const jobQueue = new GenerationJobQueue(projects, globalConfig, oauth);
 
   protocol.handle(
     "aivora-media",
@@ -169,6 +175,9 @@ app.whenReady().then(() => {
     getWindow: () => mainWindow,
     projects,
     globalConfig,
+    oauth,
+    director,
+    jobQueue,
     exportGuard,
     appVersion: app.getVersion(),
   });
