@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ProjectStore } from "../storage/project-store";
 import { EXPORT_TEMP_PREFIX, ExportWriteGuard } from "./export-guard";
 import { exportEpisodeToMp4 } from "./export-pipeline";
-import { probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
+import { preflightEpisodeExport } from "./export-preflight";
+import { activeMediaProcessCount, probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
 
 const tempDirs: string[] = [];
 
@@ -228,5 +229,103 @@ describe("export-pipeline & ExportWriteGuard", () => {
       store.closeAll();
     },
     60_000,
+  );
+
+  it(
+    "cancels an in-flight FFmpeg export cleanly, leaves zero orphan processes and no half-written output",
+    async () => {
+      const base = makeTempDir("aivora-export-cancel-");
+      const store = new ProjectStore(path.join(base, "取消导出 空间"));
+      const demo = store.openDemoProject();
+      const epId = demo.episodes[0]!.id;
+      const outPath = path.join(demo.dirPath, "exports", "不应存在的半截文件.mp4");
+
+      const guard = new ExportWriteGuard();
+      const res = await guard.runGuarded((signal) =>
+        exportEpisodeToMp4({
+          workspace: demo,
+          projectDir: demo.dirPath,
+          episodeId: epId,
+          outputPath: outPath,
+          signal,
+          onProgress: (ev) => {
+            if (ev.percent >= 10) {
+              guard.cancelActiveExport();
+            }
+          },
+        }),
+      );
+
+      expect(res.ok).toBe(false);
+      expect(res.canceled).toBe(true);
+      expect(existsSync(outPath)).toBe(false);
+      expect(guard.isExporting()).toBe(false);
+      expect(activeMediaProcessCount()).toBe(0);
+      store.closeAll();
+    },
+    30_000,
+  );
+
+  it(
+    "preflight flags short video clips as warnings and corrupt video files as blocking errors before export",
+    async () => {
+      const ff = await probeFfmpegStatus();
+      expect(ff.available).toBe(true);
+      const base = makeTempDir("aivora-preflight-");
+      const fixtures = path.join(base, "fixtures");
+      mkdirSync(fixtures, { recursive: true });
+
+      const shortMp4 = path.join(fixtures, "short1s.mp4");
+      await runMediaBinary(ff.ffmpegPath!, [
+        "-hide_banner", "-nostdin", "-y",
+        "-f", "lavfi", "-i", "color=c=0x113355:s=320x180:r=24:d=1",
+        "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", shortMp4,
+      ]);
+
+      const corruptMp4 = path.join(fixtures, "corrupt.mp4");
+      const { writeFileSync } = await import("node:fs");
+      writeFileSync(corruptMp4, Buffer.from("not-a-valid-mp4-stream-at-all"));
+
+      const store = new ProjectStore(path.join(base, "体检 空间"));
+      const created = store.createProject({ name: "体检测试剧", aspectRatio: "16:9" });
+      const epId = created.episodes[0]!.id;
+      const shotId = created.shots[0]!.id;
+      store.updateShot({ projectId: created.project.id, shotId, durationSec: 4 });
+
+      // 1. Short 1s video inside 4s shot -> ok: true with explicit warning & shortClips entry
+      const wsShort = store.importShotTakeFromPath({
+        projectId: created.project.id,
+        shotId,
+        kind: "video",
+        sourceFilePath: shortMp4,
+      });
+      const shortReport = await preflightEpisodeExport({
+        workspace: wsShort,
+        projectDir: wsShort.dirPath,
+        episodeId: epId,
+      });
+      expect(shortReport.ok).toBe(true);
+      expect(shortReport.shortClips).toHaveLength(1);
+      expect(shortReport.warnings.length).toBeGreaterThanOrEqual(1);
+
+      // 2. Corrupt video file -> ok: false with blocking issue naming the shot
+      const wsCorrupt = store.importShotTakeFromPath({
+        projectId: created.project.id,
+        shotId,
+        kind: "video",
+        sourceFilePath: corruptMp4,
+      });
+      const corruptReport = await preflightEpisodeExport({
+        workspace: wsCorrupt,
+        projectDir: wsCorrupt.dirPath,
+        episodeId: epId,
+      });
+      expect(corruptReport.ok).toBe(false);
+      expect(corruptReport.blockingIssues.some((m) => m.includes("无法解码") || m.includes("损坏"))).toBe(
+        true,
+      );
+      store.closeAll();
+    },
+    30_000,
   );
 });

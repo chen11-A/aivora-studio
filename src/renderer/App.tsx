@@ -8,7 +8,8 @@ import { ProjectHome } from "./features/home/ProjectHome";
 import { ModelCenterModal } from "./features/models/ModelCenterModal";
 import { ScriptStage } from "./features/script/ScriptStage";
 import { StoryboardStage } from "./features/storyboard/StoryboardStage";
-import { useStudioStore } from "./store/useStudioStore";
+import { getDesktopClient } from "./lib/desktop-client";
+import { flushPendingSaves, useStudioStore } from "./store/useStudioStore";
 
 export function App() {
   const workspace = useStudioStore((s) => s.workspace);
@@ -18,6 +19,15 @@ export function App() {
   useEffect(() => {
     void bootstrap();
   }, [bootstrap]);
+
+  useEffect(() => {
+    const client = getDesktopClient();
+    return client.onFlushBeforeClose(() => {
+      void flushPendingSaves().finally(() => {
+        client.notifyFlushComplete();
+      });
+    });
+  }, []);
 
   return (
     <>

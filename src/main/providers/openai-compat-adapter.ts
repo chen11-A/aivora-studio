@@ -138,6 +138,13 @@ export async function runOpenAiChatCompletion(
   return content;
 }
 
+function wrapSyncPostNetworkError(actionLabel: string, err: unknown): Error {
+  const detail = err instanceof Error ? err.message : String(err);
+  return new Error(
+    `${actionLabel}请求已发出，但等待响应超时或网络中断（${detail}）。上游可能已完成扣费，请先在厂家后台核对额度，确认未出图后再手动重试（软件绝不会自动重发）。`,
+  );
+}
+
 export async function runOpenAiImageGeneration(
   input: {
     baseUrl: string;
@@ -162,32 +169,41 @@ export async function runOpenAiImageGeneration(
     const refBytes = Buffer.from(input.referenceImageBase64, "base64");
     form.append("image", new Blob([refBytes], { type: "image/png" }), "reference.png");
 
-    const editRes = await fetcher(`${cleanBase(input.baseUrl)}/images/edits`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${input.apiKey.trim()}` },
-      body: form,
-      signal: AbortSignal.timeout(90_000),
-    });
+    let editRes: Response;
+    try {
+      editRes = await fetcher(`${cleanBase(input.baseUrl)}/images/edits`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${input.apiKey.trim()}` },
+        body: form,
+        signal: AbortSignal.timeout(90_000),
+      });
+    } catch (err) {
+      throw wrapSyncPostNetworkError("生图", err);
+    }
     if (editRes.ok || (editRes.status !== 404 && editRes.status !== 405 && editRes.status !== 501)) {
       res = editRes;
     }
   }
 
   if (!res) {
-    res = await fetcher(`${cleanBase(input.baseUrl)}/images/generations`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${input.apiKey.trim()}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: input.modelId,
-        prompt: input.prompt,
-        size,
-        n: 1,
-      }),
-      signal: AbortSignal.timeout(90_000),
-    });
+    try {
+      res = await fetcher(`${cleanBase(input.baseUrl)}/images/generations`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${input.apiKey.trim()}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: input.modelId,
+          prompt: input.prompt,
+          size,
+          n: 1,
+        }),
+        signal: AbortSignal.timeout(90_000),
+      });
+    } catch (err) {
+      throw wrapSyncPostNetworkError("生图", err);
+    }
   }
   if (!res.ok) {
     throw new Error(diagnoseHttpError(res.status, await res.text().catch(() => "")));
@@ -226,20 +242,25 @@ export async function runOpenAiSpeechSynthesis(
   },
   fetcher: typeof fetch = fetch,
 ): Promise<{ mediaPath: string; mediaSha256: string }> {
-  const res = await fetcher(`${cleanBase(input.baseUrl)}/audio/speech`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${input.apiKey.trim()}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: input.modelId,
-      input: input.text,
-      voice: input.voice || "alloy",
-      response_format: "mp3",
-    }),
-    signal: AbortSignal.timeout(60_000),
-  });
+  let res: Response;
+  try {
+    res = await fetcher(`${cleanBase(input.baseUrl)}/audio/speech`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${input.apiKey.trim()}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: input.modelId,
+        input: input.text,
+        voice: input.voice || "alloy",
+        response_format: "mp3",
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (err) {
+    throw wrapSyncPostNetworkError("配音 TTS", err);
+  }
   if (!res.ok) {
     throw new Error(diagnoseHttpError(res.status, await res.text().catch(() => "")));
   }

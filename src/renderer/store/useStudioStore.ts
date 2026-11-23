@@ -21,6 +21,11 @@ import { createPersistenceQueue, type SaveState } from "../lib/persistence-queue
 
 const queue = createPersistenceQueue();
 
+export async function flushPendingSaves(): Promise<boolean> {
+  const res = await queue.flushAll();
+  return res.ok;
+}
+
 interface StudioStore {
   projects: ProjectSummary[];
   workspace: ProjectWorkspace | null;

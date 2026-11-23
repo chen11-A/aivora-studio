@@ -62,6 +62,14 @@ export class GenerationJobQueue {
     private readonly maxPollRounds = 60,
   ) {}
 
+  hasActiveJobs(): boolean {
+    return this.activeJobIds.size > 0;
+  }
+
+  activeJobCount(): number {
+    return this.activeJobIds.size;
+  }
+
   listJobs(projectId: string): Job[] {
     reconcileOrphanRunningJobs(this.projects, projectId, this.activeJobIds);
     return listJobRows(this.projects, projectId);

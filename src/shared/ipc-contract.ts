@@ -48,6 +48,19 @@ export type ExportProgressEvent = {
   detail: string;
 };
 
+export type ExportPreflightReport = {
+  ok: boolean;
+  blockingIssues: string[];
+  warnings: string[];
+  shortClips: Array<{
+    shotId: string;
+    shotTitle: string;
+    shotDurationSec: number;
+    clipDurationSec: number;
+  }>;
+  freeSpaceMb: number | null;
+};
+
 export type ExportEpisodeResult = {
   ok: boolean;
   canceled?: boolean;
@@ -111,10 +124,15 @@ export type AivoraDesktopApi = {
   ) => Promise<{ ok: boolean; workspace?: ProjectWorkspace; message: string }>;
   clearProjectBgm: (projectId: string) => Promise<ProjectWorkspace>;
   checkFfmpegStatus: () => Promise<FfmpegStatus>;
+  preflightExportEpisode: (input: {
+    projectId: string;
+    episodeId: string;
+  }) => Promise<ExportPreflightReport>;
   exportEpisodeVideo: (input: {
     projectId: string;
     episodeId: string;
   }) => Promise<ExportEpisodeResult>;
+  cancelEpisodeExport: () => Promise<{ ok: boolean; message: string }>;
   onExportProgress: (listener: (event: ExportProgressEvent) => void) => () => void;
   revealPathInFolder: (filePath: string) => Promise<{ ok: boolean }>;
 
@@ -161,6 +179,8 @@ export type AivoraDesktopApi = {
   listProjectJobs: (projectId: string) => Promise<Job[]>;
 
   // App lifecycle & diagnostics
+  onFlushBeforeClose: (listener: () => void) => () => void;
+  notifyFlushComplete: () => void;
   getAppInfo: () => Promise<{
     version: string;
     workspaceRoot: string;
@@ -191,7 +211,9 @@ export const IPC_CHANNELS = {
   IMPORT_PROJECT_BGM: "aivora:bgm:import",
   CLEAR_PROJECT_BGM: "aivora:bgm:clear",
   CHECK_FFMPEG_STATUS: "aivora:media:ffmpeg-status",
+  PREFLIGHT_EXPORT_EPISODE: "aivora:media:preflight-export",
   EXPORT_EPISODE_VIDEO: "aivora:media:export-episode",
+  CANCEL_EPISODE_EXPORT: "aivora:media:cancel-export",
   EXPORT_PROGRESS_EVENT: "aivora:media:export-progress",
   REVEAL_PATH: "aivora:shell:reveal-path",
   EXPORT_ARCHIVE: "aivora:archive:export",
@@ -210,5 +232,7 @@ export const IPC_CHANNELS = {
   JOB_CONFIRM_RUN: "aivora:jobs:confirm-run",
   JOB_RECOVER_UNKNOWN: "aivora:jobs:recover-unknown",
   JOB_LIST: "aivora:jobs:list",
+  APP_FLUSH_BEFORE_CLOSE: "aivora:app:flush-before-close",
+  APP_FLUSH_COMPLETE: "aivora:app:flush-complete",
   GET_APP_INFO: "aivora:app:info",
 } as const;

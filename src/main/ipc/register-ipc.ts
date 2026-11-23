@@ -16,6 +16,7 @@ import type { OAuthManager } from "../auth/auth-manager";
 import type { GenerationJobQueue } from "../jobs/job-queue";
 import type { ExportWriteGuard } from "../media/export-guard";
 import { exportEpisodeToMp4 } from "../media/export-pipeline";
+import { preflightEpisodeExport } from "../media/export-preflight";
 import { probeFfmpegStatus } from "../media/ffmpeg-locator";
 import { testProviderConnectivity } from "../providers/openai-compat-adapter";
 import type { DirectorService } from "../skills/director-service";
@@ -174,6 +175,32 @@ export function registerIpcHandlers(deps: {
   handle(IPC_CHANNELS.CHECK_FFMPEG_STATUS, () => probeFfmpegStatus());
 
   handle(
+    IPC_CHANNELS.PREFLIGHT_EXPORT_EPISODE,
+    async (input: { projectId: string; episodeId: string }) => {
+      const projectDir = deps.projects.resolveProjectDir(input.projectId);
+      if (!projectDir) {
+        return {
+          ok: false,
+          blockingIssues: ["找不到作品目录"],
+          warnings: [],
+          shortClips: [],
+          freeSpaceMb: null,
+        };
+      }
+      const workspace = deps.projects.openProject(input.projectId);
+      return preflightEpisodeExport({ workspace, projectDir, episodeId: input.episodeId });
+    },
+  );
+
+  handle(IPC_CHANNELS.CANCEL_EPISODE_EXPORT, () => {
+    const canceled = deps.exportGuard.cancelActiveExport();
+    return {
+      ok: canceled,
+      message: canceled ? "正在中止 FFmpeg 并清理临时文件…" : "当前没有正在进行的导出任务",
+    };
+  });
+
+  handle(
     IPC_CHANNELS.EXPORT_EPISODE_VIDEO,
     async (input: { projectId: string; episodeId: string }) => {
       const win = deps.getWindow();
@@ -204,13 +231,14 @@ export function registerIpcHandlers(deps: {
         }
       };
 
-      const res = await deps.exportGuard.runGuarded(() =>
+      const res = await deps.exportGuard.runGuarded((signal) =>
         exportEpisodeToMp4({
           workspace,
           projectDir,
           episodeId: input.episodeId,
           outputPath: chosen.filePath!,
           onProgress: emitProgress,
+          signal,
         }),
       );
       if (res.ok && res.outputPath) allowedRevealPaths.add(path.resolve(res.outputPath));

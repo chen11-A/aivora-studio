@@ -16,7 +16,11 @@ import {
   measureAudioLoudness,
 } from "./audio-normalize";
 import { EXPORT_TEMP_PREFIX } from "./export-guard";
-import { probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
+import {
+  MediaProcessAbortedError,
+  probeFfmpegStatus,
+  runMediaBinary,
+} from "./ffmpeg-locator";
 import { resolveConfinedMediaPath } from "./media-protocol";
 import { buildAssHeader, escapeAssText, generateSubtitles, videoDimensions } from "./subtitles";
 
@@ -42,16 +46,16 @@ type ProbeResult = {
   format?: { duration?: string };
 };
 
-async function probeMedia(filePath: string, ffprobePath: string): Promise<ProbeResult> {
-  const { stdout } = await runMediaBinary(ffprobePath, [
-    "-v",
-    "error",
-    "-show_streams",
-    "-show_format",
-    "-of",
-    "json",
-    path.resolve(filePath),
-  ]);
+async function probeMedia(
+  filePath: string,
+  ffprobePath: string,
+  signal?: AbortSignal,
+): Promise<ProbeResult> {
+  const { stdout } = await runMediaBinary(
+    ffprobePath,
+    ["-v", "error", "-show_streams", "-show_format", "-of", "json", path.resolve(filePath)],
+    { signal },
+  );
   return JSON.parse(stdout) as ProbeResult;
 }
 
@@ -84,8 +88,9 @@ async function renderShotSegment(params: {
   aspectRatio: AspectRatio;
   ffmpegPath: string;
   ffprobePath: string;
+  signal?: AbortSignal;
 }): Promise<string> {
-  const { dir, index, shot, take, speechTake, projectDir, aspectRatio, ffmpegPath, ffprobePath } =
+  const { dir, index, shot, take, speechTake, projectDir, aspectRatio, ffmpegPath, ffprobePath, signal } =
     params;
   const segName = `seg_${String(index).padStart(3, "0")}.mp4`;
   const dur = String(shot.durationSec);
@@ -101,7 +106,7 @@ async function renderShotSegment(params: {
   let audioSourceSpec = "1:a:0";
 
   if (isVideoMediaPath(visualAbs)) {
-    const info = await probeMedia(visualAbs, ffprobePath);
+    const info = await probeMedia(visualAbs, ffprobePath, signal);
     const hasClipAudio = info.streams.some((s) => s.codec_type === "audio");
     const clipDur = Number(info.format?.duration ?? 0);
     const padSec =
@@ -189,7 +194,7 @@ async function renderShotSegment(params: {
     );
   }
 
-  await runMediaBinary(ffmpegPath, args, { cwd: dir });
+  await runMediaBinary(ffmpegPath, args, { cwd: dir, signal });
   return segName;
 }
 
@@ -213,10 +218,17 @@ export async function exportEpisodeToMp4(params: {
   episodeId: string;
   outputPath: string;
   onProgress?: (event: ExportProgressEvent) => void;
+  signal?: AbortSignal;
 }): Promise<ExportEpisodeResult> {
+  const signal = params.signal;
   const emit = (percent: number, stage: string, detail: string) => {
     params.onProgress?.({ percent, stage, detail });
   };
+  const assertNotAborted = () => {
+    if (signal?.aborted) throw new MediaProcessAbortedError();
+  };
+  const runStep = (bin: string, args: string[], opts?: { cwd?: string }) =>
+    runMediaBinary(bin, args, { ...opts, signal });
 
   const ff = await probeFfmpegStatus();
   if (!ff.available || !ff.ffmpegPath || !ff.ffprobePath) {
@@ -246,6 +258,7 @@ export async function exportEpisodeToMp4(params: {
 
   const scratchDir = await mkdtemp(path.join(tmpdir(), EXPORT_TEMP_PREFIX));
   try {
+    assertNotAborted();
     emit(5, "准备导出", `共 ${resolvedShots.length} 个镜头，正在规范化画面与音轨…`);
 
     const segmentFiles: string[] = [];
@@ -254,6 +267,7 @@ export async function exportEpisodeToMp4(params: {
       [];
 
     for (let i = 0; i < resolvedShots.length; i++) {
+      assertNotAborted();
       const item = resolvedShots[i]!;
       const seg = await renderShotSegment({
         dir: scratchDir,
@@ -265,6 +279,7 @@ export async function exportEpisodeToMp4(params: {
         aspectRatio: params.workspace.project.aspectRatio,
         ffmpegPath,
         ffprobePath,
+        signal,
       });
       segmentFiles.push(seg);
       if (item.shot.subtitle.trim()) {
@@ -281,11 +296,12 @@ export async function exportEpisodeToMp4(params: {
       emit(pct, "合成镜头", `已完成 ${i + 1}/${resolvedShots.length} 镜：${item.shot.title}`);
     }
 
+    assertNotAborted();
     // 1. Concat normalized segments
     const concatList = segmentFiles.map((file) => `file '${file}'`).join("\n") + "\n";
     await writeFile(path.join(scratchDir, "concat.txt"), concatList, "utf8");
     emit(60, "拼接时间轴", "正在拼接所有镜头与音轨…");
-    await runMediaBinary(
+    await runStep(
       ffmpegPath,
       [
         ...BASE_FFMPEG,
@@ -302,6 +318,7 @@ export async function exportEpisodeToMp4(params: {
       { cwd: scratchDir },
     );
 
+    assertNotAborted();
     // 2. Mix optional BGM
     let preMasterFile = "stitched.mp4";
     const bgmAsset = params.workspace.project.bgmAssetId
@@ -312,7 +329,7 @@ export async function exportEpisodeToMp4(params: {
     if (bgmAbs && existsSync(bgmAbs)) {
       emit(70, "混合背景音乐", `正在按 ${params.workspace.project.bgmVolumeDb} dB 混入背景音乐…`);
       const db = params.workspace.project.bgmVolumeDb;
-      await runMediaBinary(
+      await runStep(
         ffmpegPath,
         [
           ...BASE_FFMPEG,
@@ -339,6 +356,7 @@ export async function exportEpisodeToMp4(params: {
       preMasterFile = "mixed.mp4";
     }
 
+    assertNotAborted();
     // 3. Subtitle burn-in + two-pass -16 LUFS normalization
     const subs = generateSubtitles(cues, {
       aspectRatio: params.workspace.project.aspectRatio,
@@ -356,12 +374,13 @@ export async function exportEpisodeToMp4(params: {
       const norm = await buildAudioNormalizationFilter(
         path.join(scratchDir, preMasterFile),
         ffmpegPath,
-        runMediaBinary,
+        runStep,
       );
       audioFilter = norm.filter;
       loudnessApplied = norm.applicable;
     }
 
+    assertNotAborted();
     emit(88, "封装备片", "正在烧录字幕并封装 faststart MP4…");
     const masterArgs: string[] = [...BASE_FFMPEG, "-i", preMasterFile];
     if (hasSubtitles) {
@@ -370,15 +389,17 @@ export async function exportEpisodeToMp4(params: {
       masterArgs.push("-c:v", "copy");
     }
     masterArgs.push("-af", audioFilter, ...AUDIO_ENC, "-movflags", "+faststart", "master.mp4");
-    await runMediaBinary(ffmpegPath, masterArgs, { cwd: scratchDir });
+    await runStep(ffmpegPath, masterArgs, { cwd: scratchDir });
 
+    assertNotAborted();
     const masterAbs = path.join(scratchDir, "master.mp4");
     if (loudnessApplied) {
-      assertNormalizedAudio(await measureAudioLoudness(masterAbs, ffmpegPath, runMediaBinary));
+      assertNormalizedAudio(await measureAudioLoudness(masterAbs, ffmpegPath, runStep));
     }
 
+    assertNotAborted();
     emit(95, "成片质检", "正在用 ffprobe 校验音视频流、画幅与时长…");
-    const probed = await probeMedia(masterAbs, ffprobePath);
+    const probed = await probeMedia(masterAbs, ffprobePath, signal);
     const vStream = probed.streams.find((s) => s.codec_type === "video");
     const aStream = probed.streams.find((s) => s.codec_type === "audio");
     if (!vStream || !aStream) {
@@ -391,6 +412,8 @@ export async function exportEpisodeToMp4(params: {
       );
     }
 
+    assertNotAborted();
+    // Atomic publish intentionally runs un-aborted so target MP4 is never half-written
     const published = await atomicPublishFile(masterAbs, params.outputPath);
     emit(100, "导出完成", `已保存成片：${published}`);
 
@@ -403,7 +426,16 @@ export async function exportEpisodeToMp4(params: {
       loudnessApplied,
       message: "MP4 成片已导出并通过质检",
     };
+  } catch (err) {
+    if (err instanceof MediaProcessAbortedError || signal?.aborted) {
+      return {
+        ok: false,
+        canceled: true,
+        message: "已取消成片导出，临时文件已清理，未生成损坏成片。",
+      };
+    }
+    throw err;
   } finally {
-    await rm(scratchDir, { recursive: true, force: true });
+    await rm(scratchDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 120 });
   }
 }

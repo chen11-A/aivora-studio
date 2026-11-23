@@ -323,4 +323,55 @@ describe("GenerationJobQueue anti-duplicate-charge guarantees", () => {
     projects.closeAll();
     globalConfig.close();
   });
+
+  it("reports billing-aware warning on sync image timeout and accurately tracks hasActiveJobs()", async () => {
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-synctimeout-"));
+    tempDirs.push(base);
+    const projects = new ProjectStore(path.join(base, "ws"));
+    const globalConfig = new GlobalConfigStore(path.join(base, "app"), mockVault);
+    const oauth = new OAuthManager(globalConfig, async () => undefined);
+
+    const imgProv = globalConfig.saveProvider({
+      name: "Custom Image",
+      protocol: "openai-image",
+      baseUrl: "https://api.custom-img.test/v1",
+      models: ["gpt-image-1"],
+      apiKey: "sk-img-timeout",
+      enabled: true,
+    });
+    globalConfig.updateRouting({
+      script: null,
+      image: { source: "provider", sourceId: imgProv.id, modelId: "gpt-image-1" },
+      video: null,
+      tts: null,
+    });
+
+    const demo = projects.openDemoProject();
+    let activeDuringFetch = false;
+    let queueRef: GenerationJobQueue | null = null;
+    const mockFetch: typeof fetch = async () => {
+      activeDuringFetch = Boolean(queueRef?.hasActiveJobs());
+      throw new Error("ETIMEDOUT");
+    };
+
+    const queue = new GenerationJobQueue(projects, globalConfig, oauth, mockFetch, 1, 1);
+    queueRef = queue;
+    expect(queue.hasActiveJobs()).toBe(false);
+
+    const plan = queue.preparePlan({
+      projectId: demo.project.id,
+      shotId: demo.shots[0]!.id,
+      kind: "image",
+    });
+    const res = await queue.confirmAndRun(plan);
+    expect(activeDuringFetch).toBe(true);
+    expect(queue.hasActiveJobs()).toBe(false);
+    expect(res.ok).toBe(false);
+    expect(res.job.status).toBe("failed");
+    expect(res.message).toContain("上游可能已完成扣费");
+    expect(res.message).toContain("绝不会自动重发");
+
+    projects.closeAll();
+    globalConfig.close();
+  });
 });

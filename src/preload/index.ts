@@ -28,7 +28,10 @@ const api: AivoraDesktopApi = {
   importProjectBgm: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.IMPORT_PROJECT_BGM, projectId),
   clearProjectBgm: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.CLEAR_PROJECT_BGM, projectId),
   checkFfmpegStatus: () => ipcRenderer.invoke(IPC_CHANNELS.CHECK_FFMPEG_STATUS),
+  preflightExportEpisode: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.PREFLIGHT_EXPORT_EPISODE, input),
   exportEpisodeVideo: (input) => ipcRenderer.invoke(IPC_CHANNELS.EXPORT_EPISODE_VIDEO, input),
+  cancelEpisodeExport: () => ipcRenderer.invoke(IPC_CHANNELS.CANCEL_EPISODE_EXPORT),
   onExportProgress: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: ExportProgressEvent) => {
       listener(payload);
@@ -54,6 +57,14 @@ const api: AivoraDesktopApi = {
   confirmAndRunJob: (plan) => ipcRenderer.invoke(IPC_CHANNELS.JOB_CONFIRM_RUN, plan),
   recoverUnknownJob: (input) => ipcRenderer.invoke(IPC_CHANNELS.JOB_RECOVER_UNKNOWN, input),
   listProjectJobs: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.JOB_LIST, projectId),
+  onFlushBeforeClose: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on(IPC_CHANNELS.APP_FLUSH_BEFORE_CLOSE, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.APP_FLUSH_BEFORE_CLOSE, handler);
+  },
+  notifyFlushComplete: () => {
+    ipcRenderer.send(IPC_CHANNELS.APP_FLUSH_COMPLETE);
+  },
   getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.GET_APP_INFO),
   mediaUrl: (projectId, relativePath) =>
     `aivora-media://${encodeURIComponent(projectId)}/${relativePath

@@ -5,23 +5,53 @@ import path from "node:path";
 const TEMP_PREFIX = ".aivora-export-";
 
 /**
- * Ported safety guarantee from aijian-studio PR #34:
- * 1. Tracks active export writes so window close can prompt/block and prevent truncated MP4 files.
- * 2. Cleans up stale `.aivora-export-*` directories left behind by any previous crash on startup.
+ * Coordinates active MP4 export lifecycle:
+ * 1. Tracks active export writes + owns an AbortController so users can cancel cleanly without leaving corrupt files.
+ * 2. Lets window-close wait for clean FFmpeg termination & temp cleanup instead of trapping the user or leaking ffmpeg.exe.
+ * 3. Cleans up stale `.aivora-export-*` directories left behind by any previous crash on startup.
  */
 export class ExportWriteGuard {
   private activeCount = 0;
+  private activeController: AbortController | null = null;
+  private idleResolvers: Array<() => void> = [];
 
   isExporting(): boolean {
     return this.activeCount > 0;
   }
 
-  async runGuarded<T>(task: () => Promise<T>): Promise<T> {
+  cancelActiveExport(): boolean {
+    if (!this.activeController || this.activeController.signal.aborted) return false;
+    this.activeController.abort();
+    return true;
+  }
+
+  waitForIdle(timeoutMs = 5000): Promise<void> {
+    if (this.activeCount === 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs);
+      timer.unref();
+      this.idleResolvers.push(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+
+  async runGuarded<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
     this.activeCount += 1;
+    this.activeController = controller;
     try {
-      return await task();
+      return await task(controller.signal);
     } finally {
       this.activeCount = Math.max(0, this.activeCount - 1);
+      if (this.activeController === controller) {
+        this.activeController = null;
+      }
+      if (this.activeCount === 0) {
+        const waiters = this.idleResolvers.splice(0);
+        for (const fn of waiters) fn();
+      }
     }
   }
 

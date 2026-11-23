@@ -1,13 +1,14 @@
-import { app, BrowserWindow, dialog, protocol, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, protocol, safeStorage, shell } from "electron";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { IPC_CHANNELS } from "../shared/ipc-contract";
 import { OAuthManager } from "./auth/auth-manager";
 import { createSecretVault } from "./auth/secret-vault";
 import { registerIpcHandlers } from "./ipc/register-ipc";
 import { GenerationJobQueue } from "./jobs/job-queue";
 import { ExportWriteGuard } from "./media/export-guard";
 import { exportEpisodeToMp4 } from "./media/export-pipeline";
-import { probeFfmpegStatus } from "./media/ffmpeg-locator";
+import { probeFfmpegStatus, terminateAllMediaChildren } from "./media/ffmpeg-locator";
 import { createMediaProtocolHandler } from "./media/media-protocol";
 import { DirectorService } from "./skills/director-service";
 import { GlobalConfigStore } from "./storage/global-store";
@@ -28,7 +29,33 @@ protocol.registerSchemesAsPrivileged([
 let mainWindow: BrowserWindow | null = null;
 let projects: ProjectStore | null = null;
 let globalConfig: GlobalConfigStore | null = null;
+let jobQueue: GenerationJobQueue | null = null;
 const exportGuard = new ExportWriteGuard();
+
+function flushRendererSavesWithTimeout(win: BrowserWindow, timeoutMs = 1500): Promise<void> {
+  if (win.isDestroyed()) return Promise.resolve();
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      ipcMain.removeListener(IPC_CHANNELS.APP_FLUSH_COMPLETE, onAck);
+      clearTimeout(timer);
+      resolve();
+    };
+    const onAck = (event: Electron.IpcMainEvent) => {
+      if (event.sender === win.webContents) finish();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    timer.unref();
+    ipcMain.on(IPC_CHANNELS.APP_FLUSH_COMPLETE, onAck);
+    try {
+      win.webContents.send(IPC_CHANNELS.APP_FLUSH_BEFORE_CLOSE);
+    } catch {
+      finish();
+    }
+  });
+}
 
 function resolveWorkspaceRoot(): string {
   const override = process.env.AIVORA_WORKSPACE_DIR?.trim();
@@ -193,17 +220,58 @@ function createMainWindow(): void {
     mainWindow?.show();
   });
 
+  let allowWindowClose = false;
+  let closingInProgress = false;
+
   mainWindow.on("close", (event) => {
-    if (!exportGuard.isExporting()) return;
+    if (allowWindowClose) return;
     event.preventDefault();
-    if (mainWindow) {
-      void dialog.showMessageBox(mainWindow, {
-        type: "warning",
-        title: "正在导出成片",
-        message: "MP4 成片正在写入磁盘，请等待导出完成后再关闭软件，以免产生损坏文件。",
-        buttons: ["知道了"],
-      });
-    }
+    if (closingInProgress || !mainWindow) return;
+    closingInProgress = true;
+    const win = mainWindow;
+
+    void (async () => {
+      try {
+        // Tier 1: Active MP4 export -> let user either wait OR cancel FFmpeg cleanly & exit (never traps user!)
+        if (exportGuard.isExporting()) {
+          const { response } = await dialog.showMessageBox(win, {
+            type: "warning",
+            title: "正在导出成片",
+            message: "MP4 成片正在编码写入磁盘。",
+            detail: "建议等待导出完成；如果选择「取消导出并退出」，软件会安全中止 FFmpeg 并清理临时文件，不会留下损坏成片。",
+            buttons: ["继续等待导出", "取消导出并退出"],
+            defaultId: 0,
+            cancelId: 0,
+          });
+          if (response !== 1) return;
+          exportGuard.cancelActiveExport();
+          await exportGuard.waitForIdle(5000);
+          terminateAllMediaChildren();
+        }
+
+        // Tier 2: Active remote AI jobs -> warn clearly without trapping user; next launch reconciles to UNKNOWN
+        if (jobQueue?.hasActiveJobs()) {
+          const count = jobQueue.activeJobCount();
+          const { response } = await dialog.showMessageBox(win, {
+            type: "warning",
+            title: "有 AI 生成任务正在进行",
+            message: `当前有 ${count} 个远端生成任务仍在等待结果。`,
+            detail: "现在退出不会触发重复扣费；下次打开软件后，可在右上角「任务」抽屉中凭任务号手动查单找回成片。",
+            buttons: ["留在后台等待", "直接退出（下次可查单找回）"],
+            defaultId: 0,
+            cancelId: 0,
+          });
+          if (response !== 1) return;
+        }
+
+        // Tier 3: Flush pending renderer edits with a hard 1500ms ceiling (impossible to deadlock window close)
+        await flushRendererSavesWithTimeout(win, 1500);
+        allowWindowClose = true;
+        if (!win.isDestroyed()) win.close();
+      } finally {
+        closingInProgress = false;
+      }
+    })();
   });
 
   mainWindow.on("closed", () => {
@@ -233,7 +301,7 @@ app.whenReady().then(() => {
   globalConfig = new GlobalConfigStore(join(app.getPath("userData"), "app-data"), vault);
   const oauth = new OAuthManager(globalConfig, (url) => shell.openExternal(url));
   const director = new DirectorService(projects, globalConfig, oauth);
-  const jobQueue = new GenerationJobQueue(projects, globalConfig, oauth);
+  jobQueue = new GenerationJobQueue(projects, globalConfig, oauth);
 
   protocol.handle(
     "aivora-media",
@@ -258,7 +326,13 @@ app.whenReady().then(() => {
   });
 });
 
+app.on("before-quit", () => {
+  exportGuard.cancelActiveExport();
+  terminateAllMediaChildren();
+});
+
 app.on("window-all-closed", () => {
+  terminateAllMediaChildren();
   projects?.closeAll();
   globalConfig?.close();
   if (process.platform !== "darwin") app.quit();
