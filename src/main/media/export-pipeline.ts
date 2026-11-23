@@ -103,6 +103,13 @@ async function renderShotSegment(params: {
   if (isVideoMediaPath(visualAbs)) {
     const info = await probeMedia(visualAbs, ffprobePath);
     const hasClipAudio = info.streams.some((s) => s.codec_type === "audio");
+    const clipDur = Number(info.format?.duration ?? 0);
+    const padSec =
+      Number.isFinite(clipDur) && clipDur > 0 && clipDur < shot.durationSec
+        ? shot.durationSec - clipDur + 0.5
+        : 0;
+    const vf = `${fitFilter(aspectRatio)}${padSec > 0 ? `,tpad=stop_mode=clone:stop_duration=${padSec.toFixed(2)}` : ""}`;
+
     args.push("-i", visualAbs);
     if (speechAbs) {
       args.push("-i", speechAbs);
@@ -119,7 +126,9 @@ async function renderShotSegment(params: {
       "-map",
       audioSourceSpec,
       "-vf",
-      fitFilter(aspectRatio),
+      vf,
+      "-af",
+      `apad=whole_dur=${shot.durationSec}`,
       "-t",
       dur,
       ...VIDEO_ENC,
@@ -147,6 +156,8 @@ async function renderShotSegment(params: {
       "1:a:0",
       "-vf",
       `ass=filename=${cardAss}`,
+      "-af",
+      `apad=whole_dur=${shot.durationSec}`,
       "-t",
       dur,
       ...VIDEO_ENC,
@@ -168,6 +179,8 @@ async function renderShotSegment(params: {
       "1:a:0",
       "-vf",
       fitFilter(aspectRatio),
+      "-af",
+      `apad=whole_dur=${shot.durationSec}`,
       "-t",
       dur,
       ...VIDEO_ENC,
@@ -310,7 +323,7 @@ export async function exportEpisodeToMp4(params: {
           "-i",
           bgmAbs,
           "-filter_complex",
-          `[1:a:0]volume=${db}dB[bgm];[0:a:0][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]`,
+          `[1:a:0]volume=${db}dB[bgm];[0:a:0][bgm]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]`,
           "-map",
           "0:v:0",
           "-map",
@@ -364,12 +377,18 @@ export async function exportEpisodeToMp4(params: {
       assertNormalizedAudio(await measureAudioLoudness(masterAbs, ffmpegPath, runMediaBinary));
     }
 
-    emit(95, "成片质检", "正在用 ffprobe 校验音视频流与画幅…");
+    emit(95, "成片质检", "正在用 ffprobe 校验音视频流、画幅与时长…");
     const probed = await probeMedia(masterAbs, ffprobePath);
     const vStream = probed.streams.find((s) => s.codec_type === "video");
     const aStream = probed.streams.find((s) => s.codec_type === "audio");
     if (!vStream || !aStream) {
       throw new Error("导出成片质检未通过：缺少视频轨或音频轨");
+    }
+    const actualDuration = Number(probed.format?.duration ?? 0);
+    if (!Number.isFinite(actualDuration) || Math.abs(actualDuration - cursorSec) > 0.6) {
+      throw new Error(
+        `导出成片时长质检未通过：预期 ${cursorSec.toFixed(1)}s，实际 ${actualDuration.toFixed(2)}s，已拦截发布。`,
+      );
     }
 
     const published = await atomicPublishFile(masterAbs, params.outputPath);
@@ -378,7 +397,7 @@ export async function exportEpisodeToMp4(params: {
     return {
       ok: true,
       outputPath: published,
-      durationSec: Number(probed.format?.duration ?? cursorSec),
+      durationSec: actualDuration,
       width: vStream.width,
       height: vStream.height,
       loudnessApplied,

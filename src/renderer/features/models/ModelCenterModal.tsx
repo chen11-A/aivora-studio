@@ -122,10 +122,28 @@ export function ModelCenterModal() {
     setSecondaryKey("");
   }
 
-  const routeOptions = () => {
+  function supportsOAuthModel(cap: CapabilityKey, providerId: string, modelId: string): boolean {
+    const lower = modelId.toLowerCase();
+    const isVideo = /video|sora/.test(lower);
+    const isImage = /image|dall|flux/.test(lower);
+    if (cap === "script") return !isVideo && !isImage;
+    if (cap === "image") return isImage;
+    if (cap === "video") return providerId === "grok-web" && isVideo;
+    return false;
+  }
+
+  function supportsProviderProtocol(cap: CapabilityKey, proto: CustomProviderProtocol): boolean {
+    if (cap === "script") return proto === "openai-chat";
+    if (cap === "image") return proto === "openai-image";
+    if (cap === "video") return proto === "kling-video" || proto === "video-async-experimental";
+    return proto === "openai-tts";
+  }
+
+  const routeOptionsFor = (cap: CapabilityKey) => {
     const opts: Array<{ value: string; label: string; binding: RouteBinding }> = [];
     for (const acc of snapshot.oauthAccounts) {
       for (const m of acc.models) {
+        if (!supportsOAuthModel(cap, acc.providerId, m)) continue;
         opts.push({
           value: `oauth:${acc.providerId}:${m}`,
           label: `${acc.displayName} · ${m}`,
@@ -134,10 +152,12 @@ export function ModelCenterModal() {
       }
     }
     for (const p of snapshot.providers) {
+      if (!supportsProviderProtocol(cap, p.protocol)) continue;
       for (const m of p.models) {
+        const expTag = p.protocol === "video-async-experimental" ? " [实验]" : "";
         opts.push({
           value: `provider:${p.id}:${m}`,
-          label: `${p.name} · ${m}`,
+          label: `${p.name} · ${m}${expTag}`,
           binding: { source: "provider", sourceId: p.id, modelId: m },
         });
       }
@@ -145,11 +165,9 @@ export function ModelCenterModal() {
     return opts;
   };
 
-  const options = routeOptions();
-
   function handleRouteChange(cap: CapabilityKey, value: string) {
     const next: ModelRouting = { ...snapshot!.routing };
-    const matched = options.find((o) => o.value === value);
+    const matched = routeOptionsFor(cap).find((o) => o.value === value);
     next[cap] = matched ? matched.binding : null;
     void updateRouting(next);
   }
@@ -392,6 +410,8 @@ export function ModelCenterModal() {
               {CAPABILITIES.map(({ key, label }) => {
                 const cur = snapshot.routing[key];
                 const curVal = cur ? `${cur.source}:${cur.sourceId}:${cur.modelId}` : "";
+                const capOptions = routeOptionsFor(key);
+                const hasCur = !curVal || capOptions.some((o) => o.value === curVal);
                 return (
                   <div key={key} className="flex flex-col gap-1">
                     <label className="text-[11px] text-[#768196]">{label}</label>
@@ -401,7 +421,12 @@ export function ModelCenterModal() {
                       onChange={(e) => handleRouteChange(key, e.target.value)}
                     >
                       <option value="">暂未指定（发起生成前需先配置）</option>
-                      {options.map((opt) => (
+                      {!hasCur && cur && (
+                        <option value={curVal}>
+                          {cur.sourceId} · {cur.modelId}（需核对协议）
+                        </option>
+                      )}
+                      {capOptions.map((opt) => (
                         <option key={opt.value} value={opt.value}>
                           {opt.label}
                         </option>

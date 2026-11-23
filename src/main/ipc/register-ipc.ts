@@ -32,6 +32,8 @@ export function registerIpcHandlers(deps: {
   exportGuard: ExportWriteGuard;
   appVersion: string;
 }): void {
+  const allowedRevealPaths = new Set<string>();
+
   const assertAuthorized = (event: IpcMainInvokeEvent) => {
     const win = deps.getWindow();
     if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame) {
@@ -202,7 +204,7 @@ export function registerIpcHandlers(deps: {
         }
       };
 
-      return deps.exportGuard.runGuarded(() =>
+      const res = await deps.exportGuard.runGuarded(() =>
         exportEpisodeToMp4({
           workspace,
           projectDir,
@@ -211,11 +213,20 @@ export function registerIpcHandlers(deps: {
           onProgress: emitProgress,
         }),
       );
+      if (res.ok && res.outputPath) allowedRevealPaths.add(path.resolve(res.outputPath));
+      return res;
     },
   );
 
   handle(IPC_CHANNELS.REVEAL_PATH, (filePath: string) => {
-    shell.showItemInFolder(path.resolve(filePath));
+    const resolved = path.resolve(filePath);
+    const root = path.resolve(deps.projects.getWorkspaceRoot());
+    const rel = path.relative(root, resolved);
+    const insideWorkspace = Boolean(rel && !rel.startsWith("..") && !path.isAbsolute(rel));
+    if (!allowedRevealPaths.has(resolved) && !insideWorkspace) {
+      throw new Error("拒绝打开工作区或本次导出范围以外的文件路径");
+    }
+    shell.showItemInFolder(resolved);
     return { ok: true };
   });
 
@@ -232,6 +243,7 @@ export function registerIpcHandlers(deps: {
       return { ok: false, message: "已取消导出备份" };
     }
     await deps.projects.exportArchiveToPath(projectId, chosen.filePath);
+    allowedRevealPaths.add(path.resolve(chosen.filePath));
     return { ok: true, path: chosen.filePath, message: "工程备份包已保存" };
   });
 

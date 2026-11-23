@@ -193,3 +193,95 @@ export async function refreshGrokToken(
     email: session.email,
   };
 }
+
+export type GrokDeviceCodePrompt = {
+  deviceCode: string;
+  userCode: string;
+  verificationUrl: string;
+  intervalSec: number;
+  expiresInSec: number;
+};
+
+export async function requestGrokDeviceCode(
+  fetcher: typeof fetch = fetch,
+): Promise<GrokDeviceCodePrompt> {
+  const res = await fetcher(GROK_DEVICE_CODE, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: GROK_CLIENT_ID,
+      scope: GROK_SCOPE,
+    }).toString(),
+  });
+  if (!res.ok) {
+    throw new GrokAuthError("DEVICE_CODE_FAILED", `申请 Grok 设备授权码失败 (HTTP ${res.status})`);
+  }
+  const data = (await res.json()) as Record<string, unknown>;
+  const deviceCode = String(data.device_code ?? "");
+  const userCode = String(data.user_code ?? "");
+  if (!safeString(deviceCode, 512) || !safeString(userCode, 128)) {
+    throw new GrokAuthError("DEVICE_CODE_INVALID", "Grok 设备授权响应缺少必要字段");
+  }
+  const verificationUrl = acceptedGrokVerificationLink(
+    data.verification_uri_complete ?? data.verification_uri,
+    userCode,
+  );
+  return {
+    deviceCode,
+    userCode,
+    verificationUrl,
+    intervalSec: Math.max(1, Number(data.interval ?? 5)),
+    expiresInSec: Math.max(30, Number(data.expires_in ?? 300)),
+  };
+}
+
+export async function pollGrokDeviceToken(
+  input: { deviceCode: string; intervalSec?: number; expiresInSec?: number },
+  fetcher: typeof fetch = fetch,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<GrokTokenSession> {
+  let intervalMs = Math.max(1, input.intervalSec ?? 5) * 1000;
+  const deadline = Date.now() + Math.max(10, input.expiresInSec ?? 300) * 1000;
+
+  while (Date.now() < deadline) {
+    const res = await fetcher(GROK_TOKEN, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: GROK_DEVICE_GRANT,
+        client_id: GROK_CLIENT_ID,
+        device_code: input.deviceCode,
+      }).toString(),
+    });
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (res.ok && typeof data.access_token === "string" && data.access_token) {
+      return {
+        accessToken: data.access_token,
+        refreshToken: typeof data.refresh_token === "string" ? data.refresh_token : null,
+        expiresAtMs: Date.now() + Math.max(60, Number(data.expires_in ?? 3600)) * 1000,
+        email: null,
+      };
+    }
+    const errCode = String(data.error ?? "");
+    if (errCode === "authorization_pending") {
+      await sleep(intervalMs);
+      continue;
+    }
+    if (errCode === "slow_down") {
+      intervalMs += 2000;
+      await sleep(intervalMs);
+      continue;
+    }
+    if (errCode === "access_denied") {
+      throw new GrokAuthError("AUTH_DENIED", "已拒绝 Grok 设备授权");
+    }
+    if (errCode === "expired_token") {
+      throw new GrokAuthError("AUTH_ATTEMPT_EXPIRED", "Grok 设备授权码已过期，请重试");
+    }
+    throw new GrokAuthError(
+      "DEVICE_TOKEN_FAILED",
+      `Grok 设备授权轮询失败：${errCode || `HTTP ${res.status}`}`,
+    );
+  }
+  throw new GrokAuthError("AUTH_ATTEMPT_EXPIRED", "等待 Grok 设备授权超时，请重新登录");
+}

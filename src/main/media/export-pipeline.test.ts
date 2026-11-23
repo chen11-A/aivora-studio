@@ -154,4 +154,79 @@ describe("export-pipeline & ExportWriteGuard", () => {
     },
     60_000,
   );
+
+  it(
+    "pads short video takes (1s clips in 4s shots) so exported MP4 matches full 8s timeline and subtitle timing",
+    async () => {
+      const ff = await probeFfmpegStatus();
+      expect(ff.available).toBe(true);
+      const ffmpeg = ff.ffmpegPath!;
+
+      const base = makeTempDir("aivora-export-shortpad-");
+      const fixturesDir = path.join(base, "fixtures");
+      mkdirSync(fixturesDir, { recursive: true });
+
+      const shortA = path.join(fixturesDir, "short-a.mp4");
+      const shortB = path.join(fixturesDir, "short-b.mp4");
+      await runMediaBinary(ffmpeg, [
+        "-hide_banner", "-nostdin", "-y",
+        "-f", "lavfi", "-i", "color=c=0x2a4d69:s=640x360:r=30:d=1",
+        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+        "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", shortA,
+      ]);
+      await runMediaBinary(ffmpeg, [
+        "-hide_banner", "-nostdin", "-y",
+        "-f", "lavfi", "-i", "color=c=0x4b86b4:s=640x360:r=30:d=1",
+        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+        "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", shortB,
+      ]);
+
+      const store = new ProjectStore(path.join(base, "短素材 补帧 空间"));
+      const created = store.createProject({ name: "短素材防压短测试", aspectRatio: "16:9" });
+      const epId = created.episodes[0]!.id;
+      const sceneId = created.scenes[0]!.id;
+      const shot1Id = created.shots[0]!.id;
+      const shot2 = store.createShot({ projectId: created.project.id, episodeId: epId, sceneId });
+
+      store.updateShot({
+        projectId: created.project.id,
+        shotId: shot1Id,
+        durationSec: 4,
+        subtitle: "第一镜四秒字幕必须完整对齐。",
+      });
+      store.updateShot({
+        projectId: created.project.id,
+        shotId: shot2.id,
+        durationSec: 4,
+        subtitle: "第二镜四秒字幕不得提前截断。",
+      });
+
+      store.importShotTakeFromPath({
+        projectId: created.project.id,
+        shotId: shot1Id,
+        kind: "video",
+        sourceFilePath: shortA,
+      });
+      const ws = store.importShotTakeFromPath({
+        projectId: created.project.id,
+        shotId: shot2.id,
+        kind: "video",
+        sourceFilePath: shortB,
+      });
+
+      const outPath = path.join(ws.dirPath, "exports", "短素材补帧 8秒成片.mp4");
+      const res = await exportEpisodeToMp4({
+        workspace: ws,
+        projectDir: ws.dirPath,
+        episodeId: epId,
+        outputPath: outPath,
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.durationSec).toBeGreaterThanOrEqual(7.5);
+      expect(res.durationSec).toBeLessThanOrEqual(8.5);
+      store.closeAll();
+    },
+    60_000,
+  );
 });

@@ -6,6 +6,11 @@ import type { CapabilityKey, CustomProviderProtocol } from "../../shared/types/p
 import type { OAuthManager } from "../auth/auth-manager";
 import { GROK_API } from "../auth/grok-oauth";
 import {
+  pollAndDownloadGrokVideo,
+  queryGrokVideoTask,
+  submitGrokVideoTask,
+} from "../providers/grok-video-adapter";
+import {
   AmbiguousRemoteError,
   downloadVerifiedKlingMp4,
   queryKlingVideoTask,
@@ -23,6 +28,7 @@ import {
   getJobRow,
   insertRunningJobRow,
   listJobRows,
+  reconcileOrphanRunningJobs,
   recordSuccessfulTakeInDb,
   updateJobRow,
 } from "./job-persistence";
@@ -45,6 +51,8 @@ type LockedProviderSnapshot = {
  * 3. `recoverUnknownJob` performs strictly GET-only status lookup by `remoteTaskId`.
  */
 export class GenerationJobQueue {
+  private readonly activeJobIds = new Set<string>();
+
   constructor(
     private readonly projects: ProjectStore,
     private readonly globalConfig: GlobalConfigStore,
@@ -55,6 +63,7 @@ export class GenerationJobQueue {
   ) {}
 
   listJobs(projectId: string): Job[] {
+    reconcileOrphanRunningJobs(this.projects, projectId, this.activeJobIds);
     return listJobRows(this.projects, projectId);
   }
 
@@ -180,6 +189,7 @@ export class GenerationJobQueue {
     const shot = ws.shots.find((s) => s.id === plan.shotId);
     if (!shot) throw new Error("镜头不存在");
 
+    this.activeJobIds.add(jobId);
     try {
       const { apiKey, secondaryKey } = await this.resolveLockedSecrets(snapshot);
 
@@ -216,22 +226,45 @@ export class GenerationJobQueue {
           secondaryKey ?? "",
           submitted.taskId,
         );
-        recordSuccessfulTakeInDb(this.projects, {
-          projectId: plan.projectId,
-          shotId: plan.shotId,
-          kind: "video",
-          media,
-          promptSnapshot: plan.promptPreview,
-          providerInfo: `${snapshot.providerLabel} · ${snapshot.modelId}`,
+        return this.completeTakeJob(plan, jobId, snapshot, "video", media, "视频生成成功并已自动拉回本地保存");
+      }
+
+      if (plan.kind === "video" && snapshot.protocol === "oauth-grok") {
+        const activeVisual = resolveActiveVisualTake(shot, ws.takes);
+        const prepared = injectLockedReferences(ws, ws.dirPath, shot, activeVisual?.mediaPath);
+        const submitted = await submitGrokVideoTask(
+          {
+            baseUrl: snapshot.baseUrl,
+            accessToken: apiKey,
+            modelId: snapshot.modelId,
+            prompt: prepared.finalPrompt,
+            durationSec: shot.durationSec,
+            aspectRatio: ws.project.aspectRatio,
+            imageBase64: prepared.primaryReferenceImageBase64,
+          },
+          this.fetcher,
+        );
+        updateJobRow(this.projects, plan.projectId, jobId, {
+          remoteTaskId: submitted.taskId,
+          progress: 35,
         });
-        const done = updateJobRow(this.projects, plan.projectId, jobId, {
-          status: "succeeded",
-          progress: 100,
-        });
-        return { ok: true, job: done, message: "视频生成成功并已自动拉回本地保存" };
+        const media = await pollAndDownloadGrokVideo(
+          {
+            baseUrl: snapshot.baseUrl,
+            accessToken: apiKey,
+            taskId: submitted.taskId,
+            projectDir: ws.dirPath,
+            pollIntervalMs: this.pollIntervalMs,
+            maxPollRounds: this.maxPollRounds,
+            onProgress: (progress) => updateJobRow(this.projects, plan.projectId, jobId, { progress }),
+          },
+          this.fetcher,
+        );
+        return this.completeTakeJob(plan, jobId, snapshot, "video", media, "Grok 视频生成成功并已自动拉回本地保存");
       }
 
       if (plan.kind === "image") {
+        const prepared = injectLockedReferences(ws, ws.dirPath, shot, null);
         const media = await runOpenAiImageGeneration(
           {
             baseUrl: snapshot.baseUrl,
@@ -240,22 +273,11 @@ export class GenerationJobQueue {
             prompt: plan.promptPreview,
             aspectRatio: ws.project.aspectRatio,
             projectDir: ws.dirPath,
+            referenceImageBase64: prepared.primaryReferenceImageBase64,
           },
           this.fetcher,
         );
-        recordSuccessfulTakeInDb(this.projects, {
-          projectId: plan.projectId,
-          shotId: plan.shotId,
-          kind: "image",
-          media,
-          promptSnapshot: plan.promptPreview,
-          providerInfo: `${snapshot.providerLabel} · ${snapshot.modelId}`,
-        });
-        const done = updateJobRow(this.projects, plan.projectId, jobId, {
-          status: "succeeded",
-          progress: 100,
-        });
-        return { ok: true, job: done, message: "首帧图生成成功，已新增版本并选中" };
+        return this.completeTakeJob(plan, jobId, snapshot, "image", media, "首帧图生成成功，已新增版本并选中");
       }
 
       if (plan.kind === "speech") {
@@ -271,19 +293,7 @@ export class GenerationJobQueue {
           },
           this.fetcher,
         );
-        recordSuccessfulTakeInDb(this.projects, {
-          projectId: plan.projectId,
-          shotId: plan.shotId,
-          kind: "speech",
-          media,
-          promptSnapshot: plan.promptPreview,
-          providerInfo: `${snapshot.providerLabel} · ${snapshot.modelId}`,
-        });
-        const done = updateJobRow(this.projects, plan.projectId, jobId, {
-          status: "succeeded",
-          progress: 100,
-        });
-        return { ok: true, job: done, message: "对白配音生成成功，已绑定至当前镜头" };
+        return this.completeTakeJob(plan, jobId, snapshot, "speech", media, "对白配音生成成功，已绑定至当前镜头");
       }
 
       throw new Error(`当前协议（${snapshot.protocol}）暂不支持此生成类型，请在模型中心切换协议。`);
@@ -296,7 +306,32 @@ export class GenerationJobQueue {
         remoteTaskId: isAmbiguous && err.remoteTaskId ? err.remoteTaskId : undefined,
       });
       return { ok: false, job: updated, message: msg };
+    } finally {
+      this.activeJobIds.delete(jobId);
     }
+  }
+
+  private completeTakeJob(
+    plan: GenerationPlan,
+    jobId: string,
+    snapshot: LockedProviderSnapshot,
+    kind: "image" | "video" | "speech",
+    media: { mediaPath: string; mediaSha256: string },
+    message: string,
+  ): JobExecutionResult {
+    recordSuccessfulTakeInDb(this.projects, {
+      projectId: plan.projectId,
+      shotId: plan.shotId,
+      kind,
+      media,
+      promptSnapshot: plan.promptPreview,
+      providerInfo: `${snapshot.providerLabel} · ${snapshot.modelId}`,
+    });
+    const done = updateJobRow(this.projects, plan.projectId, jobId, {
+      status: "succeeded",
+      progress: 100,
+    });
+    return { ok: true, job: done, message };
   }
 
   async recoverUnknownJob(input: {
@@ -315,21 +350,27 @@ export class GenerationJobQueue {
     }
 
     const snapshot = JSON.parse(job.providerSnapshot) as LockedProviderSnapshot;
-    if (snapshot.protocol !== "kling-video") {
-      return { ok: false, job, message: "当前仅可灵 Kling 异步任务支持凭任务号查单找回。" };
+    if (snapshot.protocol !== "kling-video" && snapshot.protocol !== "oauth-grok") {
+      return { ok: false, job, message: "当前仅可灵 Kling 与 Grok 异步视频任务支持凭任务号查单找回。" };
     }
 
     const { apiKey, secondaryKey } = await this.resolveLockedSecrets(snapshot);
-    const res = await queryKlingVideoTask(
-      {
-        baseUrl: snapshot.baseUrl,
-        accessKey: apiKey,
-        secretKey: secondaryKey ?? "",
-        taskId,
-        mode: snapshot.klingMode ?? "text2video",
-      },
-      this.fetcher,
-    );
+    const res =
+      snapshot.protocol === "kling-video"
+        ? await queryKlingVideoTask(
+            {
+              baseUrl: snapshot.baseUrl,
+              accessKey: apiKey,
+              secretKey: secondaryKey ?? "",
+              taskId,
+              mode: snapshot.klingMode ?? "text2video",
+            },
+            this.fetcher,
+          )
+        : await queryGrokVideoTask(
+            { baseUrl: snapshot.baseUrl, accessToken: apiKey, taskId },
+            this.fetcher,
+          );
 
     if (res.status === "succeed" && res.videoUrl && job.shotId) {
       const dir = this.projects.resolveProjectDir(input.projectId)!;

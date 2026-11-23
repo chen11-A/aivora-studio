@@ -73,7 +73,14 @@ describe("DirectorService proposal, apply, and 1-click undo", () => {
 
     const demo = projects.openDemoProject();
     const epId = demo.episodes[0]!.id;
-    const originalShotCount = demo.shots.filter((s) => s.episodeId === epId).length;
+    const originalEpShots = demo.shots.filter((s) => s.episodeId === epId);
+    const originalShotCount = originalEpShots.length;
+    const originalShotIds = new Set(originalEpShots.map((s) => s.id));
+    const originalTakeIds = demo.takes
+      .filter((t) => originalShotIds.has(t.shotId))
+      .map((t) => t.id)
+      .sort();
+    expect(originalTakeIds.length).toBeGreaterThanOrEqual(4);
 
     const service = new DirectorService(projects, globalConfig, oauth, async () =>
       new Response(
@@ -140,12 +147,17 @@ describe("DirectorService proposal, apply, and 1-click undo", () => {
     expect(applied.undoToken).toBeTruthy();
     expect(applied.workspace?.shots.filter((s) => s.episodeId === epId)).toHaveLength(2);
 
-    // 1-click undo restores exact original shots
+    // 1-click undo restores exact original shots AND all historical takes (Fix #1 regression guard)
     const undone = service.undoApply({ projectId: demo.project.id, undoToken: applied.undoToken! });
     expect(undone.ok).toBe(true);
     expect(undone.workspace?.shots.filter((s) => s.episodeId === epId)).toHaveLength(
       originalShotCount,
     );
+    const restoredTakeIds = (undone.workspace?.takes ?? [])
+      .filter((t) => originalShotIds.has(t.shotId))
+      .map((t) => t.id)
+      .sort();
+    expect(restoredTakeIds).toEqual(originalTakeIds);
 
     projects.closeAll();
     globalConfig.close();

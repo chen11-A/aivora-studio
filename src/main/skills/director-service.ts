@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ProjectWorkspace, Scene, Shot } from "../../shared/types/domain";
+import type { ProjectWorkspace, Scene, Shot, Take } from "../../shared/types/domain";
 import { DirectorProposalSchema, type DirectorProposal } from "../../shared/types/jobs";
 import type { OAuthManager } from "../auth/auth-manager";
 import { completeChatGptResponsesText } from "../auth/chatgpt-oauth";
@@ -19,6 +19,7 @@ type UndoSnapshot = {
   episodeId: string;
   scenes: Scene[];
   shots: Shot[];
+  takes: Take[];
 };
 
 export class DirectorService {
@@ -133,11 +134,14 @@ export class DirectorService {
     const valid = DirectorProposalSchema.parse(input.proposal);
     const before = this.projects.openProject(input.projectId);
     const undoToken = `undo_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+    const prevShots = before.shots.filter((s) => s.episodeId === input.episodeId);
+    const prevShotIds = new Set(prevShots.map((s) => s.id));
     this.undoMap.set(undoToken, {
       projectId: input.projectId,
       episodeId: input.episodeId,
       scenes: before.scenes.filter((s) => s.episodeId === input.episodeId),
-      shots: before.shots.filter((s) => s.episodeId === input.episodeId),
+      shots: prevShots,
+      takes: before.takes.filter((t) => prevShotIds.has(t.shotId)),
     });
 
     const now = new Date().toISOString();
@@ -253,6 +257,25 @@ export class DirectorService {
             sh.selectedVideoTakeId,
             sh.selectedSpeechTakeId,
             now,
+          );
+        }
+        for (const tk of snap.takes) {
+          db.run(
+            `INSERT INTO takes (
+               id, shot_id, kind, version_number, media_path, media_sha256,
+               prompt_snapshot, provider_info, is_selected, duration_sec, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            tk.id,
+            tk.shotId,
+            tk.kind,
+            tk.versionNumber,
+            tk.mediaPath,
+            tk.mediaSha256,
+            tk.promptSnapshot,
+            tk.providerInfo,
+            tk.isSelected ? 1 : 0,
+            tk.durationSec,
+            tk.createdAt,
           );
         }
         db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);

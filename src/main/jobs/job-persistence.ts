@@ -21,6 +21,34 @@ export function rowToJob(row: Record<string, unknown>): Job {
   };
 }
 
+export function reconcileOrphanRunningJobs(
+  projects: ProjectStore,
+  projectId: string,
+  activeJobIds: ReadonlySet<string>,
+): number {
+  const now = new Date().toISOString();
+  return projects.withProjectDb(projectId, (db) => {
+    const running = db.all<{ id: string }>(
+      `SELECT id FROM jobs WHERE status = 'running'`,
+    );
+    let reconciled = 0;
+    for (const row of running) {
+      if (activeJobIds.has(row.id)) continue;
+      db.run(
+        `UPDATE jobs
+         SET status = 'unknown',
+             error_message = COALESCE(error_message, '检测到上次运行中断，为防重复扣费已暂停自动重试；请凭任务号点击「查单找回」。'),
+             updated_at = ?
+         WHERE id = ? AND status = 'running'`,
+        now,
+        row.id,
+      );
+      reconciled += 1;
+    }
+    return reconciled;
+  });
+}
+
 export function listJobRows(projects: ProjectStore, projectId: string): Job[] {
   return projects.withProjectDb(projectId, (db) =>
     db.all<Record<string, unknown>>(`SELECT * FROM jobs ORDER BY created_at DESC LIMIT 50`).map(rowToJob),

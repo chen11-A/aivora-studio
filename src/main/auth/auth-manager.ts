@@ -13,10 +13,13 @@ import {
 import {
   createGrokAuthAttempt,
   exchangeGrokToken,
+  GrokAuthError,
   GROK_CALLBACK_PATH,
   GROK_DEFAULT_MODELS,
   GROK_LOOPBACK_PORT,
+  pollGrokDeviceToken,
   refreshGrokToken,
+  requestGrokDeviceCode,
   type GrokTokenSession,
 } from "./grok-oauth";
 import { startLoopbackCallback } from "./oauth-loopback";
@@ -79,37 +82,72 @@ export class OAuthManager {
   }
 
   private async loginGrok(): Promise<OAuthLoginResult> {
-    const listener = await startLoopbackCallback(GROK_CALLBACK_PATH, GROK_LOOPBACK_PORT);
-    const attempt = createGrokAuthAttempt({ redirectUri: listener.redirectUri });
+    let loopbackErr: unknown = null;
     try {
-      await this.openExternal(attempt.url);
-      const rawCallback = await listener.waitForCallback(180_000);
-      const { code } = attempt.consume(rawCallback);
-      const session = await exchangeGrokToken(
-        { code, verifier: attempt.verifier, redirectUri: attempt.redirectUri },
+      const listener = await startLoopbackCallback(GROK_CALLBACK_PATH, GROK_LOOPBACK_PORT);
+      const attempt = createGrokAuthAttempt({ redirectUri: listener.redirectUri });
+      try {
+        await this.openExternal(attempt.url);
+        const rawCallback = await listener.waitForCallback(180_000);
+        const { code } = attempt.consume(rawCallback);
+        const session = await exchangeGrokToken(
+          { code, verifier: attempt.verifier, redirectUri: attempt.redirectUri },
+          this.fetcher,
+        );
+        return this.commitGrokSession(session);
+      } catch (err) {
+        attempt.cancel();
+        listener.close();
+        throw err;
+      }
+    } catch (err) {
+      if (err instanceof GrokAuthError && err.code === "AUTH_DENIED") {
+        return { ok: false, providerId: "grok-web", status: "disconnected", message: err.message };
+      }
+      loopbackErr = err;
+    }
+
+    // Automatic Device Code fallback when loopback PKCE port or redirect is unavailable
+    try {
+      const prompt = await requestGrokDeviceCode(this.fetcher);
+      await this.openExternal(prompt.verificationUrl);
+      const session = await pollGrokDeviceToken(
+        {
+          deviceCode: prompt.deviceCode,
+          intervalSec: prompt.intervalSec,
+          expiresInSec: prompt.expiresInSec,
+        },
         this.fetcher,
       );
-      const label = session.email || "Grok (xAI) 账号";
-      this.globalConfig.saveOAuthSession({
-        providerId: "grok-web",
-        status: "connected",
-        accountLabel: label,
-        models: GROK_DEFAULT_MODELS,
-        sessionPayload: session,
-      });
+      return this.commitGrokSession(session);
+    } catch (deviceErr) {
+      const primary = loopbackErr instanceof Error ? loopbackErr.message : "浏览器回环回调失败";
+      const fallback = deviceErr instanceof Error ? deviceErr.message : "设备码授权未完成";
       return {
-        ok: true,
+        ok: false,
         providerId: "grok-web",
-        status: "connected",
-        accountLabel: label,
-        message: `Grok 账号已授权（${label}）`,
+        status: "disconnected",
+        message: `${primary}；设备码回退失败：${fallback}`,
       };
-    } catch (err) {
-      attempt.cancel();
-      listener.close();
-      const message = err instanceof Error ? err.message : "Grok 授权未完成";
-      return { ok: false, providerId: "grok-web", status: "disconnected", message };
     }
+  }
+
+  private commitGrokSession(session: GrokTokenSession): OAuthLoginResult {
+    const label = session.email || "Grok (xAI) 账号";
+    this.globalConfig.saveOAuthSession({
+      providerId: "grok-web",
+      status: "connected",
+      accountLabel: label,
+      models: GROK_DEFAULT_MODELS,
+      sessionPayload: session,
+    });
+    return {
+      ok: true,
+      providerId: "grok-web",
+      status: "connected",
+      accountLabel: label,
+      message: `Grok 账号已授权（${label}）`,
+    };
   }
 
   disconnect(providerId: OAuthProviderId): { ok: boolean; message: string } {

@@ -146,24 +146,49 @@ export async function runOpenAiImageGeneration(
     prompt: string;
     aspectRatio: AspectRatio;
     projectDir: string;
+    referenceImageBase64?: string | null;
   },
   fetcher: typeof fetch = fetch,
 ): Promise<{ mediaPath: string; mediaSha256: string }> {
   const size = input.aspectRatio === "9:16" ? "1024x1792" : "1792x1024";
-  const res = await fetcher(`${cleanBase(input.baseUrl)}/images/generations`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${input.apiKey.trim()}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: input.modelId,
-      prompt: input.prompt,
-      size,
-      n: 1,
-    }),
-    signal: AbortSignal.timeout(90_000),
-  });
+  let res: Response | null = null;
+
+  if (input.referenceImageBase64) {
+    const form = new FormData();
+    form.append("model", input.modelId);
+    form.append("prompt", input.prompt);
+    form.append("size", size);
+    form.append("n", "1");
+    const refBytes = Buffer.from(input.referenceImageBase64, "base64");
+    form.append("image", new Blob([refBytes], { type: "image/png" }), "reference.png");
+
+    const editRes = await fetcher(`${cleanBase(input.baseUrl)}/images/edits`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${input.apiKey.trim()}` },
+      body: form,
+      signal: AbortSignal.timeout(90_000),
+    });
+    if (editRes.ok || (editRes.status !== 404 && editRes.status !== 405 && editRes.status !== 501)) {
+      res = editRes;
+    }
+  }
+
+  if (!res) {
+    res = await fetcher(`${cleanBase(input.baseUrl)}/images/generations`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${input.apiKey.trim()}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: input.modelId,
+        prompt: input.prompt,
+        size,
+        n: 1,
+      }),
+      signal: AbortSignal.timeout(90_000),
+    });
+  }
   if (!res.ok) {
     throw new Error(diagnoseHttpError(res.status, await res.text().catch(() => "")));
   }

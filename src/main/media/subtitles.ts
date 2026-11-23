@@ -64,7 +64,7 @@ export function escapeAssText(text: string): string {
 export function buildAssHeader(
   aspectRatio: AspectRatio,
   style: SubtitleStyle = "white",
-  fontFamily = "Noto Sans CJK SC",
+  fontFamily = process.platform === "win32" ? "Microsoft YaHei" : "Noto Sans CJK SC",
 ): string {
   const [w, h] = videoDimensions(aspectRatio);
   const portrait = aspectRatio === "9:16";

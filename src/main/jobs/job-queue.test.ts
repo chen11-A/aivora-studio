@@ -135,4 +135,192 @@ describe("GenerationJobQueue anti-duplicate-charge guarantees", () => {
     projects.closeAll();
     globalConfig.close();
   });
+
+  it("reconciles crash-orphaned running jobs to unknown on listJobs()", () => {
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-orphan-"));
+    tempDirs.push(base);
+    const projects = new ProjectStore(path.join(base, "ws"));
+    const globalConfig = new GlobalConfigStore(path.join(base, "app"), mockVault);
+    const oauth = new OAuthManager(globalConfig, async () => undefined);
+    const demo = projects.openDemoProject();
+
+    // Simulate a job row left in `running` state after an abrupt process crash
+    const now = new Date().toISOString();
+    projects.withProjectDb(demo.project.id, (db) => {
+      db.run(
+        `INSERT INTO jobs (id, project_id, shot_id, kind, status, idempotency_key, input_sha256, provider_snapshot, remote_task_id, summary_text, progress, created_at, updated_at)
+         VALUES (?, ?, ?, 'video', 'running', 'idem_crash', 'sha_crash', '{}', 'remote_999', '崩溃遗留任务', 45, ?, ?)`,
+        "job_crashed_1",
+        demo.project.id,
+        demo.shots[0]!.id,
+        now,
+        now,
+      );
+    });
+
+    const queue = new GenerationJobQueue(projects, globalConfig, oauth);
+    const jobs = queue.listJobs(demo.project.id);
+    const recovered = jobs.find((j) => j.id === "job_crashed_1")!;
+    expect(recovered.status).toBe("unknown");
+    expect(recovered.errorMessage).toContain("查单找回");
+
+    projects.closeAll();
+    globalConfig.close();
+  });
+
+  it("sends locked raster reference image bytes to /images/edits during OpenAI-compatible image generation", async () => {
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-imgref-"));
+    tempDirs.push(base);
+    const projects = new ProjectStore(path.join(base, "ws"));
+    const globalConfig = new GlobalConfigStore(path.join(base, "app"), mockVault);
+    const oauth = new OAuthManager(globalConfig, async () => undefined);
+
+    const imgProv = globalConfig.saveProvider({
+      name: "OpenAI Image",
+      protocol: "openai-image",
+      baseUrl: "https://api.openai.test/v1",
+      models: ["gpt-image-1"],
+      apiKey: "sk-img-test",
+      enabled: true,
+    });
+    globalConfig.updateRouting({
+      script: null,
+      image: { source: "provider", sourceId: imgProv.id, modelId: "gpt-image-1" },
+      video: null,
+      tts: null,
+    });
+
+    const demo = projects.openDemoProject();
+    const charAsset = demo.assets.find((a) => a.kind === "character")!;
+    // Write a tiny valid PNG file as the character's locked reference image
+    const tinyPng = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const refPngPath = path.join(base, "linwan-ref.png");
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(refPngPath, tinyPng);
+    projects.importAssetImageFromPath({
+      projectId: demo.project.id,
+      assetId: charAsset.id,
+      sourceFilePath: refPngPath,
+    });
+    const updatedWs = projects.openProject(demo.project.id);
+    const lockedAsset = updatedWs.assets.find((a) => a.id === charAsset.id)!;
+    if (!lockedAsset.lockedRef) projects.toggleAssetLock(demo.project.id, charAsset.id);
+
+    const shot =
+      updatedWs.shots.find(
+        (s) =>
+          s.characterAssetIds.includes(charAsset.id) ||
+          s.speaker === charAsset.name ||
+          s.visualPrompt.includes(charAsset.name),
+      ) ?? updatedWs.shots[0]!;
+
+    let hitEndpoint = "";
+    let receivedFormImage = false;
+    const mockFetch: typeof fetch = async (input, init) => {
+      hitEndpoint = String(input);
+      if (init?.body instanceof FormData) {
+        receivedFormImage = init.body.get("image") !== null;
+      }
+      return new Response(JSON.stringify({ data: [{ b64_json: tinyPng.toString("base64") }] }), {
+        status: 200,
+      });
+    };
+
+    const queue = new GenerationJobQueue(projects, globalConfig, oauth, mockFetch, 1, 1);
+    const plan = queue.preparePlan({ projectId: demo.project.id, shotId: shot.id, kind: "image" });
+    expect(plan.canRun).toBe(true);
+    const result = await queue.confirmAndRun(plan);
+    expect(result.ok).toBe(true);
+    expect(hitEndpoint).toContain("/images/edits");
+    expect(receivedFormImage).toBe(true);
+
+    projects.closeAll();
+    globalConfig.close();
+  });
+
+  it("supports Grok OAuth async video generation and GET-only UNKNOWN recovery without duplicate POST", async () => {
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-grokvid-"));
+    tempDirs.push(base);
+    const projects = new ProjectStore(path.join(base, "ws"));
+    const globalConfig = new GlobalConfigStore(path.join(base, "app"), mockVault);
+    const oauth = new OAuthManager(globalConfig, async () => undefined);
+
+    globalConfig.saveOAuthSession({
+      providerId: "grok-web",
+      status: "connected",
+      accountLabel: "grok@aivora.test",
+      models: ["grok-3", "grok-2-image-1212", "grok-imagine-video"],
+      sessionPayload: {
+        accessToken: "grok_access_token_valid",
+        refreshToken: "grok_refresh_token",
+        expiresAtMs: Date.now() + 3600_000,
+        email: "grok@aivora.test",
+      },
+    });
+    globalConfig.updateRouting({
+      script: null,
+      image: null,
+      video: { source: "oauth", sourceId: "grok-web", modelId: "grok-imagine-video" },
+      tts: null,
+    });
+
+    const ff = await probeFfmpegStatus();
+    const validMp4Path = path.join(base, "grok-valid.mp4");
+    await runMediaBinary(ff.ffmpegPath!, [
+      "-hide_banner", "-nostdin", "-y",
+      "-f", "lavfi", "-i", "color=c=0x336699:s=320x180:r=24:d=1",
+      "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", validMp4Path,
+    ]);
+    const validMp4Bytes = readFileSync(validMp4Path);
+
+    let postCount = 0;
+    let outage = true;
+    const mockFetch: typeof fetch = async (input, init) => {
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (method === "POST" && url.endsWith("/videos/generations")) {
+        postCount += 1;
+        return new Response(JSON.stringify({ request_id: "grok_req_777" }), { status: 200 });
+      }
+      if (method === "GET" && url.endsWith("/videos/grok_req_777")) {
+        if (outage) throw new Error("ETIMEDOUT");
+        return new Response(
+          JSON.stringify({ status: "done", video: { url: "https://cdn.xai.test/grok.mp4" } }),
+          { status: 200 },
+        );
+      }
+      if (method === "GET" && url === "https://cdn.xai.test/grok.mp4") {
+        return new Response(validMp4Bytes, { status: 200 });
+      }
+      return new Response("Not Found", { status: 404 });
+    };
+
+    const demo = projects.openDemoProject();
+    const shot = demo.shots[0]!;
+    const queue = new GenerationJobQueue(projects, globalConfig, oauth, mockFetch, 1, 2);
+    const plan = queue.preparePlan({ projectId: demo.project.id, shotId: shot.id, kind: "video" });
+    expect(plan.canRun).toBe(true);
+    expect(plan.protocol).toBe("oauth-grok");
+
+    const first = await queue.confirmAndRun(plan);
+    expect(first.ok).toBe(false);
+    expect(first.job.status).toBe("unknown");
+    expect(first.job.remoteTaskId).toBe("grok_req_777");
+    expect(postCount).toBe(1);
+
+    outage = false;
+    const recovered = await queue.recoverUnknownJob({
+      projectId: demo.project.id,
+      jobId: first.job.id,
+    });
+    expect(recovered.ok).toBe(true);
+    expect(recovered.job.status).toBe("succeeded");
+    expect(postCount).toBe(1);
+
+    projects.closeAll();
+    globalConfig.close();
+  });
 });

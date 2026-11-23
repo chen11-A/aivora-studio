@@ -132,6 +132,15 @@ describe("ProjectStore & VACUUM INTO ZIP archive", () => {
 
     await storeA.exportArchiveToPath(demo.project.id, zipPath);
     expect(existsSync(zipPath)).toBe(true);
+
+    // Restore back into the SAME workspace A -> must create a clean "(恢复副本)" without corrupting original
+    const duplicate = await storeA.importArchiveFromPath(zipPath);
+    expect(duplicate.project.id).not.toBe(demo.project.id);
+    expect(duplicate.project.name).toBe("晚照书店 (恢复副本)");
+    expect(duplicate.episodes[0]?.scriptText).toBe("最新修改：雨停之后，旧书架亮起微光。");
+    expect(duplicate.takes.length).toBe(demo.takes.length);
+    expect(storeA.listProjects()).toHaveLength(2);
+    expect(storeA.openProject(demo.project.id).project.name).toBe("晚照书店");
     storeA.closeAll();
 
     // Verify archive contents do not contain WAL/SHM sidecars

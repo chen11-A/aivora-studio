@@ -69,14 +69,17 @@ export async function importProjectArchive(
       projectName = row.name;
       if (hasProjectId(projectId)) {
         const newId = `prj_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-        db.transaction(() => {
-          db.run(`PRAGMA foreign_keys = OFF;`);
-          db.run(`UPDATE projects SET id = ?, name = ? WHERE id = ?`, newId, `${projectName} (恢复副本)`, projectId);
-          db.run(`UPDATE episodes SET project_id = ? WHERE project_id = ?`, newId, projectId);
-          db.run(`UPDATE assets SET project_id = ? WHERE project_id = ?`, newId, projectId);
-          db.run(`UPDATE jobs SET project_id = ? WHERE project_id = ?`, newId, projectId);
-          db.run(`PRAGMA foreign_keys = ON;`);
-        });
+        db.exec(`PRAGMA foreign_keys = OFF;`);
+        try {
+          db.transaction(() => {
+            db.run(`UPDATE projects SET id = ?, name = ? WHERE id = ?`, newId, `${projectName} (恢复副本)`, projectId);
+            db.run(`UPDATE episodes SET project_id = ? WHERE project_id = ?`, newId, projectId);
+            db.run(`UPDATE assets SET project_id = ? WHERE project_id = ?`, newId, projectId);
+            db.run(`UPDATE jobs SET project_id = ? WHERE project_id = ?`, newId, projectId);
+          });
+        } finally {
+          db.exec(`PRAGMA foreign_keys = ON;`);
+        }
         projectId = newId;
         projectName = `${projectName} (恢复副本)`;
       }

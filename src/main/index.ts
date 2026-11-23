@@ -90,6 +90,11 @@ async function runHeadlessSmokeTest(workspaceRoot: string, reportPath: string): 
     });
     const archiveZip = join(workspaceRoot, ".smoke-backup.zip");
     await store.exportArchiveToPath(created.project.id, archiveZip);
+    const sameWsDuplicate = await store.importArchiveFromPath(archiveZip);
+    const sameWorkspaceRestoreOk =
+      sameWsDuplicate.project.id !== created.project.id &&
+      sameWsDuplicate.project.name === "冒烟测试 晚照书店 (恢复副本)" &&
+      Boolean(sameWsDuplicate.episodes[0]?.scriptText.includes("重启读回通过"));
     store.closeAll();
 
     // Verify ZIP restore into a clean sibling workspace
@@ -99,6 +104,7 @@ async function runHeadlessSmokeTest(workspaceRoot: string, reportPath: string): 
     try {
       const restored = await restoreStore.importArchiveFromPath(archiveZip);
       archiveRoundtripOk =
+        sameWorkspaceRestoreOk &&
         restored.project.name === "冒烟测试 晚照书店" &&
         Boolean(restored.episodes[0]?.scriptText.includes("重启读回通过"));
     } finally {
@@ -173,6 +179,14 @@ function createMainWindow(): void {
       sandbox: true,
       webSecurity: true,
     },
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.on("will-navigate", (event, targetUrl) => {
+    const devUrl = process.env.ELECTRON_RENDERER_URL;
+    if (devUrl && targetUrl.startsWith(devUrl)) return;
+    if (targetUrl.startsWith("file://")) return;
+    event.preventDefault();
   });
 
   mainWindow.once("ready-to-show", () => {
