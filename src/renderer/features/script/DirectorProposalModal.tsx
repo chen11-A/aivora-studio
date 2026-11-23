@@ -54,8 +54,15 @@ export function DirectorProposalModal() {
           </button>
         </div>
 
-        <div className="px-5 py-2.5 bg-[#0f1218] border-b border-[#252b37] text-[11px] text-[#a4aec0]">
-          来源：{proposal.providerSummary} · 采纳后将替换当前分集镜头表，并保留一键撤销快照，绝不触发任何付费生图/生视频请求。
+        <div className="px-5 py-2.5 bg-[#0f1218] border-b border-[#252b37] text-[11px] text-[#a4aec0] flex flex-col gap-1">
+          <div>
+            来源：{proposal.providerSummary} · 采纳后将**增量更新**当前分集（自动保留同位置镜头已生成的历史版本，并同步建档新角色/场景），绝不自动触发付费请求。
+          </div>
+          {proposal.assets.length > 0 && (
+            <div className="text-[#93c5fd]">
+              识别到角色/场景：{proposal.assets.map((a) => a.name).join("、")}（采纳后自动归入资产库）
+            </div>
+          )}
         </div>
 
         <div className="panel-scroll flex-1 p-5 flex flex-col gap-4">
@@ -80,6 +87,11 @@ export function DirectorProposalModal() {
                         {shot.scale} · {shot.cameraMove} · {shot.durationSec}s
                       </span>
                     </div>
+                    {shot.sourceExcerpt && (
+                      <div className="text-[11px] text-[#94a3b8] italic">
+                        原文出处：「{shot.sourceExcerpt}」
+                      </div>
+                    )}
                     <p className="text-[11px] text-[#cbd5e1] leading-relaxed">{shot.visualPrompt}</p>
                     {shot.dialogue && (
                       <p className="text-[11px] text-[#34d399]">

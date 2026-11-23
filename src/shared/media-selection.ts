@@ -54,6 +54,64 @@ export function resolveSelectedSpeechTake(shot: Shot, takes: Take[]): Take | nul
   return takes.find((t) => t.id === shot.selectedSpeechTakeId && t.shotId === shot.id) ?? null;
 }
 
+/**
+ * Single source of truth for a shot's non-destructive trim window (`trimInSec` ~ `trimOutSec`).
+ * Used identically by Storyboard, Editor timeline playback, subtitle timing, and FFmpeg export.
+ */
+export function resolveShotTrimWindow(
+  shot: Pick<Shot, "durationSec" | "trimInSec" | "trimOutSec">,
+): {
+  trimInSec: number;
+  trimOutSec: number;
+  effectiveDurationSec: number;
+  isTrimmed: boolean;
+} {
+  const rawIn = Math.max(0, Number(shot.trimInSec ?? 0));
+  const rawOut = Number(shot.trimOutSec ?? 0);
+  const baseDur = Math.max(0.5, Number(shot.durationSec ?? 3));
+  const endSec = rawOut > rawIn + 0.2 ? rawOut : rawIn + baseDur;
+  const effectiveDurationSec = Number(Math.max(0.5, endSec - rawIn).toFixed(2));
+  const isTrimmed = rawIn > 0.01 || (rawOut > 0.01 && Math.abs(rawOut - rawIn - baseDur) > 0.05);
+  return {
+    trimInSec: Number(rawIn.toFixed(2)),
+    trimOutSec: Number((rawIn + effectiveDurationSec).toFixed(2)),
+    effectiveDurationSec,
+    isTrimmed,
+  };
+}
+
+export type ShotVisualFreshness = {
+  state: "missing" | "stale" | "ready";
+  label: string;
+};
+
+/**
+ * Pure local (0-token) impact detector: tells the user whether a shot needs a new
+ * first-frame/video after editing its prompt or changing its confirmed reference assets.
+ */
+export function evaluateShotVisualStatus(
+  shot: Shot,
+  takes: Take[],
+  assets: Asset[],
+): ShotVisualFreshness {
+  const take = resolveActiveVisualTake(shot, takes);
+  if (!take) {
+    return { state: "missing", label: "缺画面" };
+  }
+  const snap = (take.promptSnapshot ?? "").trim();
+  const curPrompt = shot.visualPrompt.trim();
+  if (curPrompt && snap && !snap.includes(curPrompt)) {
+    return { state: "stale", label: "设定已改·待更新" };
+  }
+  for (const assetId of shot.characterAssetIds) {
+    const asset = assets.find((a) => a.id === assetId);
+    if (asset && asset.lockedRef && snap && !snap.includes(asset.name)) {
+      return { state: "stale", label: "参考已变·待更新" };
+    }
+  }
+  return { state: "ready", label: "已就绪" };
+}
+
 export type EpisodeExportReadiness = {
   totalShots: number;
   totalDurationSec: number;
@@ -105,7 +163,9 @@ export function evaluateEpisodeExportReadiness(
   const bgmAsset = workspace.project.bgmAssetId
     ? (workspace.assets.find((a) => a.id === workspace.project.bgmAssetId) ?? null)
     : null;
-  const totalDurationSec = epShots.reduce((acc, s) => acc + s.durationSec, 0);
+  const totalDurationSec = Number(
+    epShots.reduce((acc, s) => acc + resolveShotTrimWindow(s).effectiveDurationSec, 0).toFixed(2),
+  );
 
   let blockingReason: string | null = null;
   if (epShots.length === 0) {

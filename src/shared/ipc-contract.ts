@@ -168,6 +168,7 @@ export type AivoraDesktopApi = {
   prepareGenerationPlan: (input: {
     projectId: string;
     shotId: string;
+    assetId?: string;
     kind: "image" | "video" | "speech";
   }) => Promise<GenerationPlan>;
   confirmAndRunJob: (plan: GenerationPlan) => Promise<JobExecutionResult>;

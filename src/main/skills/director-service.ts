@@ -17,6 +17,7 @@ import {
 type UndoSnapshot = {
   projectId: string;
   episodeId: string;
+  createdAssetIds: string[];
   scenes: Scene[];
   shots: Shot[];
   takes: Take[];
@@ -134,74 +135,172 @@ export class DirectorService {
     const valid = DirectorProposalSchema.parse(input.proposal);
     const before = this.projects.openProject(input.projectId);
     const undoToken = `undo_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-    const prevShots = before.shots.filter((s) => s.episodeId === input.episodeId);
+    const prevShots = before.shots
+      .filter((s) => s.episodeId === input.episodeId)
+      .sort((a, b) => a.orderIndex - b.orderIndex);
     const prevShotIds = new Set(prevShots.map((s) => s.id));
+    const createdAssetIds: string[] = [];
+
+    const now = new Date().toISOString();
+    const assetNameToId = new Map<string, string>();
+    for (const a of before.assets) {
+      if (a.kind === "character" || a.kind === "scene" || a.kind === "prop") {
+        assetNameToId.set(a.name.trim(), a.id);
+      }
+    }
+
+    // Collect proposed assets + any character names referenced on shots
+    const candidateAssets = [...valid.assets];
+    for (const sc of valid.scenes) {
+      for (const sh of sc.shots) {
+        for (const cName of sh.characters) {
+          const clean = cName.trim();
+          if (clean && !candidateAssets.some((a) => a.name.trim() === clean)) {
+            candidateAssets.push({ kind: "character", name: clean, description: "" });
+          }
+        }
+      }
+    }
+
+    for (const item of candidateAssets) {
+      const cleanName = item.name.trim();
+      if (!cleanName || assetNameToId.has(cleanName)) continue;
+      const created = this.projects.createAsset({
+        projectId: input.projectId,
+        kind: item.kind,
+        name: cleanName,
+        description: item.description,
+      });
+      assetNameToId.set(cleanName, created.id);
+      createdAssetIds.push(created.id);
+    }
+
     this.undoMap.set(undoToken, {
       projectId: input.projectId,
       episodeId: input.episodeId,
+      createdAssetIds,
       scenes: before.scenes.filter((s) => s.episodeId === input.episodeId),
       shots: prevShots,
       takes: before.takes.filter((t) => prevShotIds.has(t.shotId)),
     });
 
-    const now = new Date().toISOString();
-    const assetNameToId = new Map(
-      before.assets.filter((a) => a.kind === "character").map((a) => [a.name, a.id]),
-    );
+    let preservedShotsCount = 0;
 
     this.projects.withProjectDb(input.projectId, (db) => {
       db.transaction(() => {
-        db.run(`DELETE FROM shots WHERE episode_id = ?`, input.episodeId);
-        db.run(`DELETE FROM scenes WHERE episode_id = ?`, input.episodeId);
+        const prevScenes = before.scenes
+          .filter((s) => s.episodeId === input.episodeId)
+          .sort((a, b) => a.orderIndex - b.orderIndex);
+        const keptSceneIds = new Set<string>();
+        const keptShotIds = new Set<string>();
 
         let globalShotIdx = 0;
         valid.scenes.forEach((sc, scIdx) => {
-          const scId = `sc_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
-          db.run(
-            `INSERT INTO scenes (id, episode_id, order_index, title, summary) VALUES (?, ?, ?, ?, ?)`,
-            scId,
-            input.episodeId,
-            scIdx,
-            sc.title,
-            sc.summary,
-          );
-          for (const sh of sc.shots) {
-            const shId = `sh_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
-            const charIds = sh.characters
-              .map((name) => assetNameToId.get(name))
-              .filter((id): id is string => Boolean(id));
+          const existingScene = prevScenes[scIdx];
+          const scId = existingScene?.id ?? `sc_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
+          keptSceneIds.add(scId);
+
+          if (existingScene) {
             db.run(
-              `INSERT INTO shots (
-                 id, scene_id, episode_id, order_index, title, scale, camera_move, duration_sec,
-                 visual_prompt, negative_prompt, dialogue, speaker, subtitle, character_asset_ids_json, updated_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)`,
-              shId,
+              `UPDATE scenes SET order_index = ?, title = ?, summary = ? WHERE id = ?`,
+              scIdx,
+              sc.title,
+              sc.summary,
+              scId,
+            );
+          } else {
+            db.run(
+              `INSERT INTO scenes (id, episode_id, order_index, title, summary) VALUES (?, ?, ?, ?, ?)`,
               scId,
               input.episodeId,
-              globalShotIdx++,
-              sh.title,
-              sh.scale,
-              sh.cameraMove,
-              sh.durationSec,
-              sh.visualPrompt,
-              sh.dialogue,
-              sh.speaker,
-              sh.subtitle || sh.dialogue,
-              JSON.stringify(charIds),
-              now,
+              scIdx,
+              sc.title,
+              sc.summary,
             );
           }
+
+          for (const sh of sc.shots) {
+            const idx = globalShotIdx++;
+            const existingShot = prevShots[idx];
+            const charIds = sh.characters
+              .map((name) => assetNameToId.get(name.trim()))
+              .filter((id): id is string => Boolean(id));
+
+            if (existingShot) {
+              // Incremental merge: preserve shot ID, all existing takes, and selected take IDs!
+              keptShotIds.add(existingShot.id);
+              preservedShotsCount += 1;
+              db.run(
+                `UPDATE shots SET
+                   scene_id = ?, order_index = ?, title = ?, scale = ?, camera_move = ?,
+                   duration_sec = ?, visual_prompt = ?, dialogue = ?, speaker = ?,
+                   subtitle = ?, character_asset_ids_json = ?, updated_at = ?
+                 WHERE id = ?`,
+                scId,
+                idx,
+                sh.title,
+                sh.scale,
+                sh.cameraMove,
+                sh.durationSec,
+                sh.visualPrompt,
+                sh.dialogue,
+                sh.speaker,
+                sh.subtitle || sh.dialogue,
+                JSON.stringify(charIds),
+                now,
+                existingShot.id,
+              );
+            } else {
+              const shId = `sh_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
+              keptShotIds.add(shId);
+              db.run(
+                `INSERT INTO shots (
+                   id, scene_id, episode_id, order_index, title, scale, camera_move, duration_sec,
+                   visual_prompt, negative_prompt, dialogue, speaker, subtitle, character_asset_ids_json, updated_at
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)`,
+                shId,
+                scId,
+                input.episodeId,
+                idx,
+                sh.title,
+                sh.scale,
+                sh.cameraMove,
+                sh.durationSec,
+                sh.visualPrompt,
+                sh.dialogue,
+                sh.speaker,
+                sh.subtitle || sh.dialogue,
+                JSON.stringify(charIds),
+                now,
+              );
+            }
+          }
         });
+
+        for (const oldShot of prevShots) {
+          if (!keptShotIds.has(oldShot.id)) {
+            db.run(`DELETE FROM shots WHERE id = ?`, oldShot.id);
+          }
+        }
+        for (const oldScene of prevScenes) {
+          if (!keptSceneIds.has(oldScene.id)) {
+            db.run(`DELETE FROM scenes WHERE id = ?`, oldScene.id);
+          }
+        }
+
         db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
       });
     });
 
     const fresh = this.projects.openProject(input.projectId);
+    const assetNote = createdAssetIds.length > 0 ? `，自动建档 ${createdAssetIds.length} 个新角色/场景` : "";
+    const preserveNote =
+      preservedShotsCount > 0 ? `，无损保留前 ${preservedShotsCount} 镜已有历史版本` : "";
     return {
       ok: true,
       workspace: fresh,
       undoToken,
-      message: "已采纳导演拆镜提案（随时可一键撤销）",
+      message: `已增量合入导演拆镜提案${preserveNote}${assetNote}（随时可一键撤销）`,
     };
   }
 
@@ -216,6 +315,9 @@ export class DirectorService {
     const now = new Date().toISOString();
     this.projects.withProjectDb(input.projectId, (db) => {
       db.transaction(() => {
+        for (const assetId of snap.createdAssetIds) {
+          db.run(`DELETE FROM assets WHERE id = ?`, assetId);
+        }
         db.run(`DELETE FROM shots WHERE episode_id = ?`, snap.episodeId);
         db.run(`DELETE FROM scenes WHERE episode_id = ?`, snap.episodeId);
         for (const sc of snap.scenes) {
@@ -236,9 +338,9 @@ export class DirectorService {
           db.run(
             `INSERT INTO shots (
                id, scene_id, episode_id, order_index, title, scale, camera_move, duration_sec,
-               visual_prompt, negative_prompt, dialogue, speaker, subtitle, character_asset_ids_json,
+               trim_in_sec, trim_out_sec, visual_prompt, negative_prompt, dialogue, speaker, subtitle, character_asset_ids_json,
                selected_image_take_id, selected_video_take_id, selected_speech_take_id, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             sh.id,
             sh.sceneId,
             sh.episodeId,
@@ -247,6 +349,8 @@ export class DirectorService {
             sh.scale,
             sh.cameraMove,
             sh.durationSec,
+            sh.trimInSec ?? 0,
+            sh.trimOutSec ?? 0,
             sh.visualPrompt,
             sh.negativePrompt,
             sh.dialogue,
@@ -285,7 +389,7 @@ export class DirectorService {
     return {
       ok: true,
       workspace: this.projects.openProject(input.projectId),
-      message: "已撤销本次导演拆镜，恢复原镜头表",
+      message: "已撤销本次导演拆镜，恢复原镜头表与历史版本",
     };
   }
 }

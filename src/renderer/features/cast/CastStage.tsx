@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { ImageUp, Lock, LockOpen, Plus, UserCheck, Volume2, X } from "lucide-react";
+import { ImageUp, Lock, LockOpen, Plus, Sparkles, UserCheck, Volume2, X } from "lucide-react";
 import type { AssetKind } from "@shared/types/domain";
 import { getDesktopClient } from "../../lib/desktop-client";
+import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
 
 const FILTERS: Array<{ id: "all" | AssetKind; label: string }> = [
@@ -26,6 +27,7 @@ export function CastStage() {
   const editAsset = useStudioStore((s) => s.editAsset);
   const toggleAssetLock = useStudioStore((s) => s.toggleAssetLock);
   const importAssetImage = useStudioStore((s) => s.importAssetImage);
+  const openAssetPortraitConfirm = useAiGenerationStore((s) => s.openAssetPortraitConfirm);
 
   const [filter, setFilter] = useState<"all" | AssetKind>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -88,7 +90,7 @@ export function CastStage() {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-[12px] text-[#768196] hidden lg:inline">
-              点击卡片可在右侧修改定妆参考图与声线
+              生成或上传定妆候选图，确认满意后点「设为已确认参考」
             </span>
             <button
               type="button"
@@ -143,7 +145,7 @@ export function CastStage() {
                           }`}
                         >
                           {asset.lockedRef ? <Lock className="w-3 h-3" /> : <LockOpen className="w-3 h-3" />}
-                          <span>{asset.lockedRef ? "参考已锁" : "未锁参考"}</span>
+                          <span>{asset.lockedRef ? "已确认参考" : "候选未确认"}</span>
                         </span>
                       </div>
                       <p className="text-[12px] text-[#a4aec0] line-clamp-2 min-h-[36px]">
@@ -184,7 +186,7 @@ export function CastStage() {
               }`}
             >
               {selected.lockedRef ? <Lock className="w-3 h-3" /> : <LockOpen className="w-3 h-3" />}
-              <span>{selected.lockedRef ? "参考已锁" : "锁定参考"}</span>
+              <span>{selected.lockedRef ? "已确认参考" : "设为已确认参考"}</span>
             </button>
           )}
         </div>
@@ -201,18 +203,31 @@ export function CastStage() {
                   />
                 )}
               </div>
-              <div className="p-2.5 border-t border-[#252b37] flex items-center justify-between gap-2">
+              <div className="p-2.5 border-t border-[#252b37] flex flex-col gap-2">
                 <span className="text-[11px] text-[#768196] truncate">
-                  {selected.lockedRef ? "生图/生视频将优先参考此图" : "未锁定，生图仅用文字描述"}
+                  {selected.lockedRef
+                    ? "已确认参考：生首帧/生视频将注入此设定与参考图"
+                    : "候选状态：满意后请点右上角「设为已确认参考」"}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => void importAssetImage(selected.id)}
-                  className="btn-secondary h-7 px-2.5 text-[11px]"
-                >
-                  <ImageUp className="w-3 h-3" />
-                  <span>换定妆图</span>
-                </button>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    data-testid="btn-generate-portrait"
+                    onClick={() => void openAssetPortraitConfirm(selected.id)}
+                    className="btn-primary h-7 px-2 text-[11px] justify-center"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    <span>AI 生成候选</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void importAssetImage(selected.id)}
+                    className="btn-secondary h-7 px-2 text-[11px] justify-center"
+                  >
+                    <ImageUp className="w-3 h-3" />
+                    <span>本地换图</span>
+                  </button>
+                </div>
               </div>
             </div>
 

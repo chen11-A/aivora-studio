@@ -2,6 +2,13 @@ import { z } from "zod";
 import { CameraMoveSchema, ShotScaleSchema, type Job } from "./domain";
 import type { CapabilityKey, OAuthProviderId } from "./provider";
 
+export const DirectorProposedAssetSchema = z.object({
+  kind: z.enum(["character", "scene", "prop"]).catch("character"),
+  name: z.string().trim().min(1).max(60),
+  description: z.string().default(""),
+});
+export type DirectorProposedAsset = z.infer<typeof DirectorProposedAssetSchema>;
+
 export const DirectorProposedShotSchema = z.object({
   title: z.string().trim().min(1).max(120),
   scale: ShotScaleSchema.catch("中景"),
@@ -11,6 +18,7 @@ export const DirectorProposedShotSchema = z.object({
   dialogue: z.string().default(""),
   speaker: z.string().default(""),
   subtitle: z.string().default(""),
+  sourceExcerpt: z.string().default(""),
   characters: z.array(z.string()).default([]),
 });
 export type DirectorProposedShot = z.infer<typeof DirectorProposedShotSchema>;
@@ -25,6 +33,7 @@ export type DirectorProposedScene = z.infer<typeof DirectorProposedSceneSchema>;
 export const DirectorProposalSchema = z.object({
   sourceMode: z.enum(["ai", "offline_preview"]).default("ai"),
   providerSummary: z.string().default(""),
+  assets: z.array(DirectorProposedAssetSchema).default([]),
   scenes: z.array(DirectorProposedSceneSchema).min(1),
 });
 export type DirectorProposal = z.infer<typeof DirectorProposalSchema>;
@@ -41,6 +50,7 @@ export type GenerationPlan = {
   planId: string;
   projectId: string;
   shotId: string;
+  assetId?: string | null;
   shotTitle: string;
   kind: "image" | "video" | "speech";
   capability: CapabilityKey;

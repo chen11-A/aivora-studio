@@ -177,21 +177,25 @@ export function populateDemoProject(db: SqliteDriver, created: ProjectWorkspace)
     );
 
     const take1v2Id = `tk_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
+    const shot1Prompt =
+      "雨后傍晚的老街，橘红夕阳洒在青石板上，晚照书店木招牌与暖黄橱窗灯光，电影感 35mm";
     db.run(`UPDATE takes SET is_selected = 0 WHERE shot_id = ?`, firstShot.id);
     db.run(
       `INSERT INTO takes (id, shot_id, kind, version_number, media_path, media_sha256, prompt_snapshot, provider_info, is_selected, created_at)
-       VALUES (?, ?, 'image', 2, ?, ?, '雨后老街晚照书店外景，橘红晚霞映湿润青石板', '示例画帧 v2', 1, ?)`,
+       VALUES (?, ?, 'image', 2, ?, ?, ?, '示例画帧 v2', 1, ?)`,
       take1v2Id,
       firstShot.id,
       shot1v2.mediaPath,
       shot1v2.mediaSha256,
+      shot1Prompt,
       now,
     );
     db.run(
       `UPDATE shots SET title = '镜 01 · 雨后书店外景', scale = '远景', camera_move = '缓推', duration_sec = 4,
-       visual_prompt = '雨后傍晚的老街，橘红夕阳洒在青石板上，晚照书店木招牌与暖黄橱窗灯光，电影感 35mm',
+       visual_prompt = ?,
        dialogue = '', speaker = '', subtitle = '雨后初晴的老街，晚照书店亮起了灯。',
        selected_image_take_id = ?, updated_at = ? WHERE id = ?`,
+      shot1Prompt,
       take1v2Id,
       now,
       firstShot.id,
@@ -199,43 +203,49 @@ export function populateDemoProject(db: SqliteDriver, created: ProjectWorkspace)
 
     const sh2Id = `sh_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
     const tk2Id = `tk_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
+    const shot2Prompt = "林晚停下旧自行车摘下湿帽，侧脸望向橱窗里的诗集，玻璃倒映夕阳余晖";
     db.run(
       `INSERT INTO shots (id, scene_id, episode_id, order_index, title, scale, camera_move, duration_sec, visual_prompt, dialogue, speaker, subtitle, selected_image_take_id, updated_at)
-       VALUES (?, ?, ?, 1, '镜 02 · 林晚驻足橱窗', '近景', '缓推', 3, '林晚停下旧自行车摘下湿帽，侧脸望向橱窗里的诗集，玻璃倒映夕阳余晖', '这家店居然还开着。', '林晚', '这家店居然还开着。', ?, ?)`,
+       VALUES (?, ?, ?, 1, '镜 02 · 林晚驻足橱窗', '近景', '缓推', 3, ?, '这家店居然还开着。', '林晚', '这家店居然还开着。', ?, ?)`,
       sh2Id,
       sc1.id,
       ep1.id,
+      shot2Prompt,
       tk2Id,
       now,
     );
     db.run(
       `INSERT INTO takes (id, shot_id, kind, version_number, media_path, media_sha256, prompt_snapshot, provider_info, is_selected, created_at)
-       VALUES (?, ?, 'image', 1, ?, ?, '林晚驻足书店橱窗', '示例画帧 v1', 1, ?)`,
+       VALUES (?, ?, 'image', 1, ?, ?, ?, '示例画帧 v1', 1, ?)`,
       tk2Id,
       sh2Id,
       shot2v1.mediaPath,
       shot2v1.mediaSha256,
+      `${shot2Prompt} [角色:林晚]`,
       now,
     );
 
     const sh3Id = `sh_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
     const tk3Id = `tk_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
+    const shot3Prompt = "书店木门推开铜铃晃动，高大书架间光线穿过微尘，陈伯站在木梯上微笑回头";
     db.run(
       `INSERT INTO shots (id, scene_id, episode_id, order_index, title, scale, camera_move, duration_sec, visual_prompt, dialogue, speaker, subtitle, selected_image_take_id, updated_at)
-       VALUES (?, ?, ?, 2, '镜 03 · 推门铜铃轻响', '中景', '横摇', 5, '书店木门推开铜铃晃动，高大书架间光线穿过微尘，陈伯站在木梯上微笑回头', '小晚，你终于回来了。那本夹着银杏叶的书，我替你留了整整三年。', '陈伯', '那本夹着银杏叶的书，我替你留了整整三年。', ?, ?)`,
+       VALUES (?, ?, ?, 2, '镜 03 · 推门铜铃轻响', '中景', '横摇', 5, ?, '小晚，你终于回来了。那本夹着银杏叶的书，我替你留了整整三年。', '陈伯', '那本夹着银杏叶的书，我替你留了整整三年。', ?, ?)`,
       sh3Id,
       sc2Id,
       ep1.id,
+      shot3Prompt,
       tk3Id,
       now,
     );
     db.run(
       `INSERT INTO takes (id, shot_id, kind, version_number, media_path, media_sha256, prompt_snapshot, provider_info, is_selected, created_at)
-       VALUES (?, ?, 'image', 1, ?, ?, '书店内推门重逢', '示例画帧 v1', 1, ?)`,
+       VALUES (?, ?, 'image', 1, ?, ?, ?, '示例画帧 v1', 1, ?)`,
       tk3Id,
       sh3Id,
       shot3v1.mediaPath,
       shot3v1.mediaSha256,
+      `${shot3Prompt} [角色:林晚,陈伯]`,
       now,
     );
   });

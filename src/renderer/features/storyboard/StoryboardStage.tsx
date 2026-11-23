@@ -1,22 +1,6 @@
 import { useState } from "react";
-import {
-  Check,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  Film,
-  Image as ImageIcon,
-  Mic,
-  Plus,
-  Sparkles,
-  Upload,
-  Video,
-} from "lucide-react";
-import {
-  isVideoMediaPath,
-  resolveActiveVisualTake,
-  resolveSelectedSpeechTake,
-} from "@shared/media-selection";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Film, Image as ImageIcon, Mic, Plus, Sparkles, Upload, Video } from "lucide-react";
+import { evaluateShotVisualStatus, isVideoMediaPath, resolveActiveVisualTake, resolveSelectedSpeechTake, resolveShotTrimWindow } from "@shared/media-selection";
 import type { CameraMove, ShotScale } from "@shared/types/domain";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
@@ -60,6 +44,7 @@ export function StoryboardStage() {
 
   const activeTake = currentShot ? resolveActiveVisualTake(currentShot, workspace.takes) : null;
   const speechTake = currentShot ? resolveSelectedSpeechTake(currentShot, workspace.takes) : null;
+  const castAssets = workspace.assets.filter((a) => a.kind === "character" || a.kind === "scene");
 
   const resolveSrc = (mediaPath: string | null | undefined) => {
     if (!mediaPath) return null;
@@ -72,6 +57,27 @@ export function StoryboardStage() {
     : 0;
   const activeSrc = resolveSrc(activeTake?.mediaPath);
   const activeIsVideo = isVideoMediaPath(activeTake?.mediaPath);
+
+  function toggleShotAsset(assetId: string) {
+    if (!currentShot) return;
+    const exists = currentShot.characterAssetIds.includes(assetId);
+    const next = exists
+      ? currentShot.characterAssetIds.filter((id) => id !== assetId)
+      : [...currentShot.characterAssetIds, assetId];
+    editShot({ shotId: currentShot.id, characterAssetIds: next });
+  }
+
+  function handleDialogueChange(nextDialogue: string) {
+    if (!currentShot) return;
+    // Smart sync: only update subtitle if user hasn't manually customized subtitle text
+    const shouldSyncSub =
+      !currentShot.subtitle.trim() || currentShot.subtitle === currentShot.dialogue;
+    editShot({
+      shotId: currentShot.id,
+      dialogue: nextDialogue,
+      ...(shouldSyncSub ? { subtitle: nextDialogue } : {}),
+    });
+  }
 
   return (
     <div
@@ -104,6 +110,8 @@ export function StoryboardStage() {
             const take = resolveActiveVisualTake(shot, workspace.takes);
             const thumbSrc = resolveSrc(take?.mediaPath);
             const active = shot.id === currentShot?.id;
+            const freshness = evaluateShotVisualStatus(shot, workspace.takes, workspace.assets);
+            const win = resolveShotTrimWindow(shot);
             return (
               <button
                 key={shot.id}
@@ -138,13 +146,20 @@ export function StoryboardStage() {
                           <Film className="w-4 h-4" />
                         </div>
                       )}
-                      {take && (
-                        <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-black/70 text-[10px] text-[#34d399]">
-                          v{take.versionNumber}
-                        </span>
-                      )}
+                      <div className="absolute top-1 left-1 flex items-center gap-1">
+                        {take && (
+                          <span className="px-1.5 py-0.5 rounded bg-black/70 text-[10px] text-[#34d399]">
+                            v{take.versionNumber}
+                          </span>
+                        )}
+                        {freshness.state === "stale" && (
+                          <span className="px-1.5 py-0.5 rounded bg-[#f59e0b]/90 text-[10px] text-black font-semibold">
+                            待更新
+                          </span>
+                        )}
+                      </div>
                       <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/70 text-[10px] text-[#e2e8f0]">
-                        {shot.durationSec}s
+                        {win.effectiveDurationSec}s
                       </span>
                     </div>
                     <div className="px-2 py-1.5">
@@ -294,7 +309,7 @@ export function StoryboardStage() {
         </div>
       </section>
 
-      {/* Right Concise Inspector (280px, Advanced Folded) */}
+      {/* Right Concise Inspector (280px, Visible Cast Pills & Dialogue) */}
       <aside className="bg-[#14171e] border-l border-[#252b37] flex flex-col min-h-0 overflow-hidden">
         <div className="h-10 px-4 border-b border-[#252b37] flex items-center justify-between shrink-0">
           <span className="text-[12px] font-semibold text-[#f3f5f9] truncate">
@@ -303,50 +318,88 @@ export function StoryboardStage() {
         </div>
 
         {currentShot && (
-          <div className="panel-scroll flex-1 p-3.5 flex flex-col gap-3.5">
-            <div className="flex flex-col gap-1.5">
+          <div className="panel-scroll flex-1 p-3.5 flex flex-col gap-3">
+            <div className="flex flex-col gap-1">
               <label className="text-[11px] text-[#a4aec0]">画面描述（镜头意图）</label>
               <textarea
                 data-testid="shot-prompt-input"
-                className="input-field resize-none h-24 text-[12px]"
+                className="input-field resize-none h-20 text-[12px]"
                 value={currentShot.visualPrompt}
                 onChange={(e) => editShot({ shotId: currentShot.id, visualPrompt: e.target.value })}
                 placeholder="描述画面主体、动作、构图与光影……"
               />
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[11px] text-[#a4aec0]">景别</label>
-              <div className="flex flex-wrap gap-1.5">
+            {castAssets.length > 0 && (
+              <div className="flex flex-col gap-1">
+                <label className="text-[11px] text-[#a4aec0]">本镜出场角色/场景（点选绑定参考）</label>
+                <div className="flex flex-wrap gap-1">
+                  {castAssets.map((a) => {
+                    const checked = currentShot.characterAssetIds.includes(a.id);
+                    return (
+                      <button
+                        key={a.id}
+                        type="button"
+                        onClick={() => toggleShotAsset(a.id)}
+                        className={`px-2 py-0.5 rounded text-[11px] border cursor-pointer ${
+                          checked
+                            ? "bg-[#10b981]/15 border-[#10b981]/60 text-[#34d399]"
+                            : "bg-[#0f1218] border-[#252b37] text-[#a4aec0]"
+                        }`}
+                      >
+                        {checked ? `✓ ${a.name}` : a.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-[76px_minmax(0,1fr)] gap-1.5">
+              <div className="flex flex-col gap-1">
+                <label className="text-[11px] text-[#a4aec0]">说话人</label>
+                <input
+                  className="input-field h-8 px-2 text-[11px]"
+                  value={currentShot.speaker}
+                  placeholder="角色/旁白"
+                  onChange={(e) => editShot({ shotId: currentShot.id, speaker: e.target.value })}
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[11px] text-[#a4aec0]">本镜台词（智能同步字幕）</label>
+                <input
+                  className="input-field h-8 px-2 text-[11px]"
+                  value={currentShot.dialogue}
+                  placeholder="输入对白，手工改过的字幕不会被覆盖"
+                  onChange={(e) => handleDialogueChange(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-[11px] text-[#a4aec0]">景别与运镜</label>
+              <div className="flex flex-wrap gap-1">
                 {SCALES.map((sc) => (
                   <button
                     key={sc}
                     type="button"
                     onClick={() => editShot({ shotId: currentShot.id, scale: sc })}
-                    className={`px-2.5 py-1 rounded-md text-[11px] border cursor-pointer ${
-                      currentShot.scale === sc
-                        ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]"
-                        : "bg-[#0f1218] border-[#252b37] text-[#a4aec0]"
+                    className={`px-2 py-0.5 rounded text-[11px] border cursor-pointer ${
+                      currentShot.scale === sc ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]" : "bg-[#0f1218] border-[#252b37] text-[#a4aec0]"
                     }`}
                   >
                     {sc}
                   </button>
                 ))}
               </div>
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[11px] text-[#a4aec0]">运镜</label>
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-1 pt-0.5">
                 {MOVES.map((mv) => (
                   <button
                     key={mv}
                     type="button"
                     onClick={() => editShot({ shotId: currentShot.id, cameraMove: mv })}
-                    className={`px-2.5 py-1 rounded-md text-[11px] border cursor-pointer ${
-                      currentShot.cameraMove === mv
-                        ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]"
-                        : "bg-[#0f1218] border-[#252b37] text-[#a4aec0]"
+                    className={`px-2 py-0.5 rounded text-[11px] border cursor-pointer ${
+                      currentShot.cameraMove === mv ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]" : "bg-[#0f1218] border-[#252b37] text-[#a4aec0]"
                     }`}
                   >
                     {mv}
@@ -355,7 +408,7 @@ export function StoryboardStage() {
               </div>
             </div>
 
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-1">
               <label className="text-[11px] text-[#a4aec0]">时长</label>
               <div className="grid grid-cols-4 gap-1.5">
                 {DURATIONS.map((sec) => (
@@ -364,9 +417,7 @@ export function StoryboardStage() {
                     type="button"
                     onClick={() => editShot({ shotId: currentShot.id, durationSec: sec })}
                     className={`h-7 rounded-md text-[11px] border cursor-pointer ${
-                      currentShot.durationSec === sec
-                        ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]"
-                        : "bg-[#0f1218] border-[#252b37] text-[#a4aec0]"
+                      currentShot.durationSec === sec ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]" : "bg-[#0f1218] border-[#252b37] text-[#a4aec0]"
                     }`}
                   >
                     {sec}s
@@ -374,88 +425,53 @@ export function StoryboardStage() {
                 ))}
               </div>
               {dialogueEstSec > currentShot.durationSec && (
-                <p className="text-[11px] text-[#f59e0b]">
-                  台词预估约 {dialogueEstSec}s，建议适当延长镜头或拆镜。
-                </p>
+                <p className="text-[11px] text-[#f59e0b]">台词预估约 {dialogueEstSec}s，建议适当延长镜头或拆为两镜。</p>
               )}
             </div>
 
-            <div className="grid grid-cols-2 gap-2 pt-1">
-              <button
-                type="button"
-                data-testid="btn-generate-image"
-                className="btn-secondary"
-                onClick={() => void openGenerationConfirm(currentShot.id, "image")}
-              >
+            <div className="grid grid-cols-2 gap-2 pt-0.5">
+              <button type="button" data-testid="btn-generate-image" className="btn-secondary" onClick={() => void openGenerationConfirm(currentShot.id, "image")}>
                 <Sparkles className="w-3.5 h-3.5 text-[#60a5fa]" />
                 <span>AI 生首帧</span>
               </button>
-              <button
-                type="button"
-                data-testid="btn-generate-video"
-                className="btn-primary"
-                onClick={() => void openGenerationConfirm(currentShot.id, "video")}
-              >
+              <button type="button" data-testid="btn-generate-video" className="btn-primary" onClick={() => void openGenerationConfirm(currentShot.id, "video")}>
                 <Video className="w-3.5 h-3.5" />
                 <span>AI 生视频</span>
               </button>
             </div>
 
-            <div className="border-t border-[#252b37] pt-2.5">
+            <div className="border-t border-[#252b37] pt-2">
               <button
                 type="button"
                 onClick={() => setAdvancedOpen((v) => !v)}
                 className="w-full flex items-center justify-between text-[11px] text-[#a4aec0] hover:text-[#f3f5f9] cursor-pointer"
               >
-                <span>高级参数（对白、配音与反向词）</span>
+                <span>配音、单独字幕与反向词</span>
                 <ChevronDown className={`w-3.5 h-3.5 transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
               </button>
               {advancedOpen && (
-                <div className="mt-2.5 flex flex-col gap-2.5">
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[11px] text-[#768196]">台词 / 字幕文本</label>
-                    <input
-                      className="input-field text-[12px]"
-                      value={currentShot.subtitle}
-                      onChange={(e) =>
-                        editShot({
-                          shotId: currentShot.id,
-                          subtitle: e.target.value,
-                          dialogue: e.target.value,
-                        })
-                      }
-                    />
-                  </div>
-                  <div className="flex items-center justify-between gap-2 rounded-md bg-[#0f1218] border border-[#252b37] px-2.5 py-2">
+                <div className="mt-2 flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2 rounded-md bg-[#0f1218] border border-[#252b37] px-2.5 py-1.5">
                     <span className="text-[11px] text-[#a4aec0] truncate">
                       {speechTake ? `已绑定配音 v${speechTake.versionNumber}` : "暂无对白音频"}
                     </span>
                     <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => void openGenerationConfirm(currentShot.id, "speech")}
-                        className="text-[11px] text-[#34d399] hover:underline cursor-pointer"
-                      >
+                      <button type="button" onClick={() => void openGenerationConfirm(currentShot.id, "speech")} className="text-[11px] text-[#34d399] hover:underline cursor-pointer">
                         AI 配音
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => void importShotTake(currentShot.id, "speech")}
-                        className="text-[11px] text-[#60a5fa] hover:underline flex items-center gap-0.5 cursor-pointer"
-                      >
+                      <button type="button" onClick={() => void importShotTake(currentShot.id, "speech")} className="text-[11px] text-[#60a5fa] hover:underline flex items-center gap-0.5 cursor-pointer">
                         <Mic className="w-3 h-3" />
                         <span>导入</span>
                       </button>
                     </div>
                   </div>
                   <div className="flex flex-col gap-1">
+                    <label className="text-[11px] text-[#768196]">画面字幕（单独微调不改台词）</label>
+                    <input className="input-field h-8 text-[11px]" value={currentShot.subtitle} onChange={(e) => editShot({ shotId: currentShot.id, subtitle: e.target.value })} />
+                  </div>
+                  <div className="flex flex-col gap-1">
                     <label className="text-[11px] text-[#768196]">反向提示词（避免元素）</label>
-                    <input
-                      className="input-field text-[12px]"
-                      value={currentShot.negativePrompt}
-                      onChange={(e) => editShot({ shotId: currentShot.id, negativePrompt: e.target.value })}
-                      placeholder="例如：畸形手指、多余文字、画面闪烁"
-                    />
+                    <input className="input-field h-8 text-[11px]" value={currentShot.negativePrompt} onChange={(e) => editShot({ shotId: currentShot.id, negativePrompt: e.target.value })} placeholder="例如：畸形手指、多余文字、画面闪烁" />
                   </div>
                 </div>
               )}

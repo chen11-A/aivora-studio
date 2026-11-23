@@ -45,6 +45,8 @@ export function createShotInDb(
     scale: "中景",
     cameraMove: "固定",
     durationSec: 3,
+    trimInSec: 0,
+    trimOutSec: 0,
     visualPrompt: "",
     negativePrompt: "",
     dialogue: "",
@@ -63,21 +65,47 @@ export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): str
   const now = new Date().toISOString();
   const row = db.get<Record<string, unknown>>(`SELECT * FROM shots WHERE id = ?`, input.shotId);
   if (!row) throw new Error("镜头不存在");
+
+  const nextTrimIn =
+    input.trimInSec !== undefined ? input.trimInSec : Number(row.trim_in_sec ?? 0);
+  const nextTrimOut =
+    input.trimOutSec !== undefined ? input.trimOutSec : Number(row.trim_out_sec ?? 0);
+  // If user adjusted durationSec directly without specifying trimOutSec, reset trimOutSec so duration takes effect
+  const effectiveTrimOut =
+    input.durationSec !== undefined && input.trimOutSec === undefined
+      ? 0
+      : nextTrimOut;
+  const nextDuration =
+    input.durationSec !== undefined
+      ? input.durationSec
+      : effectiveTrimOut > nextTrimIn + 0.2
+        ? Number((effectiveTrimOut - nextTrimIn).toFixed(2))
+        : Number(row.duration_sec ?? 3);
+
+  const nextCharIdsJson =
+    input.characterAssetIds !== undefined
+      ? JSON.stringify(input.characterAssetIds)
+      : String(row.character_asset_ids_json ?? "[]");
+
   db.transaction(() => {
     db.run(
-      `UPDATE shots SET title = ?, scale = ?, camera_move = ?, duration_sec = ?, visual_prompt = ?,
-       negative_prompt = ?, dialogue = ?, speaker = ?, subtitle = ?,
+      `UPDATE shots SET title = ?, scale = ?, camera_move = ?, duration_sec = ?,
+       trim_in_sec = ?, trim_out_sec = ?, visual_prompt = ?,
+       negative_prompt = ?, dialogue = ?, speaker = ?, subtitle = ?, character_asset_ids_json = ?,
        selected_image_take_id = ?, selected_video_take_id = ?, selected_speech_take_id = ?, updated_at = ?
        WHERE id = ?`,
       input.title ?? String(row.title),
       input.scale ?? String(row.scale),
       input.cameraMove ?? String(row.camera_move),
-      input.durationSec ?? Number(row.duration_sec),
+      nextDuration,
+      nextTrimIn,
+      effectiveTrimOut,
       input.visualPrompt ?? String(row.visual_prompt ?? ""),
       input.negativePrompt ?? String(row.negative_prompt ?? ""),
       input.dialogue ?? String(row.dialogue ?? ""),
       input.speaker ?? String(row.speaker ?? ""),
       input.subtitle ?? String(row.subtitle ?? ""),
+      nextCharIdsJson,
       input.selectedImageTakeId !== undefined
         ? input.selectedImageTakeId
         : (row.selected_image_take_id as string | null),

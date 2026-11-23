@@ -7,6 +7,7 @@ import {
   isVideoMediaPath,
   resolveActiveVisualTake,
   resolveSelectedSpeechTake,
+  resolveShotTrimWindow,
 } from "../../shared/media-selection";
 import type { ProjectWorkspace } from "../../shared/types/domain";
 import { probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
@@ -29,7 +30,7 @@ async function probeFile(ffprobePath: string, filePath: string): Promise<ProbedM
 /**
  * On-demand pre-export health check (run when opening ExportModal, never during typing):
  * - Verifies every shot's selected visual & speech asset exists and has valid media streams
- * - Flags short video tracks (< shot.durationSec) using true video-stream duration (not container duration)
+ * - Flags short video tracks (< effectiveDurationSec after trimInSec) using true video-stream duration
  * - Checks free disk space conservatively (fail-open if statfs is unsupported on network/virtual FS)
  */
 export async function preflightEpisodeExport(input: {
@@ -58,7 +59,8 @@ export async function preflightEpisodeExport(input: {
 
   let totalDurationSec = 0;
   for (const shot of shots) {
-    totalDurationSec += Math.max(1, shot.durationSec);
+    const win = resolveShotTrimWindow(shot);
+    totalDurationSec += Math.max(0.5, win.effectiveDurationSec);
     const visual = resolveActiveVisualTake(shot, input.workspace.takes);
     if (!visual) {
       blockingIssues.push(`镜头「${shot.title}」缺少画面版本。`);
@@ -77,21 +79,23 @@ export async function preflightEpisodeExport(input: {
         if (!hasVideo) {
           blockingIssues.push(`镜头「${shot.title}」的视频文件缺少有效视频流，可能已损坏。`);
         } else {
-          const videoDur = resolveEffectiveVideoDurationSec(info);
+          const rawVideoDur = resolveEffectiveVideoDurationSec(info);
           const audioDur = resolveEffectiveAudioDurationSec(info);
-          if (videoDur !== null && videoDur + 0.15 < shot.durationSec) {
+          const videoDur =
+            rawVideoDur !== null ? Math.max(0, rawVideoDur - win.trimInSec) : null;
+          if (videoDur !== null && videoDur + 0.15 < win.effectiveDurationSec) {
             shortClips.push({
               shotId: shot.id,
               shotTitle: shot.title,
-              shotDurationSec: shot.durationSec,
+              shotDurationSec: win.effectiveDurationSec,
               clipDurationSec: Number(videoDur.toFixed(2)),
             });
             const trackNote =
-              audioDur !== null && audioDur - videoDur > 0.5
-                ? `（画面轨 ${videoDur.toFixed(1)}s，音轨 ${audioDur.toFixed(1)}s）`
-                : `（实际画面 ${videoDur.toFixed(1)}s）`;
+              audioDur !== null && rawVideoDur !== null && audioDur - rawVideoDur > 0.5
+                ? `（画面轨 ${rawVideoDur.toFixed(1)}s，音轨 ${audioDur.toFixed(1)}s）`
+                : `（可用画面 ${videoDur.toFixed(1)}s）`;
             warnings.push(
-              `「${shot.title}」视频画面短于镜头设定 ${shot.durationSec}s${trackNote}，导出将自动末帧停帧补齐，或可先回分镜页调短时长。`,
+              `「${shot.title}」视频画面短于镜头采用时长 ${win.effectiveDurationSec}s${trackNote}，导出将自动末帧停帧补齐，或可先回分镜页调短时长。`,
             );
           }
         }

@@ -8,6 +8,7 @@ import {
   isVideoMediaPath,
   resolveActiveVisualTake,
   resolveSelectedSpeechTake,
+  resolveShotTrimWindow,
 } from "../../shared/media-selection";
 import type { AspectRatio, ProjectWorkspace, Shot, Take } from "../../shared/types/domain";
 import {
@@ -93,7 +94,9 @@ async function renderShotSegment(params: {
   const { dir, index, shot, take, speechTake, projectDir, aspectRatio, ffmpegPath, ffprobePath, signal } =
     params;
   const segName = `seg_${String(index).padStart(3, "0")}.mp4`;
-  const dur = String(shot.durationSec);
+  const win = resolveShotTrimWindow(shot);
+  const durNum = win.effectiveDurationSec;
+  const dur = String(durNum);
   const [w, h] = videoDimensions(aspectRatio);
 
   const visualAbs = resolveConfinedMediaPath(projectDir, take.mediaPath);
@@ -108,13 +111,17 @@ async function renderShotSegment(params: {
   if (isVideoMediaPath(visualAbs)) {
     const info = await probeMedia(visualAbs, ffprobePath, signal);
     const hasClipAudio = Boolean(info.streams?.some((s) => s.codec_type === "audio"));
-    const clipDur = resolveEffectiveVideoDurationSec(info) ?? 0;
+    const rawClipDur = resolveEffectiveVideoDurationSec(info) ?? 0;
+    const clipDur = Math.max(0, rawClipDur - win.trimInSec);
     const padSec =
-      Number.isFinite(clipDur) && clipDur > 0 && clipDur + 0.05 < shot.durationSec
-        ? shot.durationSec - clipDur + 0.5
+      Number.isFinite(clipDur) && clipDur > 0 && clipDur + 0.05 < durNum
+        ? durNum - clipDur + 0.5
         : 0;
     const vf = `${fitFilter(aspectRatio)}${padSec > 0 ? `,tpad=stop_mode=clone:stop_duration=${padSec.toFixed(2)}` : ""}`;
 
+    if (win.trimInSec > 0.01) {
+      args.push("-ss", String(win.trimInSec));
+    }
     args.push("-i", visualAbs);
     if (speechAbs) {
       args.push("-i", speechAbs);
@@ -133,7 +140,7 @@ async function renderShotSegment(params: {
       "-vf",
       vf,
       "-af",
-      `apad=whole_dur=${shot.durationSec}`,
+      `apad=whole_dur=${durNum}`,
       "-t",
       dur,
       ...VIDEO_ENC,
@@ -162,7 +169,7 @@ async function renderShotSegment(params: {
       "-vf",
       `ass=filename=${cardAss}`,
       "-af",
-      `apad=whole_dur=${shot.durationSec}`,
+      `apad=whole_dur=${durNum}`,
       "-t",
       dur,
       ...VIDEO_ENC,
@@ -185,7 +192,7 @@ async function renderShotSegment(params: {
       "-vf",
       fitFilter(aspectRatio),
       "-af",
-      `apad=whole_dur=${shot.durationSec}`,
+      `apad=whole_dur=${durNum}`,
       "-t",
       dur,
       ...VIDEO_ENC,
@@ -265,10 +272,13 @@ export async function exportEpisodeToMp4(params: {
     let cursorSec = 0;
     const cues: Array<{ shotId: string; start: number; end: number; speaker: string; text: string }> =
       [];
+    const dialogueIntervals: Array<{ start: number; end: number }> = [];
 
     for (let i = 0; i < resolvedShots.length; i++) {
       assertNotAborted();
       const item = resolvedShots[i]!;
+      const win = resolveShotTrimWindow(item.shot);
+      const effDur = win.effectiveDurationSec;
       const seg = await renderShotSegment({
         dir: scratchDir,
         index: i,
@@ -286,12 +296,15 @@ export async function exportEpisodeToMp4(params: {
         cues.push({
           shotId: item.shot.id,
           start: cursorSec,
-          end: cursorSec + item.shot.durationSec,
+          end: cursorSec + effDur,
           speaker: item.shot.speaker || "",
           text: item.shot.subtitle.trim(),
         });
       }
-      cursorSec += item.shot.durationSec;
+      if (item.speechTake || item.shot.dialogue.trim()) {
+        dialogueIntervals.push({ start: cursorSec, end: cursorSec + effDur });
+      }
+      cursorSec = Number((cursorSec + effDur).toFixed(2));
       const pct = 10 + Math.round(((i + 1) / resolvedShots.length) * 45);
       emit(pct, "合成镜头", `已完成 ${i + 1}/${resolvedShots.length} 镜：${item.shot.title}`);
     }
@@ -319,7 +332,7 @@ export async function exportEpisodeToMp4(params: {
     );
 
     assertNotAborted();
-    // 2. Mix optional BGM
+    // 2. Mix optional BGM with automatic -8 dB ducking during dialogue intervals
     let preMasterFile = "stitched.mp4";
     const bgmAsset = params.workspace.project.bgmAssetId
       ? params.workspace.assets.find((a) => a.id === params.workspace.project.bgmAssetId)
@@ -327,8 +340,17 @@ export async function exportEpisodeToMp4(params: {
     const bgmAbs =
       bgmAsset?.mediaPath ? resolveConfinedMediaPath(params.projectDir, bgmAsset.mediaPath) : null;
     if (bgmAbs && existsSync(bgmAbs)) {
-      emit(70, "混合背景音乐", `正在按 ${params.workspace.project.bgmVolumeDb} dB 混入背景音乐…`);
+      emit(70, "混合背景音乐", `正在按 ${params.workspace.project.bgmVolumeDb} dB 混入背景音乐（对白段自动降音闪避）…`);
       const db = params.workspace.project.bgmVolumeDb;
+      const baseGain = Math.pow(10, db / 20).toFixed(5);
+      const duckGain = Math.pow(10, (db - 8) / 20).toFixed(5);
+      const duckCond = dialogueIntervals
+        .map((iv) => `between(t,${iv.start.toFixed(2)},${iv.end.toFixed(2)})`)
+        .join("+");
+      const bgmVolExpr =
+        dialogueIntervals.length > 0
+          ? `volume='if(${duckCond},${duckGain},${baseGain})':eval=frame`
+          : `volume=${db}dB`;
       await runStep(
         ffmpegPath,
         [
@@ -340,7 +362,7 @@ export async function exportEpisodeToMp4(params: {
           "-i",
           bgmAbs,
           "-filter_complex",
-          `[1:a:0]volume=${db}dB[bgm];[0:a:0][bgm]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]`,
+          `[1:a:0]${bgmVolExpr}[bgm];[0:a:0][bgm]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]`,
           "-map",
           "0:v:0",
           "-map",

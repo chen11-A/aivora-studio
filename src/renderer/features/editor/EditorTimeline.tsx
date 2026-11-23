@@ -22,7 +22,6 @@ export function EditorTimeline(props: {
   onSeekShot: (index: number) => void;
 }) {
   const {
-    shots,
     takes,
     segments,
     activeIndex,
@@ -34,18 +33,18 @@ export function EditorTimeline(props: {
   } = props;
 
   const pxPerSec = 48;
-  const trackTotalWidth = shots.reduce(
-    (acc, s) => acc + Math.max(148, s.durationSec * pxPerSec) + 4,
+  const trackTotalWidth = segments.reduce(
+    (acc, seg) => acc + Math.max(148, seg.durationSec * pxPerSec) + 4,
     0,
   );
 
   let playheadX = 0;
   for (const seg of segments) {
-    const w = Math.max(148, seg.shot.durationSec * pxPerSec);
+    const w = Math.max(148, seg.durationSec * pxPerSec);
     if (playheadSec >= seg.endSec) {
       playheadX += w + 4;
     } else if (playheadSec > seg.startSec) {
-      const frac = (playheadSec - seg.startSec) / Math.max(0.1, seg.shot.durationSec);
+      const frac = (playheadSec - seg.startSec) / Math.max(0.1, seg.durationSec);
       playheadX += frac * w;
       break;
     } else {
@@ -59,7 +58,7 @@ export function EditorTimeline(props: {
       data-testid="editor-timeline"
     >
       <div className="h-8 px-4 border-b border-[#252b37] flex items-center justify-between text-[11px] text-[#768196] shrink-0">
-        <span>四轨时间轴（视频 · 对白 · 配乐 · 字幕）· 点击片段即时跳转播放</span>
+        <span>四轨时间轴（视频 · 对白 · 配乐 · 字幕）· 预览与导出共享同一份入点/出点时间</span>
         <span className="font-mono">总时长：{fmtTime(totalSec)}</span>
       </div>
 
@@ -82,15 +81,16 @@ export function EditorTimeline(props: {
               <Film className="w-3 h-3 text-[#60a5fa]" /> 视频
             </span>
             <div className="flex items-center gap-1 h-full">
-              {shots.map((shot, idx) => {
+              {segments.map((seg, idx) => {
+                const { shot } = seg;
                 const tk = resolveActiveVisualTake(shot, takes);
                 return (
                   <button
                     key={shot.id}
                     type="button"
                     onClick={() => onSeekShot(idx)}
-                    title={`${shot.title} · 版本 ${tk?.versionNumber ?? "-"} (${shot.durationSec}s)`}
-                    style={{ width: `${Math.max(148, shot.durationSec * pxPerSec)}px` }}
+                    title={`${shot.title} · 版本 ${tk?.versionNumber ?? "-"} (${seg.trimInSec}s~${seg.trimOutSec}s)`}
+                    style={{ width: `${Math.max(148, seg.durationSec * pxPerSec)}px` }}
                     className={`h-full px-2 rounded border text-left flex items-center justify-between gap-1 overflow-hidden text-[11px] cursor-pointer shrink-0 ${
                       idx === activeIndex
                         ? "bg-[#2b4c7e] border-[#60a5fa] text-white font-medium"
@@ -98,7 +98,7 @@ export function EditorTimeline(props: {
                     }`}
                   >
                     <span className="block truncate min-w-0">
-                      {shot.title} ({shot.durationSec}s)
+                      {shot.title} ({seg.durationSec}s)
                     </span>
                     {tk && <span className="text-[10px] text-[#93c5fd] shrink-0">v{tk.versionNumber}</span>}
                   </button>
@@ -113,11 +113,11 @@ export function EditorTimeline(props: {
               <Volume2 className="w-3 h-3 text-[#34d399]" /> 对白
             </span>
             <div className="flex items-center gap-1 h-full">
-              {shots.map((shot) => (
+              {segments.map(({ shot, durationSec }) => (
                 <div
                   key={shot.id}
                   title={shot.dialogue ? `${shot.speaker || "旁白"}：${shot.dialogue}` : "无对白"}
-                  style={{ width: `${Math.max(148, shot.durationSec * pxPerSec)}px` }}
+                  style={{ width: `${Math.max(148, durationSec * pxPerSec)}px` }}
                   className={`h-full px-2 rounded flex items-center overflow-hidden text-[10px] shrink-0 ${
                     shot.dialogue
                       ? "bg-[#165b49] border border-[#10b981]/50 text-[#d1fae5]"
@@ -140,7 +140,7 @@ export function EditorTimeline(props: {
             <div className="h-full rounded bg-[#182f3c] border border-[#2c5770] px-2.5 flex items-center overflow-hidden text-[10px] text-[#bae6fd]">
               <span className="block truncate min-w-0">
                 {bgmAsset
-                  ? `背景配乐：${bgmAsset.name} · ${bgmVolumeDb} dB`
+                  ? `背景配乐：${bgmAsset.name} · ${bgmVolumeDb} dB（有对白片段自动压低 -8 dB 闪避）`
                   : `未导入背景音乐 · ${bgmVolumeDb} dB（可在右侧点击「导入」）`}
               </span>
             </div>
@@ -152,11 +152,11 @@ export function EditorTimeline(props: {
               <Subtitles className="w-3 h-3 text-[#f59e0b]" /> 字幕
             </span>
             <div className="flex items-center gap-1 h-full">
-              {shots.map((shot) => (
+              {segments.map(({ shot, durationSec }) => (
                 <div
                   key={shot.id}
                   title={shot.subtitle || "无字幕"}
-                  style={{ width: `${Math.max(148, shot.durationSec * pxPerSec)}px` }}
+                  style={{ width: `${Math.max(148, durationSec * pxPerSec)}px` }}
                   className={`h-full px-2 rounded flex items-center overflow-hidden text-[10px] shrink-0 ${
                     shot.subtitle
                       ? "bg-[#553c12] border border-[#f59e0b]/45 text-[#fef3c7]"

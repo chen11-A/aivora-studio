@@ -81,15 +81,15 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
           { id: "sc_2", episodeId: "ep_1", orderIndex: 1, title: "第二场 · 书店内铜铃重逢", locationAssetId: "ast_shop", summary: "推门铜铃响，陈伯递出旧诗集", paragraphStart: 3, paragraphEnd: 5 },
         ],
         shots: [
-          { id: "sh_1", sceneId: "sc_1", episodeId: "ep_1", orderIndex: 0, title: "镜 01 · 雨后书店外景", scale: "远景", cameraMove: "缓推", durationSec: 4, visualPrompt: "雨后傍晚老街，橘红夕阳洒在湿润青石板上，晚照书店暖黄橱窗，电影感 35mm", negativePrompt: "", dialogue: "", speaker: "", subtitle: "雨后初晴的老街，晚照书店亮起了灯。", characterAssetIds: [], selectedImageTakeId: "tk_1_2", selectedVideoTakeId: null, selectedSpeechTakeId: null, updatedAt: now },
-          { id: "sh_2", sceneId: "sc_1", episodeId: "ep_1", orderIndex: 1, title: "镜 02 · 林晚驻足橱窗", scale: "近景", cameraMove: "缓推", durationSec: 3, visualPrompt: "林晚停下旧自行车摘下湿帽，侧脸望向橱窗诗集，玻璃倒映夕阳余晖", negativePrompt: "", dialogue: "这家店居然还开着。", speaker: "林晚", subtitle: "这家店居然还开着。", characterAssetIds: ["ast_lin"], selectedImageTakeId: "tk_2_1", selectedVideoTakeId: null, selectedSpeechTakeId: null, updatedAt: now },
-          { id: "sh_3", sceneId: "sc_2", episodeId: "ep_1", orderIndex: 2, title: "镜 03 · 推门铜铃轻响", scale: "中景", cameraMove: "横摇", durationSec: 5, visualPrompt: "书店木门推开铜铃晃动，高大书架间光束穿过微尘，陈伯站在梯子上微笑回头", negativePrompt: "", dialogue: "小晚，你终于回来了。那本夹着银杏叶的书，我替你留了整整三年。", speaker: "陈伯", subtitle: "那本夹着银杏叶的书，我替你留了整整三年。", characterAssetIds: ["ast_lin", "ast_chen"], selectedImageTakeId: "tk_3_1", selectedVideoTakeId: null, selectedSpeechTakeId: null, updatedAt: now },
+          { id: "sh_1", sceneId: "sc_1", episodeId: "ep_1", orderIndex: 0, title: "镜 01 · 雨后书店外景", scale: "远景", cameraMove: "缓推", durationSec: 4, trimInSec: 0, trimOutSec: 0, visualPrompt: "雨后傍晚老街，橘红夕阳洒在湿润青石板上，晚照书店暖黄橱窗，电影感 35mm", negativePrompt: "", dialogue: "", speaker: "", subtitle: "雨后初晴的老街，晚照书店亮起了灯。", characterAssetIds: [], selectedImageTakeId: "tk_1_2", selectedVideoTakeId: null, selectedSpeechTakeId: null, updatedAt: now },
+          { id: "sh_2", sceneId: "sc_1", episodeId: "ep_1", orderIndex: 1, title: "镜 02 · 林晚驻足橱窗", scale: "近景", cameraMove: "缓推", durationSec: 3, trimInSec: 0, trimOutSec: 0, visualPrompt: "林晚停下旧自行车摘下湿帽，侧脸望向橱窗诗集，玻璃倒映夕阳余晖", negativePrompt: "", dialogue: "这家店居然还开着。", speaker: "林晚", subtitle: "这家店居然还开着。", characterAssetIds: ["ast_lin"], selectedImageTakeId: "tk_2_1", selectedVideoTakeId: null, selectedSpeechTakeId: null, updatedAt: now },
+          { id: "sh_3", sceneId: "sc_2", episodeId: "ep_1", orderIndex: 2, title: "镜 03 · 推门铜铃轻响", scale: "中景", cameraMove: "横摇", durationSec: 5, trimInSec: 0, trimOutSec: 0, visualPrompt: "书店木门推开铜铃晃动，高大书架间光束穿过微尘，陈伯站在梯子上微笑回头", negativePrompt: "", dialogue: "小晚，你终于回来了。那本夹着银杏叶的书，我替你留了整整三年。", speaker: "陈伯", subtitle: "那本夹着银杏叶的书，我替你留了整整三年。", characterAssetIds: ["ast_lin", "ast_chen"], selectedImageTakeId: "tk_3_1", selectedVideoTakeId: null, selectedSpeechTakeId: null, updatedAt: now },
         ],
         takes: [
           { id: "tk_1_1", shotId: "sh_1", kind: "image", versionNumber: 1, mediaPath: imgShop, mediaSha256: null, promptSnapshot: "书店外景 v1", providerInfo: "示例画帧 v1", isSelected: false, durationSec: null, createdAt: now },
-          { id: "tk_1_2", shotId: "sh_1", kind: "image", versionNumber: 2, mediaPath: imgShot1, mediaSha256: null, promptSnapshot: "雨后晚霞书店外景 v2", providerInfo: "示例画帧 v2", isSelected: true, durationSec: null, createdAt: now },
-          { id: "tk_2_1", shotId: "sh_2", kind: "image", versionNumber: 1, mediaPath: imgShot2, mediaSha256: null, promptSnapshot: "林晚橱窗近景", providerInfo: "示例画帧 v1", isSelected: true, durationSec: null, createdAt: now },
-          { id: "tk_3_1", shotId: "sh_3", kind: "image", versionNumber: 1, mediaPath: imgShot3, mediaSha256: null, promptSnapshot: "推门重逢", providerInfo: "示例画帧 v1", isSelected: true, durationSec: null, createdAt: now },
+          { id: "tk_1_2", shotId: "sh_1", kind: "image", versionNumber: 2, mediaPath: imgShot1, mediaSha256: null, promptSnapshot: "雨后傍晚老街，橘红夕阳洒在湿润青石板上，晚照书店暖黄橱窗，电影感 35mm", providerInfo: "示例画帧 v2", isSelected: true, durationSec: null, createdAt: now },
+          { id: "tk_2_1", shotId: "sh_2", kind: "image", versionNumber: 1, mediaPath: imgShot2, mediaSha256: null, promptSnapshot: "林晚停下旧自行车摘下湿帽，侧脸望向橱窗诗集，玻璃倒映夕阳余晖 [角色:林晚]", providerInfo: "示例画帧 v1", isSelected: true, durationSec: null, createdAt: now },
+          { id: "tk_3_1", shotId: "sh_3", kind: "image", versionNumber: 1, mediaPath: imgShot3, mediaSha256: null, promptSnapshot: "书店木门推开铜铃晃动，高大书架间光束穿过微尘，陈伯站在梯子上微笑回头 [角色:林晚,陈伯]", providerInfo: "示例画帧 v1", isSelected: true, durationSec: null, createdAt: now },
         ],
         jobs: [],
       },
@@ -130,7 +130,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
         episodes: [{ id: `ep_${id}`, projectId: id, orderIndex: 0, title: "第 1 集", scriptText: input.initialScript ?? "", sourceAnchors: [], updatedAt: now }],
         assets: [],
         scenes: [{ id: `sc_${id}`, episodeId: `ep_${id}`, orderIndex: 0, title: "第一场 · 开场镜头", locationAssetId: null, summary: "", paragraphStart: 0, paragraphEnd: 0 }],
-        shots: [{ id: `sh_${id}`, sceneId: `sc_${id}`, episodeId: `ep_${id}`, orderIndex: 0, title: "镜 01 · 开场定场", scale: "全景", cameraMove: "缓推", durationSec: 4, visualPrompt: `${input.name} 开场画面`, negativePrompt: "", dialogue: "", speaker: "", subtitle: "", characterAssetIds: [], selectedImageTakeId: `tk_${id}`, selectedVideoTakeId: null, selectedSpeechTakeId: null, updatedAt: now }],
+        shots: [{ id: `sh_${id}`, sceneId: `sc_${id}`, episodeId: `ep_${id}`, orderIndex: 0, title: "镜 01 · 开场定场", scale: "全景", cameraMove: "缓推", durationSec: 4, trimInSec: 0, trimOutSec: 0, visualPrompt: `${input.name} 开场画面`, negativePrompt: "", dialogue: "", speaker: "", subtitle: "", characterAssetIds: [], selectedImageTakeId: `tk_${id}`, selectedVideoTakeId: null, selectedSpeechTakeId: null, updatedAt: now }],
         takes: [{ id: `tk_${id}`, shotId: `sh_${id}`, kind: "image", versionNumber: 1, mediaPath: cover, mediaSha256: null, promptSnapshot: "", providerInfo: "初始画板", isSelected: true, durationSec: null, createdAt: now }],
         jobs: [],
       };
@@ -183,7 +183,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     importAssetImage: async () => ({ ok: false, message: "请在桌面端导入本地定妆参考图" }),
     createShot: async (input) => {
       const ws = workspaces.get(input.projectId)!;
-      const shot: Shot = { id: `sh_${Date.now()}`, sceneId: input.sceneId, episodeId: input.episodeId, orderIndex: ws.shots.length, title: `镜 ${String(ws.shots.length + 1).padStart(2, "0")} · 新镜头`, scale: "中景", cameraMove: "固定", durationSec: 3, visualPrompt: "", negativePrompt: "", dialogue: "", speaker: "", subtitle: "", characterAssetIds: [], selectedImageTakeId: null, selectedVideoTakeId: null, selectedSpeechTakeId: null, updatedAt: new Date().toISOString() };
+      const shot: Shot = { id: `sh_${Date.now()}`, sceneId: input.sceneId, episodeId: input.episodeId, orderIndex: ws.shots.length, title: `镜 ${String(ws.shots.length + 1).padStart(2, "0")} · 新镜头`, scale: "中景", cameraMove: "固定", durationSec: 3, trimInSec: 0, trimOutSec: 0, visualPrompt: "", negativePrompt: "", dialogue: "", speaker: "", subtitle: "", characterAssetIds: [], selectedImageTakeId: null, selectedVideoTakeId: null, selectedSpeechTakeId: null, updatedAt: new Date().toISOString() };
       ws.shots.push(shot);
       return structuredClone(shot);
     },
@@ -296,6 +296,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
         proposal: {
           sourceMode: "offline_preview",
           providerSummary: "预览模式 · 导演拆镜提案",
+          assets: [],
           scenes: [
             {
               title: `第一场 · ${ep?.title || "第 1 集"}`,
@@ -309,6 +310,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
                 dialogue: "",
                 speaker: "",
                 subtitle: line.slice(0, 24),
+                sourceExcerpt: line.slice(0, 48),
                 characters: [],
               })),
             },
@@ -327,9 +329,10 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       workspace: structuredClone(workspaces.get(projectId)!),
       message: "已撤销拆镜提案",
     }),
-    prepareGenerationPlan: async ({ projectId, shotId, kind }) => {
+    prepareGenerationPlan: async ({ projectId, shotId, assetId, kind }) => {
       const ws = workspaces.get(projectId)!;
-      const shot = ws.shots.find((s) => s.id === shotId)!;
+      const shot = ws.shots.find((s) => s.id === shotId) ?? ws.shots[0]!;
+      const targetAsset = assetId ? ws.assets.find((a) => a.id === assetId) : null;
       const locked = ws.assets
         .filter((a) => a.lockedRef && (a.kind === "character" || a.kind === "scene" || a.kind === "prop"))
         .map((a) => ({
@@ -342,16 +345,17 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       return {
         planId: `pln_${Date.now()}`,
         projectId,
-        shotId,
-        shotTitle: shot.title,
+        shotId: shot.id,
+        assetId: targetAsset?.id ?? null,
+        shotTitle: targetAsset ? `定妆候选 · ${targetAsset.name}` : shot.title,
         kind,
         capability: kind === "speech" ? "tts" : kind,
         providerLabel: "未配置模型",
         protocol: "none",
         modelId: "",
         estimatedSec: kind === "video" ? 60 : 12,
-        promptPreview: shot.visualPrompt || shot.title,
-        injectedRefs: locked,
+        promptPreview: targetAsset ? `${targetAsset.name} · ${targetAsset.description}` : shot.visualPrompt || shot.title,
+        injectedRefs: targetAsset ? [] : locked,
         idempotencyKey: `idem_${Date.now()}`,
         inputSha256: "preview",
         providerSnapshotJson: "",
@@ -376,7 +380,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     cancelEpisodeExport: async () => ({ ok: false, message: "浏览器预览模式无导出任务" }),
     onFlushBeforeClose: () => () => undefined,
     notifyFlushComplete: () => undefined,
-    getAppInfo: async () => ({ version: "1.0.3", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "1.1.0", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
   };
 }

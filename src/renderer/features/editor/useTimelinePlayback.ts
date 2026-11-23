@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { resolveShotTrimWindow } from "@shared/media-selection";
 import type { Shot } from "@shared/types/domain";
 
 export type TimelineSegment = {
@@ -6,22 +7,32 @@ export type TimelineSegment = {
   index: number;
   startSec: number;
   endSec: number;
+  trimInSec: number;
+  trimOutSec: number;
+  durationSec: number;
 };
 
 /**
  * Real playback clock for the Editor timeline.
- * Advances playhead smoothly with requestAnimationFrame, automatically transitions
- * across shots, and exposes seek/play/pause/reset so both <video> takes and still
- * frames play continuously in exact order.
+ * Shares the exact `resolveShotTrimWindow` timebase with Subtitle generation and FFmpeg export.
  */
 export function useTimelinePlayback(shots: Shot[]) {
   const segments = useMemo<TimelineSegment[]>(() => {
     let cursor = 0;
     return shots.map((shot, index) => {
+      const win = resolveShotTrimWindow(shot);
       const startSec = cursor;
-      const endSec = cursor + shot.durationSec;
+      const endSec = Number((cursor + win.effectiveDurationSec).toFixed(2));
       cursor = endSec;
-      return { shot, index, startSec, endSec };
+      return {
+        shot,
+        index,
+        startSec,
+        endSec,
+        trimInSec: win.trimInSec,
+        trimOutSec: win.trimOutSec,
+        durationSec: win.effectiveDurationSec,
+      };
     });
   }, [shots]);
 
@@ -34,7 +45,6 @@ export function useTimelinePlayback(shots: Shot[]) {
   const [playheadSec, setPlayheadSec] = useState(0);
   const lastFrameRef = useRef<number | null>(null);
 
-  // Clamp playhead if episode switches or shot durations shrink
   useEffect(() => {
     setPlayheadSec((prev) => (totalSec <= 0 ? 0 : Math.min(prev, totalSec)));
   }, [totalSec]);
@@ -102,13 +112,16 @@ export function useTimelinePlayback(shots: Shot[]) {
     setPlayheadSec(0);
   };
 
+  const offsetInShotSec = activeSegment ? Math.max(0, playheadSec - activeSegment.startSec) : 0;
+
   return {
     segments,
     totalSec,
     playing,
     playheadSec,
     activeSegment,
-    offsetInShotSec: activeSegment ? Math.max(0, playheadSec - activeSegment.startSec) : 0,
+    offsetInShotSec,
+    sourceVideoTimeSec: activeSegment ? activeSegment.trimInSec + offsetInShotSec : 0,
     togglePlay,
     seekToTime,
     seekToShot,

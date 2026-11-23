@@ -337,7 +337,7 @@ export function registerIpcHandlers(deps: {
 
   handle(
     IPC_CHANNELS.JOB_PREPARE_PLAN,
-    (input: { projectId: string; shotId: string; kind: "image" | "video" | "speech" }) =>
+    (input: { projectId: string; shotId: string; assetId?: string; kind: "image" | "video" | "speech" }) =>
       deps.jobQueue.preparePlan(input),
   );
   handle(IPC_CHANNELS.JOB_CONFIRM_RUN, (plan: GenerationPlan) => deps.jobQueue.confirmAndRun(plan));

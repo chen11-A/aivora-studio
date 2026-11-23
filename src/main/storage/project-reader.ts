@@ -85,6 +85,8 @@ export function readWorkspaceFromDb(
       scale: (r.scale as Shot["scale"]) || "中景",
       cameraMove: (r.camera_move as Shot["cameraMove"]) || "固定",
       durationSec: Number(r.duration_sec ?? 3),
+      trimInSec: Number(r.trim_in_sec ?? 0),
+      trimOutSec: Number(r.trim_out_sec ?? 0),
       visualPrompt: String(r.visual_prompt ?? ""),
       negativePrompt: String(r.negative_prompt ?? ""),
       dialogue: String(r.dialogue ?? ""),

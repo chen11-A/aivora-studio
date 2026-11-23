@@ -30,6 +30,7 @@ interface AiGenerationStore {
   undoDirector: () => Promise<void>;
 
   openGenerationConfirm: (shotId: string, kind: "image" | "video" | "speech") => Promise<void>;
+  openAssetPortraitConfirm: (assetId: string) => Promise<void>;
   confirmRunPendingPlan: () => Promise<void>;
   recoverJob: (jobId: string, remoteTaskId?: string) => Promise<void>;
 }
@@ -163,6 +164,18 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
       const ws = useStudioStore.getState().workspace;
       if (!ws) return;
       const plan = await client.prepareGenerationPlan({ projectId: ws.project.id, shotId, kind });
+      set({ pendingPlan: plan });
+    },
+
+    async openAssetPortraitConfirm(assetId) {
+      const ws = useStudioStore.getState().workspace;
+      if (!ws) return;
+      const plan = await client.prepareGenerationPlan({
+        projectId: ws.project.id,
+        shotId: "",
+        assetId,
+        kind: "image",
+      });
       set({ pendingPlan: plan });
     },
 

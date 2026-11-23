@@ -1,6 +1,62 @@
 import { randomUUID } from "node:crypto";
 import type { Job, TakeKind } from "../../shared/types/domain";
+import type { CustomProviderProtocol } from "../../shared/types/provider";
+import type { OAuthManager } from "../auth/auth-manager";
+import { GROK_API } from "../auth/grok-oauth";
+import type { KlingVideoMode } from "../providers/kling-adapter";
+import type { GlobalConfigStore } from "../storage/global-store";
 import type { ProjectStore } from "../storage/project-store";
+
+export type LockedProviderSnapshot = {
+  source: "oauth" | "provider";
+  sourceId: string;
+  providerLabel: string;
+  protocol: CustomProviderProtocol | "oauth-grok" | "oauth-chatgpt";
+  baseUrl: string;
+  modelId: string;
+  klingMode?: KlingVideoMode;
+};
+
+/**
+ * Verifies that the snapshot stored inside `project.db` matches a trusted local account
+ * or provider configuration in `global.db` BEFORE releasing any local token or API key.
+ */
+export async function resolveTrustedLockedSecrets(
+  snapshot: LockedProviderSnapshot,
+  globalConfig: GlobalConfigStore,
+  oauth: OAuthManager,
+): Promise<{ apiKey: string; secondaryKey: string | null; trustedBaseUrl: string }> {
+  const cleanUrl = (u: string) => u.trim().replace(/\/+$/, "");
+
+  if (snapshot.source === "oauth") {
+    const expectedProtocol = snapshot.sourceId === "grok-web" ? "oauth-grok" : "oauth-chatgpt";
+    const canonicalBaseUrl =
+      snapshot.sourceId === "grok-web" ? cleanUrl(GROK_API) : "https://api.openai.com/v1";
+    if (
+      (snapshot.sourceId !== "grok-web" && snapshot.sourceId !== "chatgpt-web") ||
+      snapshot.protocol !== expectedProtocol ||
+      cleanUrl(snapshot.baseUrl) !== canonicalBaseUrl
+    ) {
+      throw new Error(
+        "安全拦截：工程内记录的账号或接口地址与本机官方授权配置不匹配，已拒绝携带本机凭据发起请求。",
+      );
+    }
+    const token = await oauth.getValidAccessToken(snapshot.sourceId);
+    return { apiKey: token, secondaryKey: null, trustedBaseUrl: canonicalBaseUrl };
+  }
+
+  const creds = globalConfig.getProviderCredentials(snapshot.sourceId);
+  if (!creds || !creds.apiKey) {
+    throw new Error(`已锁定的厂家「${snapshot.providerLabel}」在本机未配置或凭据不可用`);
+  }
+  const trustedBaseUrl = cleanUrl(creds.view.baseUrl);
+  if (creds.view.protocol !== snapshot.protocol || trustedBaseUrl !== cleanUrl(snapshot.baseUrl)) {
+    throw new Error(
+      `安全拦截：工程内记录的服务商地址（${snapshot.baseUrl}）与本机可信配置（${creds.view.baseUrl}）不匹配，已拒绝发送本机密钥。`,
+    );
+  }
+  return { apiKey: creds.apiKey, secondaryKey: creds.secondaryKey, trustedBaseUrl };
+}
 
 export function rowToJob(row: Record<string, unknown>): Job {
   return {
@@ -67,7 +123,7 @@ export function insertRunningJobRow(
   input: {
     jobId: string;
     projectId: string;
-    shotId: string;
+    shotId: string | null;
     kind: Job["kind"];
     idempotencyKey: string;
     inputSha256: string;
@@ -91,6 +147,30 @@ export function insertRunningJobRow(
       now,
       now,
     );
+  });
+}
+
+export function recordAssetPortraitCandidateInDb(
+  projects: ProjectStore,
+  input: {
+    projectId: string;
+    assetId: string;
+    media: { mediaPath: string; mediaSha256: string };
+  },
+): void {
+  const now = new Date().toISOString();
+  projects.withProjectDb(input.projectId, (db) => {
+    db.transaction(() => {
+      // Deliberately sets locked_ref = 0 so the user inspects the generated candidate before locking!
+      db.run(
+        `UPDATE assets SET media_path = ?, media_sha256 = ?, locked_ref = 0, updated_at = ? WHERE id = ?`,
+        input.media.mediaPath,
+        input.media.mediaSha256,
+        now,
+        input.assetId,
+      );
+      db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
+    });
   });
 }
 

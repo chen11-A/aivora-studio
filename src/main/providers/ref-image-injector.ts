@@ -86,3 +86,24 @@ export function injectLockedReferences(
     primaryReferenceImageBase64,
   };
 }
+
+export function buildAssetPortraitPrompt(
+  workspace: ProjectWorkspace,
+  assetId: string,
+): { title: string; prompt: string } {
+  const asset = workspace.assets.find((a) => a.id === assetId);
+  if (!asset) throw new Error("资产不存在");
+  const orientation = workspace.project.aspectRatio === "9:16" ? "竖屏 9:16 构图" : "横屏 16:9 构图";
+  const style = workspace.project.stylePreset ? `统一画风：${workspace.project.stylePreset}。` : "";
+  const kindLabel =
+    asset.kind === "character"
+      ? "影视角色定妆照（清晰五官与标志性服饰，干净背景）"
+      : asset.kind === "scene"
+        ? "影视空镜场景设定图（无杂乱路人，突出空间层次与光影）"
+        : "影视关键道具设定图（特写质感清晰）";
+  const desc = asset.description.trim() || `展现「${asset.name}」的核心特征`;
+  return {
+    title: `${asset.name} · 定妆候选图`,
+    prompt: `${orientation}。${style}${kindLabel}：${asset.name}。${desc}`,
+  };
+}

@@ -7,6 +7,7 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Scissors,
   Smartphone,
   Subtitles,
   Trash2,
@@ -17,6 +18,7 @@ import {
   isVideoMediaPath,
   resolveActiveVisualTake,
   resolveSelectedSpeechTake,
+  resolveShotTrimWindow,
 } from "@shared/media-selection";
 import type { SubtitleStyle } from "@shared/types/domain";
 import { getDesktopClient } from "../../lib/desktop-client";
@@ -53,6 +55,7 @@ export function EditorStage() {
   const importProjectBgm = useStudioStore((s) => s.importProjectBgm);
   const clearProjectBgm = useStudioStore((s) => s.clearProjectBgm);
   const jumpToShot = useStudioStore((s) => s.jumpToShot);
+  const editShot = useStudioStore((s) => s.editShot);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const speechRef = useRef<HTMLAudioElement | null>(null);
@@ -77,6 +80,7 @@ export function EditorStage() {
   };
 
   const currentShot = playback.activeSegment?.shot ?? null;
+  const currentTrim = currentShot ? resolveShotTrimWindow(currentShot) : null;
   const currentTake =
     workspace && currentShot ? resolveActiveVisualTake(currentShot, workspace.takes) : null;
   const currentSpeech =
@@ -90,19 +94,19 @@ export function EditorStage() {
       : null;
   const bgmSrc = resolveSrc(bgmAsset?.mediaPath);
 
-  // Sync HTML5 <video> element with timeline playback clock
+  // Sync HTML5 <video> element with trimmed timeline playback clock (`trimInSec + offsetInShotSec`)
   useEffect(() => {
     const el = videoRef.current;
     if (!el || !previewIsVideo) return;
-    if (Math.abs(el.currentTime - playback.offsetInShotSec) > 0.35) {
-      el.currentTime = playback.offsetInShotSec;
+    if (Math.abs(el.currentTime - playback.sourceVideoTimeSec) > 0.35) {
+      el.currentTime = playback.sourceVideoTimeSec;
     }
     if (playback.playing) {
       void el.play().catch(() => undefined);
     } else {
       el.pause();
     }
-  }, [playback.playing, playback.offsetInShotSec, currentTake?.id, previewIsVideo]);
+  }, [playback.playing, playback.sourceVideoTimeSec, currentTake?.id, previewIsVideo]);
 
   // Sync shot speech <audio> with timeline clock
   useEffect(() => {
@@ -118,18 +122,22 @@ export function EditorStage() {
     }
   }, [playback.playing, playback.offsetInShotSec, currentSpeech?.id, speechSrc]);
 
-  // Sync project BGM <audio> and live dB gain
+  // Sync project BGM <audio> with live -8 dB ducking whenever the active shot has dialogue
+  const hasActiveDialogue = Boolean(currentSpeech || currentShot?.dialogue.trim());
   useEffect(() => {
     const el = bgmRef.current;
     if (!el || !bgmSrc || !workspace) return;
-    const linear = Math.min(1, Math.max(0, Math.pow(10, workspace.project.bgmVolumeDb / 20)));
+    const effDb = hasActiveDialogue
+      ? workspace.project.bgmVolumeDb - 8
+      : workspace.project.bgmVolumeDb;
+    const linear = Math.min(1, Math.max(0, Math.pow(10, effDb / 20)));
     el.volume = linear;
     if (playback.playing) {
       void el.play().catch(() => undefined);
     } else {
       el.pause();
     }
-  }, [playback.playing, bgmSrc, workspace?.project.bgmVolumeDb]);
+  }, [playback.playing, bgmSrc, workspace?.project.bgmVolumeDb, hasActiveDialogue]);
 
   if (!workspace) return null;
 
@@ -148,6 +156,7 @@ export function EditorStage() {
           <div className="panel-scroll flex-1 p-2 flex flex-col gap-1.5">
             {epShots.map((shot, idx) => {
               const tk = resolveActiveVisualTake(shot, workspace.takes);
+              const win = resolveShotTrimWindow(shot);
               const active = idx === playback.activeSegment?.index;
               return (
                 <button
@@ -163,7 +172,9 @@ export function EditorStage() {
                   <div className="text-[12px] font-medium truncate">{shot.title}</div>
                   <div className="text-[10px] text-[#768196] flex items-center justify-between mt-0.5">
                     <span>{tk ? `版本 ${tk.versionNumber}` : "缺失画面"}</span>
-                    <span>{shot.durationSec}s</span>
+                    <span>
+                      {win.isTrimmed ? `${win.trimInSec}~${win.trimOutSec}s` : `${win.effectiveDurationSec}s`}
+                    </span>
                   </div>
                 </button>
               );
@@ -316,6 +327,68 @@ export function EditorStage() {
               )}
             </div>
 
+            {currentShot && currentTrim && (
+              <div
+                data-testid="editor-shot-trim-card"
+                className="rounded-lg p-2.5 bg-[#0f1218] border border-[#252b37] flex flex-col gap-1.5"
+              >
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-[#a4aec0] flex items-center gap-1.5 font-medium truncate">
+                    <Scissors className="w-3.5 h-3.5 text-[#38bdf8] shrink-0" />
+                    <span className="truncate">镜头裁切（不改原素材）：{currentShot.title}</span>
+                  </span>
+                  {currentTrim.isTrimmed && (
+                    <button
+                      type="button"
+                      onClick={() => void editShot({ shotId: currentShot.id, trimInSec: 0, trimOutSec: 0 })}
+                      className="text-[10px] text-[#60a5fa] hover:underline shrink-0 cursor-pointer"
+                    >
+                      重置
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-3 gap-1.5 items-center text-[11px]">
+                  <label className="flex items-center gap-1 text-[#768196]">
+                    <span>入点</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={59}
+                      step={0.5}
+                      value={currentTrim.trimInSec}
+                      onChange={(e) => {
+                        const nextIn = Math.max(0, Number(e.target.value) || 0);
+                        const nextOut =
+                          currentTrim.trimOutSec > nextIn + 0.5
+                            ? currentTrim.trimOutSec
+                            : Number((nextIn + currentTrim.effectiveDurationSec).toFixed(2));
+                        void editShot({ shotId: currentShot.id, trimInSec: nextIn, trimOutSec: nextOut });
+                      }}
+                      className="w-full h-6 px-1.5 rounded bg-[#14171e] border border-[#252b37] text-[#f3f5f9] font-mono text-[11px]"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1 text-[#768196]">
+                    <span>出点</span>
+                    <input
+                      type="number"
+                      min={0.5}
+                      max={60}
+                      step={0.5}
+                      value={currentTrim.trimOutSec}
+                      onChange={(e) => {
+                        const rawOut = Math.max(currentTrim.trimInSec + 0.5, Number(e.target.value) || 1);
+                        void editShot({ shotId: currentShot.id, trimInSec: currentTrim.trimInSec, trimOutSec: rawOut });
+                      }}
+                      className="w-full h-6 px-1.5 rounded bg-[#14171e] border border-[#252b37] text-[#f3f5f9] font-mono text-[11px]"
+                    />
+                  </label>
+                  <span className="text-right font-mono text-[11px] text-[#93c5fd]">
+                    选用 {currentTrim.effectiveDurationSec}s
+                  </span>
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-col gap-1.5">
               <label className="text-[11px] text-[#a4aec0] flex items-center gap-1.5">
                 <Subtitles className="w-3.5 h-3.5 text-[#f59e0b]" />
@@ -343,7 +416,7 @@ export function EditorStage() {
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-[#a4aec0] flex items-center gap-1.5">
                   <Music className="w-3.5 h-3.5 text-[#38bdf8]" />
-                  <span>背景配乐</span>
+                  <span>背景配乐（对白自动压低 8 dB）</span>
                 </span>
                 <span className="font-mono text-[#f3f5f9]">{workspace.project.bgmVolumeDb} dB</span>
               </div>

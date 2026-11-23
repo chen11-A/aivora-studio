@@ -98,7 +98,8 @@ export function ScriptStage() {
               {episode?.title ?? "未选择分集"}
             </h1>
             <span className="text-[11px] text-[#768196]">
-              {paragraphs.length} 段 · {(episode?.scriptText.length ?? 0)} 字
+              {paragraphs.length} 段 · {episode?.scriptText.length ?? 0} 字 · 预计约{" "}
+              {Math.max(8, Math.round((episode?.scriptText.replace(/\s+/g, "").length ?? 0) / 4.2))} 秒
             </span>
           </div>
           <span className="text-[11px] text-[#768196]">切集或切页前自动同步落盘</span>

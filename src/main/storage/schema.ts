@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS shots (
   scale TEXT NOT NULL DEFAULT '中景',
   camera_move TEXT NOT NULL DEFAULT '固定',
   duration_sec REAL NOT NULL DEFAULT 3,
+  trim_in_sec REAL NOT NULL DEFAULT 0,
+  trim_out_sec REAL NOT NULL DEFAULT 0,
   visual_prompt TEXT NOT NULL DEFAULT '',
   negative_prompt TEXT NOT NULL DEFAULT '',
   dialogue TEXT NOT NULL DEFAULT '',
@@ -140,6 +142,15 @@ CREATE TABLE IF NOT EXISTS model_routing (
 
 export function initProjectSchema(db: SqliteDriver): void {
   db.exec(PROJECT_SCHEMA_SQL);
+  const cols = new Set(
+    db.all<{ name: string }>(`PRAGMA table_info(shots)`).map((c) => c.name),
+  );
+  if (!cols.has("trim_in_sec")) {
+    db.exec(`ALTER TABLE shots ADD COLUMN trim_in_sec REAL NOT NULL DEFAULT 0`);
+  }
+  if (!cols.has("trim_out_sec")) {
+    db.exec(`ALTER TABLE shots ADD COLUMN trim_out_sec REAL NOT NULL DEFAULT 0`);
+  }
 }
 
 export function initGlobalSchema(db: SqliteDriver): void {

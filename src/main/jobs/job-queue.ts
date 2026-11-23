@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { resolveActiveVisualTake } from "../../shared/media-selection";
 import type { Job } from "../../shared/types/domain";
 import type { GenerationPlan, JobExecutionResult } from "../../shared/types/jobs";
-import type { CapabilityKey, CustomProviderProtocol } from "../../shared/types/provider";
+import type { CapabilityKey } from "../../shared/types/provider";
 import type { OAuthManager } from "../auth/auth-manager";
 import { GROK_API } from "../auth/grok-oauth";
 import {
@@ -16,13 +16,15 @@ import {
   pollAndDownloadKlingVideo,
   queryKlingVideoTask,
   submitKlingVideoTask,
-  type KlingVideoMode,
 } from "../providers/kling-adapter";
 import {
   runOpenAiImageGeneration,
   runOpenAiSpeechSynthesis,
 } from "../providers/openai-compat-adapter";
-import { injectLockedReferences } from "../providers/ref-image-injector";
+import {
+  buildAssetPortraitPrompt,
+  injectLockedReferences,
+} from "../providers/ref-image-injector";
 import type { GlobalConfigStore } from "../storage/global-store";
 import type { ProjectStore } from "../storage/project-store";
 import {
@@ -30,19 +32,12 @@ import {
   insertRunningJobRow,
   listJobRows,
   reconcileOrphanRunningJobs,
+  recordAssetPortraitCandidateInDb,
   recordSuccessfulTakeInDb,
+  resolveTrustedLockedSecrets,
   updateJobRow,
+  type LockedProviderSnapshot,
 } from "./job-persistence";
-
-type LockedProviderSnapshot = {
-  source: "oauth" | "provider";
-  sourceId: string;
-  providerLabel: string;
-  protocol: CustomProviderProtocol | "oauth-grok" | "oauth-chatgpt";
-  baseUrl: string;
-  modelId: string;
-  klingMode?: KlingVideoMode;
-};
 
 /**
  * Anti-Duplicate-Charge Job Queue:
@@ -53,6 +48,7 @@ type LockedProviderSnapshot = {
  */
 export class GenerationJobQueue {
   private readonly activeJobIds = new Set<string>();
+  private readonly activeInputHashes = new Set<string>();
 
   constructor(
     private readonly projects: ProjectStore,
@@ -79,24 +75,29 @@ export class GenerationJobQueue {
   preparePlan(input: {
     projectId: string;
     shotId: string;
+    assetId?: string;
     kind: "image" | "video" | "speech";
   }): GenerationPlan {
     const ws = this.projects.openProject(input.projectId);
-    const shot = ws.shots.find((s) => s.id === input.shotId);
-    if (!shot) throw new Error("镜头不存在");
+    const isAssetPortrait = Boolean(input.assetId && input.kind === "image");
+    const shot = isAssetPortrait ? null : ws.shots.find((s) => s.id === input.shotId);
+    if (!isAssetPortrait && !shot) throw new Error("镜头不存在");
 
     const capability: CapabilityKey =
       input.kind === "image" ? "image" : input.kind === "video" ? "video" : "tts";
     const snap = this.globalConfig.getSnapshot();
     const binding = snap.routing[capability];
 
-    const activeVisual = resolveActiveVisualTake(shot, ws.takes);
-    const prepared = injectLockedReferences(
-      ws,
-      ws.dirPath,
-      shot,
-      input.kind === "video" ? activeVisual?.mediaPath : null,
-    );
+    const portraitInfo = isAssetPortrait ? buildAssetPortraitPrompt(ws, input.assetId!) : null;
+    const activeVisual = shot ? resolveActiveVisualTake(shot, ws.takes) : null;
+    const prepared = shot
+      ? injectLockedReferences(
+          ws,
+          ws.dirPath,
+          shot,
+          input.kind === "video" ? activeVisual?.mediaPath : null,
+        )
+      : { finalPrompt: portraitInfo!.prompt, injectedRefs: [], primaryReferenceImageBase64: null };
 
     let blockingReason: string | null = null;
     let providerLabel = "未配置模型";
@@ -145,21 +146,29 @@ export class GenerationJobQueue {
       }
     }
 
-    if (input.kind === "speech" && !shot.dialogue.trim() && !shot.subtitle.trim()) {
-      blockingReason = "当前镜头没有台词或字幕文本，请先在高级参数中填写台词。";
+    if (shot && input.kind === "speech" && !shot.dialogue.trim() && !shot.subtitle.trim()) {
+      blockingReason = "当前镜头没有台词或字幕文本，请先填写台词。";
     }
 
     const promptPreview =
-      input.kind === "speech" ? shot.dialogue.trim() || shot.subtitle.trim() : prepared.finalPrompt;
+      shot && input.kind === "speech"
+        ? shot.dialogue.trim() || shot.subtitle.trim()
+        : prepared.finalPrompt;
+    const targetKey = input.assetId || input.shotId;
     const inputSha256 = createHash("sha256")
-      .update(`${input.shotId}:${input.kind}:${modelId}:${promptPreview}`)
+      .update(`${targetKey}:${input.kind}:${modelId}:${promptPreview}`)
       .digest("hex");
+
+    if (!blockingReason && this.activeInputHashes.has(inputSha256)) {
+      blockingReason = "相同参数的生成任务正在运行中，为防重复扣费已拦截重复提交。";
+    }
 
     return {
       planId: `pln_${randomUUID().replaceAll("-", "").slice(0, 10)}`,
       projectId: input.projectId,
       shotId: input.shotId,
-      shotTitle: shot.title,
+      assetId: input.assetId ?? null,
+      shotTitle: portraitInfo ? portraitInfo.title : shot!.title,
       kind: input.kind,
       capability,
       providerLabel,
@@ -180,13 +189,16 @@ export class GenerationJobQueue {
     if (!plan.canRun || !plan.providerSnapshotJson) {
       throw new Error(plan.blockingReason || "任务配置不完整，无法开始生成");
     }
+    if (this.activeInputHashes.has(plan.inputSha256)) {
+      throw new Error("相同参数的生成任务正在运行中，请勿重复提交");
+    }
     const snapshot = JSON.parse(plan.providerSnapshotJson) as LockedProviderSnapshot;
     const jobId = `job_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
 
     insertRunningJobRow(this.projects, {
       jobId,
       projectId: plan.projectId,
-      shotId: plan.shotId,
+      shotId: plan.assetId ? null : plan.shotId,
       kind: plan.kind,
       idempotencyKey: plan.idempotencyKey,
       inputSha256: plan.inputSha256,
@@ -195,14 +207,43 @@ export class GenerationJobQueue {
     });
 
     const ws = this.projects.openProject(plan.projectId);
-    const shot = ws.shots.find((s) => s.id === plan.shotId);
-    if (!shot) throw new Error("镜头不存在");
+    const shot = plan.assetId ? null : ws.shots.find((s) => s.id === plan.shotId);
+    if (!plan.assetId && !shot) throw new Error("镜头不存在");
 
     this.activeJobIds.add(jobId);
+    this.activeInputHashes.add(plan.inputSha256);
     try {
       const { apiKey, secondaryKey, trustedBaseUrl } = await this.resolveLockedSecrets(snapshot);
 
-      if (plan.kind === "video" && snapshot.protocol === "kling-video") {
+      if (plan.assetId && plan.kind === "image") {
+        const media = await runOpenAiImageGeneration(
+          {
+            baseUrl: trustedBaseUrl,
+            apiKey,
+            modelId: snapshot.modelId,
+            prompt: plan.promptPreview,
+            aspectRatio: ws.project.aspectRatio,
+            projectDir: ws.dirPath,
+          },
+          this.fetcher,
+        );
+        recordAssetPortraitCandidateInDb(this.projects, {
+          projectId: plan.projectId,
+          assetId: plan.assetId,
+          media,
+        });
+        const done = updateJobRow(this.projects, plan.projectId, jobId, {
+          status: "succeeded",
+          progress: 100,
+        });
+        return {
+          ok: true,
+          job: done,
+          message: "定妆候选图已生成（尚未自动锁定，确认满意后请点击「设为已确认参考」）",
+        };
+      }
+
+      if (plan.kind === "video" && snapshot.protocol === "kling-video" && shot) {
         const activeVisual = resolveActiveVisualTake(shot, ws.takes);
         const prepared = injectLockedReferences(ws, ws.dirPath, shot, activeVisual?.mediaPath);
         const submitted = await submitKlingVideoTask(
@@ -247,7 +288,7 @@ export class GenerationJobQueue {
         return this.completeTakeJob(plan, jobId, snapshot, "video", media, "视频生成成功并已自动拉回本地保存");
       }
 
-      if (plan.kind === "video" && snapshot.protocol === "oauth-grok") {
+      if (plan.kind === "video" && snapshot.protocol === "oauth-grok" && shot) {
         const activeVisual = resolveActiveVisualTake(shot, ws.takes);
         const prepared = injectLockedReferences(ws, ws.dirPath, shot, activeVisual?.mediaPath);
         const submitted = await submitGrokVideoTask(
@@ -281,7 +322,7 @@ export class GenerationJobQueue {
         return this.completeTakeJob(plan, jobId, snapshot, "video", media, "Grok 视频生成成功并已自动拉回本地保存");
       }
 
-      if (plan.kind === "image") {
+      if (plan.kind === "image" && shot) {
         const prepared = injectLockedReferences(ws, ws.dirPath, shot, null);
         const media = await runOpenAiImageGeneration(
           {
@@ -298,7 +339,7 @@ export class GenerationJobQueue {
         return this.completeTakeJob(plan, jobId, snapshot, "image", media, "首帧图生成成功，已新增版本并选中");
       }
 
-      if (plan.kind === "speech") {
+      if (plan.kind === "speech" && shot) {
         const speakerAsset = ws.assets.find((a) => a.kind === "character" && a.name === shot.speaker);
         const media = await runOpenAiSpeechSynthesis(
           {
@@ -326,6 +367,7 @@ export class GenerationJobQueue {
       return { ok: false, job: updated, message: msg };
     } finally {
       this.activeJobIds.delete(jobId);
+      this.activeInputHashes.delete(plan.inputSha256);
     }
   }
 
@@ -443,46 +485,7 @@ export class GenerationJobQueue {
     return { ok: false, job: pending, message: pending.errorMessage! };
   }
 
-  /**
-   * Verifies that the snapshot stored inside `project.db` matches a trusted local account
-   * or provider configuration in `global.db` BEFORE releasing any local token or API key.
-   * Prevents untrusted imported project files from exfiltrating local credentials to arbitrary URLs.
-   */
-  private async resolveLockedSecrets(
-    snapshot: LockedProviderSnapshot,
-  ): Promise<{ apiKey: string; secondaryKey: string | null; trustedBaseUrl: string }> {
-    const cleanUrl = (u: string) => u.trim().replace(/\/+$/, "");
-
-    if (snapshot.source === "oauth") {
-      const expectedProtocol = snapshot.sourceId === "grok-web" ? "oauth-grok" : "oauth-chatgpt";
-      const canonicalBaseUrl =
-        snapshot.sourceId === "grok-web" ? cleanUrl(GROK_API) : "https://api.openai.com/v1";
-      if (
-        (snapshot.sourceId !== "grok-web" && snapshot.sourceId !== "chatgpt-web") ||
-        snapshot.protocol !== expectedProtocol ||
-        cleanUrl(snapshot.baseUrl) !== canonicalBaseUrl
-      ) {
-        throw new Error(
-          "安全拦截：工程内记录的账号或接口地址与本机官方授权配置不匹配，已拒绝携带本机凭据发起请求。",
-        );
-      }
-      const token = await this.oauth.getValidAccessToken(snapshot.sourceId);
-      return { apiKey: token, secondaryKey: null, trustedBaseUrl: canonicalBaseUrl };
-    }
-
-    const creds = this.globalConfig.getProviderCredentials(snapshot.sourceId);
-    if (!creds || !creds.apiKey) {
-      throw new Error(`已锁定的厂家「${snapshot.providerLabel}」在本机未配置或凭据不可用`);
-    }
-    const trustedBaseUrl = cleanUrl(creds.view.baseUrl);
-    if (
-      creds.view.protocol !== snapshot.protocol ||
-      trustedBaseUrl !== cleanUrl(snapshot.baseUrl)
-    ) {
-      throw new Error(
-        `安全拦截：工程内记录的服务商地址（${snapshot.baseUrl}）与本机可信配置（${creds.view.baseUrl}）不匹配，已拒绝发送本机密钥。`,
-      );
-    }
-    return { apiKey: creds.apiKey, secondaryKey: creds.secondaryKey, trustedBaseUrl };
+  private resolveLockedSecrets(snapshot: LockedProviderSnapshot) {
+    return resolveTrustedLockedSecrets(snapshot, this.globalConfig, this.oauth);
   }
 }

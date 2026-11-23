@@ -418,4 +418,74 @@ describe("export-pipeline & ExportWriteGuard", () => {
     },
     60_000,
   );
+
+  it(
+    "trims a 4s video take via non-destructive trimInSec/trimOutSec (0.5s~2.5s = 2.0s) without modifying the source file on disk",
+    async () => {
+      const ff = await probeFfmpegStatus();
+      expect(ff.available).toBe(true);
+      const ffmpeg = ff.ffmpegPath!;
+      const { evaluateEpisodeExportReadiness } = await import("../../shared/media-selection");
+
+      const base = makeTempDir("aivora-trim-");
+      const fixtures = path.join(base, "fixtures");
+      mkdirSync(fixtures, { recursive: true });
+
+      const src4s = path.join(fixtures, "clip4s.mp4");
+      await runMediaBinary(ffmpeg, [
+        "-hide_banner", "-nostdin", "-y",
+        "-f", "lavfi", "-i", "color=c=0x2d6a4f:s=640x360:r=30:d=4",
+        "-f", "lavfi", "-i", "sine=frequency=520:duration=4:sample_rate=48000",
+        "-t", "4", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ac", "2", src4s,
+      ]);
+
+      const store = new ProjectStore(path.join(base, "无损裁切 空间"));
+      const created = store.createProject({ name: "不改原素材裁切剧", aspectRatio: "16:9" });
+      const epId = created.episodes[0]!.id;
+      const shotId = created.shots[0]!.id;
+
+      const afterImport = store.importShotTakeFromPath({
+        projectId: created.project.id,
+        shotId,
+        kind: "video",
+        sourceFilePath: src4s,
+      });
+      const take = afterImport.takes[0]!;
+      const projectMediaFile = path.join(afterImport.dirPath, take.mediaPath);
+      const hashBeforeTrim = createHash("sha256").update(readFileSync(projectMediaFile)).digest("hex");
+
+      // Set non-destructive trim window: 0.5s -> 2.5s (effective 2.0s) + dialogue for BGM ducking
+      store.updateShot({
+        projectId: created.project.id,
+        shotId,
+        durationSec: 4,
+        trimInSec: 0.5,
+        trimOutSec: 2.5,
+        dialogue: "裁切后只取中间两秒。",
+        subtitle: "裁切后只取中间两秒。",
+      });
+      const afterTrim = store.openProject(created.project.id);
+
+      const readiness = evaluateEpisodeExportReadiness(afterTrim, epId);
+      expect(readiness.totalDurationSec).toBe(2);
+
+      const outMp4 = path.join(afterTrim.dirPath, "exports", "裁切2秒成片.mp4");
+      const res = await exportEpisodeToMp4({
+        workspace: afterTrim,
+        projectDir: afterTrim.dirPath,
+        episodeId: epId,
+        outputPath: outMp4,
+      });
+      expect(res.ok).toBe(true);
+      expect(res.durationSec).toBeGreaterThanOrEqual(1.8);
+      expect(res.durationSec).toBeLessThanOrEqual(2.3);
+
+      // Original imported media file on disk must be 100% byte-identical
+      const hashAfterTrim = createHash("sha256").update(readFileSync(projectMediaFile)).digest("hex");
+      expect(hashAfterTrim).toBe(hashBeforeTrim);
+
+      store.closeAll();
+    },
+    60_000,
+  );
 });

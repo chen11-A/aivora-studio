@@ -532,11 +532,7 @@ describe("GenerationJobQueue anti-duplicate-charge guarantees", () => {
 
     const demo = projects.openDemoProject();
     const queue = new GenerationJobQueue(projects, globalConfig, oauth, mockFetch, 1, 2);
-    const plan = queue.preparePlan({
-      projectId: demo.project.id,
-      shotId: demo.shots[0]!.id,
-      kind: "video",
-    });
+    const plan = queue.preparePlan({ projectId: demo.project.id, shotId: demo.shots[0]!.id, kind: "video" });
 
     // 1. Remote generation succeeds, but CDN download returns 504 -> must stay `unknown` (NOT `failed`)
     const first = await queue.confirmAndRun(plan);
@@ -547,24 +543,43 @@ describe("GenerationJobQueue anti-duplicate-charge guarantees", () => {
     expect(postCount).toBe(1);
 
     // 2. User clicks recover -> CDN is still 504 -> stays `unknown` so user can retry again
-    const retryWhileDown = await queue.recoverUnknownJob({
-      projectId: demo.project.id,
-      jobId: first.job.id,
-    });
+    const retryWhileDown = await queue.recoverUnknownJob({ projectId: demo.project.id, jobId: first.job.id });
     expect(retryWhileDown.ok).toBe(false);
     expect(retryWhileDown.job.status).toBe("unknown");
     expect(postCount).toBe(1);
 
     // 3. CDN recovers -> GET-only recovery downloads MP4 and completes job with 0 extra POSTs
     cdnDown = false;
-    const recovered = await queue.recoverUnknownJob({
-      projectId: demo.project.id,
-      jobId: first.job.id,
-    });
+    const recovered = await queue.recoverUnknownJob({ projectId: demo.project.id, jobId: first.job.id });
     expect(recovered.ok).toBe(true);
     expect(recovered.job.status).toBe("succeeded");
     expect(postCount).toBe(1);
 
+    projects.closeAll();
+    globalConfig.close();
+  });
+
+  it("generates an asset portrait candidate (assetId) and leaves lockedRef false until user explicitly locks it", async () => {
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-portrait-"));
+    tempDirs.push(base);
+    const projects = new ProjectStore(path.join(base, "ws"));
+    const globalConfig = new GlobalConfigStore(path.join(base, "app"), mockVault);
+    const oauth = new OAuthManager(globalConfig, async () => undefined);
+    const prv = globalConfig.saveProvider({ name: "ImgGen", protocol: "openai-image", baseUrl: "https://api.imggen.test/v1", models: ["gpt-image-1"], apiKey: "sk-p", enabled: true });
+    globalConfig.updateRouting({ script: null, image: { source: "provider", sourceId: prv.id, modelId: "gpt-image-1" }, video: null, tts: null });
+    const demo = projects.openDemoProject();
+    const asset = demo.assets.find((a) => a.kind === "character")!;
+    const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const queue = new GenerationJobQueue(projects, globalConfig, oauth, async () =>
+      new Response(JSON.stringify({ data: [{ b64_json: tinyPng }] }), { status: 200 }),
+    );
+    const plan = queue.preparePlan({ projectId: demo.project.id, shotId: demo.shots[0]!.id, assetId: asset.id, kind: "image" });
+    expect(plan.assetId).toBe(asset.id);
+    const res = await queue.confirmAndRun(plan);
+    expect(res.ok).toBe(true);
+    const updatedAsset = projects.openProject(demo.project.id).assets.find((a) => a.id === asset.id)!;
+    expect(updatedAsset.mediaPath).toMatch(/^assets\/[0-9a-f]+\.png$/);
+    expect(updatedAsset.lockedRef).toBe(false);
     projects.closeAll();
     globalConfig.close();
   });
