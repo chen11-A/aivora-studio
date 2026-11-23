@@ -158,10 +158,17 @@ export async function pollAndDownloadGrokVideo(
 
     if (query.status === "succeed" && query.videoUrl) {
       input.onProgress(90);
-      return downloadVerifiedKlingMp4(
-        { videoUrl: query.videoUrl, projectDir: input.projectDir },
-        fetcher,
-      );
+      try {
+        return await downloadVerifiedKlingMp4(
+          { videoUrl: query.videoUrl, projectDir: input.projectDir },
+          fetcher,
+        );
+      } catch (err) {
+        throw new AmbiguousRemoteError(
+          `Grok 远端视频已生成成功，但拉回本地失败（${err instanceof Error ? err.message : String(err)}），已保留任务号，请点击「查单找回」重新下载，切勿重新付费生成。`,
+          input.taskId,
+        );
+      }
     }
     if (query.status === "failed") {
       throw new Error(`Grok 视频生成失败：${query.errorMessage || "请调整提示词后重试"}`);

@@ -11,25 +11,25 @@ import {
 import type { ProjectWorkspace } from "../../shared/types/domain";
 import { probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
 import { resolveConfinedMediaPath } from "./media-protocol";
+import {
+  resolveEffectiveAudioDurationSec,
+  resolveEffectiveVideoDurationSec,
+  type ProbedMediaInfo,
+} from "./stream-duration";
 
-type ProbeResult = {
-  streams?: Array<{ codec_type?: string }>;
-  format?: { duration?: string };
-};
-
-async function probeFile(ffprobePath: string, filePath: string): Promise<ProbeResult> {
+async function probeFile(ffprobePath: string, filePath: string): Promise<ProbedMediaInfo> {
   const { stdout } = await runMediaBinary(
     ffprobePath,
     ["-v", "error", "-show_streams", "-show_format", "-of", "json", path.resolve(filePath)],
     { timeoutMs: 12_000 },
   );
-  return JSON.parse(stdout) as ProbeResult;
+  return JSON.parse(stdout) as ProbedMediaInfo;
 }
 
 /**
  * On-demand pre-export health check (run when opening ExportModal, never during typing):
  * - Verifies every shot's selected visual & speech asset exists and has valid media streams
- * - Flags short video takes (< shot.durationSec) so users know freeze-frame padding will apply
+ * - Flags short video tracks (< shot.durationSec) using true video-stream duration (not container duration)
  * - Checks free disk space conservatively (fail-open if statfs is unsupported on network/virtual FS)
  */
 export async function preflightEpisodeExport(input: {
@@ -77,16 +77,21 @@ export async function preflightEpisodeExport(input: {
         if (!hasVideo) {
           blockingIssues.push(`镜头「${shot.title}」的视频文件缺少有效视频流，可能已损坏。`);
         } else {
-          const actualDur = Number(info.format?.duration ?? 0);
-          if (Number.isFinite(actualDur) && actualDur > 0 && actualDur + 0.15 < shot.durationSec) {
+          const videoDur = resolveEffectiveVideoDurationSec(info);
+          const audioDur = resolveEffectiveAudioDurationSec(info);
+          if (videoDur !== null && videoDur + 0.15 < shot.durationSec) {
             shortClips.push({
               shotId: shot.id,
               shotTitle: shot.title,
               shotDurationSec: shot.durationSec,
-              clipDurationSec: Number(actualDur.toFixed(2)),
+              clipDurationSec: Number(videoDur.toFixed(2)),
             });
+            const trackNote =
+              audioDur !== null && audioDur - videoDur > 0.5
+                ? `（画面轨 ${videoDur.toFixed(1)}s，音轨 ${audioDur.toFixed(1)}s）`
+                : `（实际画面 ${videoDur.toFixed(1)}s）`;
             warnings.push(
-              `「${shot.title}」视频素材仅 ${actualDur.toFixed(1)}s（镜头设定 ${shot.durationSec}s），导出将自动末帧停帧补齐，或可先回分镜页调短时长。`,
+              `「${shot.title}」视频画面短于镜头设定 ${shot.durationSec}s${trackNote}，导出将自动末帧停帧补齐，或可先回分镜页调短时长。`,
             );
           }
         }

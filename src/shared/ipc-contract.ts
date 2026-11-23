@@ -180,7 +180,7 @@ export type AivoraDesktopApi = {
 
   // App lifecycle & diagnostics
   onFlushBeforeClose: (listener: () => void) => () => void;
-  notifyFlushComplete: () => void;
+  notifyFlushComplete: (ok: boolean) => void;
   getAppInfo: () => Promise<{
     version: string;
     workspaceRoot: string;

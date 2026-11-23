@@ -22,6 +22,11 @@ import {
   runMediaBinary,
 } from "./ffmpeg-locator";
 import { resolveConfinedMediaPath } from "./media-protocol";
+import {
+  resolveEffectiveAudioDurationSec,
+  resolveEffectiveVideoDurationSec,
+  type ProbedMediaInfo,
+} from "./stream-duration";
 import { buildAssHeader, escapeAssText, generateSubtitles, videoDimensions } from "./subtitles";
 
 const BASE_FFMPEG = ["-hide_banner", "-nostdin", "-y", "-filter_threads", "1"];
@@ -41,22 +46,17 @@ const VIDEO_ENC = [
 ];
 const AUDIO_ENC = ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"];
 
-type ProbeResult = {
-  streams: Array<{ codec_type?: string; width?: number; height?: number }>;
-  format?: { duration?: string };
-};
-
 async function probeMedia(
   filePath: string,
   ffprobePath: string,
   signal?: AbortSignal,
-): Promise<ProbeResult> {
+): Promise<ProbedMediaInfo> {
   const { stdout } = await runMediaBinary(
     ffprobePath,
     ["-v", "error", "-show_streams", "-show_format", "-of", "json", path.resolve(filePath)],
     { signal },
   );
-  return JSON.parse(stdout) as ProbeResult;
+  return JSON.parse(stdout) as ProbedMediaInfo;
 }
 
 function fitFilter(aspectRatio: AspectRatio): string {
@@ -107,10 +107,10 @@ async function renderShotSegment(params: {
 
   if (isVideoMediaPath(visualAbs)) {
     const info = await probeMedia(visualAbs, ffprobePath, signal);
-    const hasClipAudio = info.streams.some((s) => s.codec_type === "audio");
-    const clipDur = Number(info.format?.duration ?? 0);
+    const hasClipAudio = Boolean(info.streams?.some((s) => s.codec_type === "audio"));
+    const clipDur = resolveEffectiveVideoDurationSec(info) ?? 0;
     const padSec =
-      Number.isFinite(clipDur) && clipDur > 0 && clipDur < shot.durationSec
+      Number.isFinite(clipDur) && clipDur > 0 && clipDur + 0.05 < shot.durationSec
         ? shot.durationSec - clipDur + 0.5
         : 0;
     const vf = `${fitFilter(aspectRatio)}${padSec > 0 ? `,tpad=stop_mode=clone:stop_duration=${padSec.toFixed(2)}` : ""}`;
@@ -398,17 +398,24 @@ export async function exportEpisodeToMp4(params: {
     }
 
     assertNotAborted();
-    emit(95, "成片质检", "正在用 ffprobe 校验音视频流、画幅与时长…");
+    emit(95, "成片质检", "正在用 ffprobe 校验音视频流、画幅与分轨时长…");
     const probed = await probeMedia(masterAbs, ffprobePath, signal);
-    const vStream = probed.streams.find((s) => s.codec_type === "video");
-    const aStream = probed.streams.find((s) => s.codec_type === "audio");
+    const vStream = probed.streams?.find((s) => s.codec_type === "video");
+    const aStream = probed.streams?.find((s) => s.codec_type === "audio");
     if (!vStream || !aStream) {
       throw new Error("导出成片质检未通过：缺少视频轨或音频轨");
     }
     const actualDuration = Number(probed.format?.duration ?? 0);
-    if (!Number.isFinite(actualDuration) || Math.abs(actualDuration - cursorSec) > 0.6) {
+    const videoTrackDur = resolveEffectiveVideoDurationSec(probed) ?? 0;
+    const audioTrackDur = resolveEffectiveAudioDurationSec(probed) ?? 0;
+    if (
+      !Number.isFinite(actualDuration) ||
+      Math.abs(actualDuration - cursorSec) > 0.6 ||
+      Math.abs(videoTrackDur - cursorSec) > 0.6 ||
+      Math.abs(audioTrackDur - cursorSec) > 0.6
+    ) {
       throw new Error(
-        `导出成片时长质检未通过：预期 ${cursorSec.toFixed(1)}s，实际 ${actualDuration.toFixed(2)}s，已拦截发布。`,
+        `导出成片分轨时长质检未通过：预期 ${cursorSec.toFixed(1)}s，实际画面轨 ${videoTrackDur.toFixed(2)}s / 音轨 ${audioTrackDur.toFixed(2)}s / 容器 ${actualDuration.toFixed(2)}s，已拦截发布。`,
       );
     }
 

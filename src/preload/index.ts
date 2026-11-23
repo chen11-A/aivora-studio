@@ -62,8 +62,8 @@ const api: AivoraDesktopApi = {
     ipcRenderer.on(IPC_CHANNELS.APP_FLUSH_BEFORE_CLOSE, handler);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.APP_FLUSH_BEFORE_CLOSE, handler);
   },
-  notifyFlushComplete: () => {
-    ipcRenderer.send(IPC_CHANNELS.APP_FLUSH_COMPLETE);
+  notifyFlushComplete: (ok) => {
+    ipcRenderer.send(IPC_CHANNELS.APP_FLUSH_COMPLETE, ok);
   },
   getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.GET_APP_INFO),
   mediaUrl: (projectId, relativePath) =>

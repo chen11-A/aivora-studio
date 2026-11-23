@@ -328,4 +328,94 @@ describe("export-pipeline & ExportWriteGuard", () => {
     },
     30_000,
   );
+
+  it(
+    "detects and pads 1s-video + 4s-audio mismatched-track MP4 clips so neither video track nor audio track has a 3s gap",
+    async () => {
+      const ff = await probeFfmpegStatus();
+      expect(ff.available).toBe(true);
+      const ffmpeg = ff.ffmpegPath!;
+      const ffprobe = ff.ffprobePath!;
+      const { resolveEffectiveAudioDurationSec, resolveEffectiveVideoDurationSec } = await import(
+        "./stream-duration"
+      );
+
+      const base = makeTempDir("aivora-av-mismatch-");
+      const fixtures = path.join(base, "fixtures");
+      mkdirSync(fixtures, { recursive: true });
+
+      // Build two MP4s where the video stream is only 1s long, but the audio stream is 4s long
+      const clip1 = path.join(fixtures, "v1s-a4s-1.mp4");
+      const clip2 = path.join(fixtures, "v1s-a4s-2.mp4");
+      await runMediaBinary(ffmpeg, [
+        "-hide_banner", "-nostdin", "-y",
+        "-f", "lavfi", "-i", "color=c=0xcc3333:s=640x360:r=30:d=1",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=4:sample_rate=48000",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ac", "2", clip1,
+      ]);
+      await runMediaBinary(ffmpeg, [
+        "-hide_banner", "-nostdin", "-y",
+        "-f", "lavfi", "-i", "color=c=0x2266bb:s=640x360:r=30:d=1",
+        "-f", "lavfi", "-i", "sine=frequency=660:duration=4:sample_rate=48000",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ac", "2", clip2,
+      ]);
+
+      const store = new ProjectStore(path.join(base, "音画不等长 空间"));
+      const created = store.createProject({ name: "音画分轨校验剧", aspectRatio: "16:9" });
+      const epId = created.episodes[0]!.id;
+      const sceneId = created.scenes[0]!.id;
+      const shot1Id = created.shots[0]!.id;
+      const shot2 = store.createShot({ projectId: created.project.id, episodeId: epId, sceneId });
+      store.updateShot({ projectId: created.project.id, shotId: shot1Id, durationSec: 4 });
+      store.updateShot({ projectId: created.project.id, shotId: shot2.id, durationSec: 4 });
+
+      store.importShotTakeFromPath({
+        projectId: created.project.id,
+        shotId: shot1Id,
+        kind: "video",
+        sourceFilePath: clip1,
+      });
+      const ws = store.importShotTakeFromPath({
+        projectId: created.project.id,
+        shotId: shot2.id,
+        kind: "video",
+        sourceFilePath: clip2,
+      });
+
+      // 1. Preflight must catch the 1s video stream despite 4s container/audio duration
+      const pre = await preflightEpisodeExport({
+        workspace: ws,
+        projectDir: ws.dirPath,
+        episodeId: epId,
+      });
+      expect(pre.ok).toBe(true);
+      expect(pre.shortClips).toHaveLength(2);
+      expect(pre.shortClips[0]?.clipDurationSec).toBeLessThanOrEqual(1.2);
+      expect(pre.warnings.some((w) => w.includes("画面轨") && w.includes("音轨"))).toBe(true);
+
+      // 2. Export must pad the video stream so BOTH video track and audio track are ~8s
+      const outMp4 = path.join(ws.dirPath, "exports", "音画分轨8秒成片.mp4");
+      const exp = await exportEpisodeToMp4({
+        workspace: ws,
+        projectDir: ws.dirPath,
+        episodeId: epId,
+        outputPath: outMp4,
+      });
+      expect(exp.ok).toBe(true);
+
+      const { stdout } = await runMediaBinary(ffprobe, [
+        "-v", "error", "-show_streams", "-show_format", "-of", "json", outMp4,
+      ]);
+      const probed = JSON.parse(stdout);
+      const vDur = resolveEffectiveVideoDurationSec(probed) ?? 0;
+      const aDur = resolveEffectiveAudioDurationSec(probed) ?? 0;
+      expect(vDur).toBeGreaterThanOrEqual(7.5);
+      expect(vDur).toBeLessThanOrEqual(8.5);
+      expect(aDur).toBeGreaterThanOrEqual(7.5);
+      expect(aDur).toBeLessThanOrEqual(8.5);
+
+      store.closeAll();
+    },
+    60_000,
+  );
 });

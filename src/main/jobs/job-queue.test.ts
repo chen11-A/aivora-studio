@@ -374,4 +374,198 @@ describe("GenerationJobQueue anti-duplicate-charge guarantees", () => {
     projects.closeAll();
     globalConfig.close();
   });
+
+  it("refuses to send local credentials when an imported project's job snapshot baseUrl does not match trusted local configuration", async () => {
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-secbind-"));
+    tempDirs.push(base);
+    const projects = new ProjectStore(path.join(base, "ws"));
+    const globalConfig = new GlobalConfigStore(path.join(base, "app"), mockVault);
+    const oauth = new OAuthManager(globalConfig, async () => undefined);
+
+    const kling = globalConfig.saveProvider({
+      name: "可灵官方",
+      protocol: "kling-video",
+      baseUrl: "https://api-beijing.klingai.com",
+      models: ["kling-v2-master"],
+      apiKey: "ak_local_secret",
+      secondaryKey: "sk_local_secret",
+      enabled: true,
+    });
+    globalConfig.saveOAuthSession({
+      providerId: "grok-web",
+      status: "connected",
+      accountLabel: "grok@aivora.test",
+      models: ["grok-imagine-video"],
+      sessionPayload: {
+        accessToken: "grok_local_secret_token",
+        refreshToken: "rt",
+        expiresAtMs: Date.now() + 3600_000,
+        email: "grok@aivora.test",
+      },
+    });
+
+    const demo = projects.openDemoProject();
+    const now = new Date().toISOString();
+
+    // Simulate an untrusted external project with tampered baseUrl pointing to an attacker host
+    projects.withProjectDb(demo.project.id, (db) => {
+      db.run(
+        `INSERT INTO jobs (id, project_id, shot_id, kind, status, idempotency_key, input_sha256, provider_snapshot, remote_task_id, summary_text, progress, created_at, updated_at)
+         VALUES (?, ?, ?, 'video', 'unknown', 'idem_evil1', 'sha_evil1', ?, 'task_evil_1', '外部工程篡改厂家地址', 50, ?, ?)`,
+        "job_tampered_provider",
+        demo.project.id,
+        demo.shots[0]!.id,
+        JSON.stringify({
+          source: "provider",
+          sourceId: kling.id,
+          providerLabel: "可灵官方",
+          protocol: "kling-video",
+          baseUrl: "https://attacker.evil.test",
+          modelId: "kling-v2-master",
+        }),
+        now,
+        now,
+      );
+      db.run(
+        `INSERT INTO jobs (id, project_id, shot_id, kind, status, idempotency_key, input_sha256, provider_snapshot, remote_task_id, summary_text, progress, created_at, updated_at)
+         VALUES (?, ?, ?, 'video', 'unknown', 'idem_evil2', 'sha_evil2', ?, 'task_evil_2', '外部工程篡改OAuth地址', 50, ?, ?)`,
+        "job_tampered_oauth",
+        demo.project.id,
+        demo.shots[0]!.id,
+        JSON.stringify({
+          source: "oauth",
+          sourceId: "grok-web",
+          providerLabel: "Grok",
+          protocol: "oauth-grok",
+          baseUrl: "https://attacker.evil.test/v1",
+          modelId: "grok-imagine-video",
+        }),
+        now,
+        now,
+      );
+    });
+
+    let networkCalls = 0;
+    const spyFetch: typeof fetch = async () => {
+      networkCalls += 1;
+      return new Response("Should never be called", { status: 200 });
+    };
+
+    const queue = new GenerationJobQueue(projects, globalConfig, oauth, spyFetch, 1, 1);
+
+    const resProvider = await queue.recoverUnknownJob({
+      projectId: demo.project.id,
+      jobId: "job_tampered_provider",
+    });
+    expect(resProvider.ok).toBe(false);
+    expect(resProvider.message).toContain("安全拦截");
+    expect(networkCalls).toBe(0);
+
+    const resOAuth = await queue.recoverUnknownJob({
+      projectId: demo.project.id,
+      jobId: "job_tampered_oauth",
+    });
+    expect(resOAuth.ok).toBe(false);
+    expect(resOAuth.message).toContain("安全拦截");
+    expect(networkCalls).toBe(0);
+
+    projects.closeAll();
+    globalConfig.close();
+  });
+
+  it("keeps Grok video job in unknown state when remote generation succeeded but MP4 download failed, allowing GET-only retry", async () => {
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-dlrecover-"));
+    tempDirs.push(base);
+    const projects = new ProjectStore(path.join(base, "ws"));
+    const globalConfig = new GlobalConfigStore(path.join(base, "app"), mockVault);
+    const oauth = new OAuthManager(globalConfig, async () => undefined);
+
+    globalConfig.saveOAuthSession({
+      providerId: "grok-web",
+      status: "connected",
+      accountLabel: "grok@aivora.test",
+      models: ["grok-imagine-video"],
+      sessionPayload: {
+        accessToken: "grok_valid_token",
+        refreshToken: "rt",
+        expiresAtMs: Date.now() + 3600_000,
+        email: "grok@aivora.test",
+      },
+    });
+    globalConfig.updateRouting({
+      script: null,
+      image: null,
+      video: { source: "oauth", sourceId: "grok-web", modelId: "grok-imagine-video" },
+      tts: null,
+    });
+
+    const ff = await probeFfmpegStatus();
+    const validMp4Path = path.join(base, "cdn-ok.mp4");
+    await runMediaBinary(ff.ffmpegPath!, [
+      "-hide_banner", "-nostdin", "-y",
+      "-f", "lavfi", "-i", "color=c=0x225588:s=320x180:r=24:d=1",
+      "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", validMp4Path,
+    ]);
+    const validMp4Bytes = readFileSync(validMp4Path);
+
+    let postCount = 0;
+    let cdnDown = true;
+    const mockFetch: typeof fetch = async (input, init) => {
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (method === "POST" && url.endsWith("/videos/generations")) {
+        postCount += 1;
+        return new Response(JSON.stringify({ request_id: "grok_dl_555" }), { status: 200 });
+      }
+      if (method === "GET" && url.endsWith("/videos/grok_dl_555")) {
+        return new Response(
+          JSON.stringify({ status: "done", video: { url: "https://cdn.xai.test/video555.mp4" } }),
+          { status: 200 },
+        );
+      }
+      if (method === "GET" && url === "https://cdn.xai.test/video555.mp4") {
+        if (cdnDown) return new Response("Gateway Timeout", { status: 504 });
+        return new Response(validMp4Bytes, { status: 200 });
+      }
+      return new Response("Not Found", { status: 404 });
+    };
+
+    const demo = projects.openDemoProject();
+    const queue = new GenerationJobQueue(projects, globalConfig, oauth, mockFetch, 1, 2);
+    const plan = queue.preparePlan({
+      projectId: demo.project.id,
+      shotId: demo.shots[0]!.id,
+      kind: "video",
+    });
+
+    // 1. Remote generation succeeds, but CDN download returns 504 -> must stay `unknown` (NOT `failed`)
+    const first = await queue.confirmAndRun(plan);
+    expect(first.ok).toBe(false);
+    expect(first.job.status).toBe("unknown");
+    expect(first.job.remoteTaskId).toBe("grok_dl_555");
+    expect(first.message).toContain("查单找回");
+    expect(postCount).toBe(1);
+
+    // 2. User clicks recover -> CDN is still 504 -> stays `unknown` so user can retry again
+    const retryWhileDown = await queue.recoverUnknownJob({
+      projectId: demo.project.id,
+      jobId: first.job.id,
+    });
+    expect(retryWhileDown.ok).toBe(false);
+    expect(retryWhileDown.job.status).toBe("unknown");
+    expect(postCount).toBe(1);
+
+    // 3. CDN recovers -> GET-only recovery downloads MP4 and completes job with 0 extra POSTs
+    cdnDown = false;
+    const recovered = await queue.recoverUnknownJob({
+      projectId: demo.project.id,
+      jobId: first.job.id,
+    });
+    expect(recovered.ok).toBe(true);
+    expect(recovered.job.status).toBe("succeeded");
+    expect(postCount).toBe(1);
+
+    projects.closeAll();
+    globalConfig.close();
+  });
 });

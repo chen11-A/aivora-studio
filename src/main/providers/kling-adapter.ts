@@ -225,3 +225,64 @@ export async function downloadVerifiedKlingMp4(
 
   return { mediaPath: `assets/${fileName}`, mediaSha256: sha };
 }
+
+export async function pollAndDownloadKlingVideo(
+  input: {
+    baseUrl: string;
+    accessKey: string;
+    secretKey: string;
+    taskId: string;
+    mode: KlingVideoMode;
+    projectDir: string;
+    pollIntervalMs: number;
+    maxPollRounds: number;
+    onProgress: (pct: number) => void;
+  },
+  fetcher: typeof fetch = fetch,
+): Promise<{ mediaPath: string; mediaSha256: string }> {
+  for (let round = 0; round < input.maxPollRounds; round++) {
+    let query: KlingQueryResult;
+    try {
+      query = await queryKlingVideoTask(
+        {
+          baseUrl: input.baseUrl,
+          accessKey: input.accessKey,
+          secretKey: input.secretKey,
+          taskId: input.taskId,
+          mode: input.mode,
+        },
+        fetcher,
+      );
+    } catch (err) {
+      throw new AmbiguousRemoteError(
+        `查询可灵任务 ${input.taskId} 时网络异常（${err instanceof Error ? err.message : String(err)}），已保留任务号，请稍后手动查单找回。`,
+        input.taskId,
+      );
+    }
+
+    if (query.status === "succeed" && query.videoUrl) {
+      input.onProgress(90);
+      try {
+        return await downloadVerifiedKlingMp4(
+          { videoUrl: query.videoUrl, projectDir: input.projectDir },
+          fetcher,
+        );
+      } catch (err) {
+        throw new AmbiguousRemoteError(
+          `可灵远端视频已生成成功，但拉回本地失败（${err instanceof Error ? err.message : String(err)}），已保留任务号，请点击「查单找回」重新下载，切勿重新付费生成。`,
+          input.taskId,
+        );
+      }
+    }
+    if (query.status === "failed") {
+      throw new Error(`可灵生成失败：${query.errorMessage || "请调整提示词后重试"}`);
+    }
+    const pct = Math.min(85, 40 + Math.round(((round + 1) / input.maxPollRounds) * 45));
+    input.onProgress(pct);
+    await new Promise((r) => setTimeout(r, input.pollIntervalMs));
+  }
+  throw new AmbiguousRemoteError(
+    `等待可灵任务 ${input.taskId} 超时，远端可能仍在生成中。已严禁自动重发，请稍后点「查单找回」。`,
+    input.taskId,
+  );
+}

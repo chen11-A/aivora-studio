@@ -13,6 +13,7 @@ import {
 import {
   AmbiguousRemoteError,
   downloadVerifiedKlingMp4,
+  pollAndDownloadKlingVideo,
   queryKlingVideoTask,
   submitKlingVideoTask,
   type KlingVideoMode,
@@ -199,14 +200,14 @@ export class GenerationJobQueue {
 
     this.activeJobIds.add(jobId);
     try {
-      const { apiKey, secondaryKey } = await this.resolveLockedSecrets(snapshot);
+      const { apiKey, secondaryKey, trustedBaseUrl } = await this.resolveLockedSecrets(snapshot);
 
       if (plan.kind === "video" && snapshot.protocol === "kling-video") {
         const activeVisual = resolveActiveVisualTake(shot, ws.takes);
         const prepared = injectLockedReferences(ws, ws.dirPath, shot, activeVisual?.mediaPath);
         const submitted = await submitKlingVideoTask(
           {
-            baseUrl: snapshot.baseUrl,
+            baseUrl: trustedBaseUrl,
             accessKey: apiKey,
             secretKey: secondaryKey ?? "",
             modelId: snapshot.modelId,
@@ -218,21 +219,30 @@ export class GenerationJobQueue {
           },
           this.fetcher,
         );
-        const updatedSnap: LockedProviderSnapshot = { ...snapshot, klingMode: submitted.mode };
+        const updatedSnap: LockedProviderSnapshot = {
+          ...snapshot,
+          baseUrl: trustedBaseUrl,
+          klingMode: submitted.mode,
+        };
         updateJobRow(this.projects, plan.projectId, jobId, {
           remoteTaskId: submitted.taskId,
           providerSnapshot: JSON.stringify(updatedSnap),
           progress: 35,
         });
 
-        const media = await this.pollAndDownloadKling(
-          plan.projectId,
-          ws.dirPath,
-          jobId,
-          updatedSnap,
-          apiKey,
-          secondaryKey ?? "",
-          submitted.taskId,
+        const media = await pollAndDownloadKlingVideo(
+          {
+            baseUrl: trustedBaseUrl,
+            accessKey: apiKey,
+            secretKey: secondaryKey ?? "",
+            taskId: submitted.taskId,
+            mode: submitted.mode,
+            projectDir: ws.dirPath,
+            pollIntervalMs: this.pollIntervalMs,
+            maxPollRounds: this.maxPollRounds,
+            onProgress: (progress) => updateJobRow(this.projects, plan.projectId, jobId, { progress }),
+          },
+          this.fetcher,
         );
         return this.completeTakeJob(plan, jobId, snapshot, "video", media, "视频生成成功并已自动拉回本地保存");
       }
@@ -242,7 +252,7 @@ export class GenerationJobQueue {
         const prepared = injectLockedReferences(ws, ws.dirPath, shot, activeVisual?.mediaPath);
         const submitted = await submitGrokVideoTask(
           {
-            baseUrl: snapshot.baseUrl,
+            baseUrl: trustedBaseUrl,
             accessToken: apiKey,
             modelId: snapshot.modelId,
             prompt: prepared.finalPrompt,
@@ -258,7 +268,7 @@ export class GenerationJobQueue {
         });
         const media = await pollAndDownloadGrokVideo(
           {
-            baseUrl: snapshot.baseUrl,
+            baseUrl: trustedBaseUrl,
             accessToken: apiKey,
             taskId: submitted.taskId,
             projectDir: ws.dirPath,
@@ -275,7 +285,7 @@ export class GenerationJobQueue {
         const prepared = injectLockedReferences(ws, ws.dirPath, shot, null);
         const media = await runOpenAiImageGeneration(
           {
-            baseUrl: snapshot.baseUrl,
+            baseUrl: trustedBaseUrl,
             apiKey,
             modelId: snapshot.modelId,
             prompt: plan.promptPreview,
@@ -292,7 +302,7 @@ export class GenerationJobQueue {
         const speakerAsset = ws.assets.find((a) => a.kind === "character" && a.name === shot.speaker);
         const media = await runOpenAiSpeechSynthesis(
           {
-            baseUrl: snapshot.baseUrl,
+            baseUrl: trustedBaseUrl,
             apiKey,
             modelId: snapshot.modelId,
             text: plan.promptPreview,
@@ -362,27 +372,45 @@ export class GenerationJobQueue {
       return { ok: false, job, message: "当前仅可灵 Kling 与 Grok 异步视频任务支持凭任务号查单找回。" };
     }
 
-    const { apiKey, secondaryKey } = await this.resolveLockedSecrets(snapshot);
+    let creds: { apiKey: string; secondaryKey: string | null; trustedBaseUrl: string };
+    try {
+      creds = await this.resolveLockedSecrets(snapshot);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, job, message: msg };
+    }
+
     const res =
       snapshot.protocol === "kling-video"
         ? await queryKlingVideoTask(
             {
-              baseUrl: snapshot.baseUrl,
-              accessKey: apiKey,
-              secretKey: secondaryKey ?? "",
+              baseUrl: creds.trustedBaseUrl,
+              accessKey: creds.apiKey,
+              secretKey: creds.secondaryKey ?? "",
               taskId,
               mode: snapshot.klingMode ?? "text2video",
             },
             this.fetcher,
           )
         : await queryGrokVideoTask(
-            { baseUrl: snapshot.baseUrl, accessToken: apiKey, taskId },
+            { baseUrl: creds.trustedBaseUrl, accessToken: creds.apiKey, taskId },
             this.fetcher,
           );
 
     if (res.status === "succeed" && res.videoUrl && job.shotId) {
       const dir = this.projects.resolveProjectDir(input.projectId)!;
-      const media = await downloadVerifiedKlingMp4({ videoUrl: res.videoUrl, projectDir: dir }, this.fetcher);
+      let media: { mediaPath: string; mediaSha256: string };
+      try {
+        media = await downloadVerifiedKlingMp4({ videoUrl: res.videoUrl, projectDir: dir }, this.fetcher);
+      } catch (err) {
+        const dlErr = err instanceof Error ? err.message : String(err);
+        const keepRecoverable = updateJobRow(this.projects, input.projectId, job.id, {
+          status: "unknown",
+          remoteTaskId: taskId,
+          errorMessage: `远端已生成成功，但拉回本地失败（${dlErr}），任务号已保留，请稍后再次点击「查单找回」重新下载，切勿重发。`,
+        });
+        return { ok: false, job: keepRecoverable, message: keepRecoverable.errorMessage! };
+      }
       recordSuccessfulTakeInDb(this.projects, {
         projectId: input.projectId,
         shotId: job.shotId,
@@ -415,65 +443,46 @@ export class GenerationJobQueue {
     return { ok: false, job: pending, message: pending.errorMessage! };
   }
 
-  private async pollAndDownloadKling(
-    projectId: string,
-    projectDir: string,
-    jobId: string,
-    snapshot: LockedProviderSnapshot,
-    accessKey: string,
-    secretKey: string,
-    taskId: string,
-  ): Promise<{ mediaPath: string; mediaSha256: string }> {
-    for (let round = 0; round < this.maxPollRounds; round++) {
-      let query;
-      try {
-        query = await queryKlingVideoTask(
-          {
-            baseUrl: snapshot.baseUrl,
-            accessKey,
-            secretKey,
-            taskId,
-            mode: snapshot.klingMode ?? "text2video",
-          },
-          this.fetcher,
-        );
-      } catch (err) {
-        throw new AmbiguousRemoteError(
-          `查询可灵任务 ${taskId} 时网络异常（${err instanceof Error ? err.message : String(err)}），已保留任务号，请稍后手动查单找回。`,
-          taskId,
-        );
-      }
-
-      if (query.status === "succeed" && query.videoUrl) {
-        updateJobRow(this.projects, projectId, jobId, { progress: 90 });
-        return downloadVerifiedKlingMp4({ videoUrl: query.videoUrl, projectDir }, this.fetcher);
-      }
-      if (query.status === "failed") {
-        throw new Error(`可灵生成失败：${query.errorMessage || "请调整提示词后重试"}`);
-      }
-      const pct = Math.min(85, 40 + Math.round(((round + 1) / this.maxPollRounds) * 45));
-      updateJobRow(this.projects, projectId, jobId, { progress: pct });
-      await new Promise((r) => setTimeout(r, this.pollIntervalMs));
-    }
-    throw new AmbiguousRemoteError(
-      `等待可灵任务 ${taskId} 超时，远端可能仍在生成中。已严禁自动重发，请稍后点「查单找回」。`,
-      taskId,
-    );
-  }
-
+  /**
+   * Verifies that the snapshot stored inside `project.db` matches a trusted local account
+   * or provider configuration in `global.db` BEFORE releasing any local token or API key.
+   * Prevents untrusted imported project files from exfiltrating local credentials to arbitrary URLs.
+   */
   private async resolveLockedSecrets(
     snapshot: LockedProviderSnapshot,
-  ): Promise<{ apiKey: string; secondaryKey: string | null }> {
+  ): Promise<{ apiKey: string; secondaryKey: string | null; trustedBaseUrl: string }> {
+    const cleanUrl = (u: string) => u.trim().replace(/\/+$/, "");
+
     if (snapshot.source === "oauth") {
-      const token = await this.oauth.getValidAccessToken(
-        snapshot.sourceId as "chatgpt-web" | "grok-web",
-      );
-      return { apiKey: token, secondaryKey: null };
+      const expectedProtocol = snapshot.sourceId === "grok-web" ? "oauth-grok" : "oauth-chatgpt";
+      const canonicalBaseUrl =
+        snapshot.sourceId === "grok-web" ? cleanUrl(GROK_API) : "https://api.openai.com/v1";
+      if (
+        (snapshot.sourceId !== "grok-web" && snapshot.sourceId !== "chatgpt-web") ||
+        snapshot.protocol !== expectedProtocol ||
+        cleanUrl(snapshot.baseUrl) !== canonicalBaseUrl
+      ) {
+        throw new Error(
+          "安全拦截：工程内记录的账号或接口地址与本机官方授权配置不匹配，已拒绝携带本机凭据发起请求。",
+        );
+      }
+      const token = await this.oauth.getValidAccessToken(snapshot.sourceId);
+      return { apiKey: token, secondaryKey: null, trustedBaseUrl: canonicalBaseUrl };
     }
+
     const creds = this.globalConfig.getProviderCredentials(snapshot.sourceId);
     if (!creds || !creds.apiKey) {
-      throw new Error(`已锁定的厂家「${snapshot.providerLabel}」凭据不可用`);
+      throw new Error(`已锁定的厂家「${snapshot.providerLabel}」在本机未配置或凭据不可用`);
     }
-    return { apiKey: creds.apiKey, secondaryKey: creds.secondaryKey };
+    const trustedBaseUrl = cleanUrl(creds.view.baseUrl);
+    if (
+      creds.view.protocol !== snapshot.protocol ||
+      trustedBaseUrl !== cleanUrl(snapshot.baseUrl)
+    ) {
+      throw new Error(
+        `安全拦截：工程内记录的服务商地址（${snapshot.baseUrl}）与本机可信配置（${creds.view.baseUrl}）不匹配，已拒绝发送本机密钥。`,
+      );
+    }
+    return { apiKey: creds.apiKey, secondaryKey: creds.secondaryKey, trustedBaseUrl };
   }
 }

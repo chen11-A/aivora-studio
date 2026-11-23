@@ -32,27 +32,32 @@ let globalConfig: GlobalConfigStore | null = null;
 let jobQueue: GenerationJobQueue | null = null;
 const exportGuard = new ExportWriteGuard();
 
-function flushRendererSavesWithTimeout(win: BrowserWindow, timeoutMs = 1500): Promise<void> {
-  if (win.isDestroyed()) return Promise.resolve();
+function flushRendererSavesWithTimeout(
+  win: BrowserWindow,
+  timeoutMs = 1500,
+): Promise<"ok" | "failed" | "timeout"> {
+  if (win.isDestroyed()) return Promise.resolve("ok");
   return new Promise((resolve) => {
     let done = false;
-    const finish = () => {
+    const finish = (status: "ok" | "failed" | "timeout") => {
       if (done) return;
       done = true;
       ipcMain.removeListener(IPC_CHANNELS.APP_FLUSH_COMPLETE, onAck);
       clearTimeout(timer);
-      resolve();
+      resolve(status);
     };
-    const onAck = (event: Electron.IpcMainEvent) => {
-      if (event.sender === win.webContents) finish();
+    const onAck = (event: Electron.IpcMainEvent, ok?: unknown) => {
+      if (event.sender === win.webContents) {
+        finish(ok === false ? "failed" : "ok");
+      }
     };
-    const timer = setTimeout(finish, timeoutMs);
+    const timer = setTimeout(() => finish("timeout"), timeoutMs);
     timer.unref();
     ipcMain.on(IPC_CHANNELS.APP_FLUSH_COMPLETE, onAck);
     try {
       win.webContents.send(IPC_CHANNELS.APP_FLUSH_BEFORE_CLOSE);
     } catch {
-      finish();
+      finish("failed");
     }
   });
 }
@@ -264,8 +269,24 @@ function createMainWindow(): void {
           if (response !== 1) return;
         }
 
-        // Tier 3: Flush pending renderer edits with a hard 1500ms ceiling (impossible to deadlock window close)
-        await flushRendererSavesWithTimeout(win, 1500);
+        // Tier 3: Flush pending renderer edits with a hard 1500ms ceiling; keep window open if save fails/times out
+        const flushStatus = await flushRendererSavesWithTimeout(win, 1500);
+        if (flushStatus !== "ok" && !win.isDestroyed()) {
+          const { response } = await dialog.showMessageBox(win, {
+            type: "error",
+            title: "退出前自动保存未完成",
+            message:
+              flushStatus === "failed"
+                ? "检测到当前工程写入本地数据库失败。"
+                : "等待界面完成最后一次自动落盘超时。",
+            detail:
+              "为防丢稿已暂停关闭窗口；建议选择「留在当前页面」重试保存，或确认放弃最后未保存的修改再退出。",
+            buttons: ["留在当前页面（重试保存）", "放弃未保存修改并退出"],
+            defaultId: 0,
+            cancelId: 0,
+          });
+          if (response !== 1) return;
+        }
         allowWindowClose = true;
         if (!win.isDestroyed()) win.close();
       } finally {

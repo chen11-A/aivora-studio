@@ -23,9 +23,9 @@ export function App() {
   useEffect(() => {
     const client = getDesktopClient();
     return client.onFlushBeforeClose(() => {
-      void flushPendingSaves().finally(() => {
-        client.notifyFlushComplete();
-      });
+      void flushPendingSaves()
+        .then((ok) => client.notifyFlushComplete(ok))
+        .catch(() => client.notifyFlushComplete(false));
     });
   }, []);
 
