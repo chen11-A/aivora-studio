@@ -1,0 +1,141 @@
+name: Windows CI & NSIS Installer Smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-build-and-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      ELECTRON_NO_ATTACH_CONSOLE: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "12.21.0"
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck, lint, and unit tests
+        run: |
+          pnpm typecheck
+          pnpm lint
+          pnpm test
+
+      - name: Build Windows x64 NSIS installer
+        run: pnpm build:win
+
+      - name: Verify installer output and compute SHA-256
+        id: installer
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path "release" -Filter "AIVORA-Studio-Setup-*.exe" | Select-Object -First 1
+          if (-not $exe) { throw "未在 release 目录找到 NSIS 安装包" }
+          $hash = (Get-FileHash -Path $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Installer: $($exe.Name)"
+          Write-Host "Size: $([Math]::Round($exe.Length / 1MB, 2)) MB"
+          Write-Host "SHA-256: $hash"
+          "path=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "name=$($exe.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Non-admin HKCU silent install, Chinese+space path startup smoke, and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installerPath = "${{ steps.installer.outputs.path }}"
+          $installDir = Join-Path $env:LOCALAPPDATA "Programs\AIVORA Studio"
+          $installedExe = Join-Path $installDir "AIVORA Studio.exe"
+          $uninstallExe = Join-Path $installDir "Uninstall AIVORA Studio.exe"
+
+          # Run silent installer with LIMITED (non-admin) privileges via Task Scheduler to verify true per-user HKCU install
+          $taskName = "AivoraNonAdminInstall"
+          $installCmd = "`"$installerPath`" /S /currentuser"
+          schtasks /Create /TN $taskName /TR $installCmd /SC ONCE /ST 23:59 /RL LIMITED /F | Out-Null
+          try {
+            schtasks /Run /TN $taskName | Out-Null
+            $deadline = (Get-Date).AddMinutes(3)
+            while ((Get-Date) -lt $deadline) {
+              Start-Sleep -Seconds 2
+              if (Test-Path $installedExe) {
+                $running = Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($installerPath)) -ErrorAction SilentlyContinue
+                if (-not $running) { break }
+              }
+            }
+          } finally {
+            schtasks /Delete /TN $taskName /F 2>$null | Out-Null
+          }
+
+          if (-not (Test-Path $installedExe)) {
+            throw "非管理员静默安装失败：未在 $installedExe 找到主程序"
+          }
+          Write-Host "Installed successfully at: $installedExe"
+
+          # Ensure zero HKLM uninstall entries were created (strictly per-user HKCU)
+          $hklmPaths = @(
+            "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+            "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+          )
+          $hklmHits = Get-ItemProperty $hklmPaths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "*AIVORA Studio*" }
+          if ($hklmHits) {
+            throw "检测到 HKLM 注册表写入，违反普通用户 HKCU 安装规范"
+          }
+
+          # Launch installed app in headless smoke mode with Chinese + space workspace path
+          $workspaceDir = Join-Path $env:RUNNER_TEMP "测试 作品 空间"
+          $smokeReport = Join-Path $env:RUNNER_TEMP "aivora-smoke-report.json"
+          New-Item -ItemType Directory -Path $workspaceDir -Force | Out-Null
+          if (Test-Path $smokeReport) { Remove-Item $smokeReport -Force }
+
+          $env:AIVORA_WORKSPACE_DIR = $workspaceDir
+          $env:AIVORA_SMOKE_REPORT = $smokeReport
+          $proc = Start-Process -FilePath $installedExe -PassThru -Wait
+          if ($proc.ExitCode -ne 0) {
+            throw "安装包启动冒烟失败，退出码：$($proc.ExitCode)"
+          }
+          if (-not (Test-Path $smokeReport)) {
+            throw "未生成冒烟测试报告：$smokeReport"
+          }
+          $report = Get-Content -Path $smokeReport -Raw -Encoding UTF8 | ConvertFrom-Json
+          Write-Host ($report | ConvertTo-Json -Depth 4)
+          if (-not $report.ok -or $report.sqliteEngine -ne "node:sqlite") {
+            throw "冒烟报告校验未通过"
+          }
+
+          # Silent uninstall and confirm user project workspace is preserved
+          if (Test-Path $uninstallExe) {
+            Start-Process -FilePath $uninstallExe -ArgumentList "/S" -Wait
+          }
+          if (-not (Test-Path $report.projectDir)) {
+            throw "卸载后用户作品目录被意外删除：$($report.projectDir)"
+          }
+          Write-Host "Uninstall preserved user project directory: $($report.projectDir)"
+
+      - name: Upload Stage 1 Windows NSIS installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AIVORA-Studio-Setup-win-x64
+          path: |
+            release/AIVORA-Studio-Setup-*.exe
+          if-no-files-found: error
+          retention-days: 14

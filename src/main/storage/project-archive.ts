@@ -1,0 +1,96 @@
+import { randomUUID } from "node:crypto";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
+import { join, resolve } from "node:path";
+import { initProjectSchema } from "./schema";
+import { openSqlite, type SqliteDriver } from "./sqlite-driver";
+import { extractProjectZip, writeProjectZip } from "./zip-archive";
+
+/**
+ * WAL-safe hot backup: executes SQLite `VACUUM INTO` into an isolated staging directory
+ * and verifies `PRAGMA integrity_check` before archiving to ZIP.
+ */
+export async function exportProjectArchive(
+  workspaceRoot: string,
+  projectDir: string,
+  db: SqliteDriver,
+  outputZipPath: string,
+): Promise<void> {
+  const stage = mkdtempSync(join(workspaceRoot, ".stage-backup-"));
+  try {
+    const cleanDbPath = join(stage, "project.db");
+    db.vacuumInto(cleanDbPath);
+    const verify = openSqlite(cleanDbPath);
+    try {
+      if (!verify.integrityCheck()) throw new Error("备份数据库完整性校验失败");
+    } finally {
+      verify.close();
+    }
+
+    const assetsSrc = join(projectDir, "assets");
+    if (existsSync(assetsSrc)) {
+      const assetsDst = join(stage, "assets");
+      mkdirSync(assetsDst, { recursive: true });
+      for (const item of readdirSync(assetsSrc)) {
+        copyFileSync(join(assetsSrc, item), join(assetsDst, item));
+      }
+    }
+    await writeProjectZip(stage, resolve(outputZipPath));
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
+}
+
+export async function importProjectArchive(
+  workspaceRoot: string,
+  zipPath: string,
+  hasProjectId: (id: string) => boolean,
+  safeFolderSegment: (name: string) => string,
+): Promise<{ projectId: string; dirPath: string }> {
+  const tempFolder = join(workspaceRoot, `.import-${randomUUID().slice(0, 8)}`);
+  try {
+    await extractProjectZip(zipPath, tempFolder);
+    const db = openSqlite(join(tempFolder, "project.db"));
+    let projectId: string;
+    let projectName: string;
+    try {
+      if (!db.integrityCheck()) throw new Error("导入的工程数据库损坏");
+      initProjectSchema(db);
+      const row = db.get<{ id: string; name: string }>(`SELECT id, name FROM projects LIMIT 1`);
+      if (!row) throw new Error("备份包中找不到作品主记录");
+      projectId = row.id;
+      projectName = row.name;
+      if (hasProjectId(projectId)) {
+        const newId = `prj_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+        db.transaction(() => {
+          db.run(`PRAGMA foreign_keys = OFF;`);
+          db.run(`UPDATE projects SET id = ?, name = ? WHERE id = ?`, newId, `${projectName} (恢复副本)`, projectId);
+          db.run(`UPDATE episodes SET project_id = ? WHERE project_id = ?`, newId, projectId);
+          db.run(`UPDATE assets SET project_id = ? WHERE project_id = ?`, newId, projectId);
+          db.run(`UPDATE jobs SET project_id = ? WHERE project_id = ?`, newId, projectId);
+          db.run(`PRAGMA foreign_keys = ON;`);
+        });
+        projectId = newId;
+        projectName = `${projectName} (恢复副本)`;
+      }
+    } finally {
+      db.close();
+    }
+
+    const baseName = safeFolderSegment(projectName);
+    let finalDir = join(workspaceRoot, baseName);
+    if (existsSync(finalDir)) finalDir = join(workspaceRoot, `${baseName}_${projectId.slice(-4)}`);
+    renameSync(tempFolder, finalDir);
+    return { projectId, dirPath: finalDir };
+  } catch (error) {
+    rmSync(tempFolder, { recursive: true, force: true });
+    throw error;
+  }
+}
