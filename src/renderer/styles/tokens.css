@@ -173,3 +173,8 @@ body,
 .input-field:focus {
   border-color: var(--accent-primary);
 }
+
+select.input-field {
+  padding: 4px 10px;
+  line-height: 1.4;
+}
