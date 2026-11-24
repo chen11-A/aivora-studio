@@ -1,8 +1,9 @@
-import { dialog, ipcMain, shell, type BrowserWindow } from "electron";
+import { app, dialog, ipcMain, shell, type BrowserWindow } from "electron";
 import path from "node:path";
 import { IPC_CHANNELS } from "../../shared/ipc-contract";
 import type { ExternalDropCommitInput } from "../../shared/types/external-pack";
 import type { OAuthProviderId } from "../../shared/types/provider";
+import { DownloadFolderWatcher, getDefaultDownloadsDir } from "../media/download-watcher";
 import {
   commitExternalDropImport,
   exportExternalShotPack,
@@ -12,7 +13,12 @@ import { fetchRemoteProviderModels } from "../providers/openai-compat-adapter";
 import type { GlobalConfigStore } from "../storage/global-store";
 import type { ProjectStore } from "../storage/project-store";
 
-const ALLOWED_EXTERNAL_HOSTS = new Set(["colab.research.google.com", "github.com"]);
+const ALLOWED_EXTERNAL_HOSTS = new Set([
+  "colab.research.google.com",
+  "github.com",
+  "flow.google.com",
+  "labs.google",
+]);
 
 export type ExternalIpcDeps = {
   projects: ProjectStore;
@@ -20,6 +26,14 @@ export type ExternalIpcDeps = {
   getWindow: () => BrowserWindow | null;
   allowedRevealPaths: Set<string>;
 };
+
+let activeDownloadWatcher: DownloadFolderWatcher | null = null;
+let watchedProjectId: string | null = null;
+
+export function stopDownloadFolderWatcher(): void {
+  activeDownloadWatcher?.stop();
+  activeDownloadWatcher = null;
+}
 
 export function registerExternalAndModelExtraIpc(deps: ExternalIpcDeps): void {
   const handle = <Args extends unknown[], Result>(
@@ -30,11 +44,80 @@ export function registerExternalAndModelExtraIpc(deps: ExternalIpcDeps): void {
     ipcMain.handle(channel, (_event, ...args) => fn(...(args as Args)));
   };
 
+  let defaultDownloads = getDefaultDownloadsDir();
+  try {
+    defaultDownloads = app.getPath("downloads") || defaultDownloads;
+  } catch {
+    // fallback in test environments
+  }
+
+  stopDownloadFolderWatcher();
+  activeDownloadWatcher = new DownloadFolderWatcher(
+    defaultDownloads,
+    (event) => {
+      const w = deps.getWindow();
+      if (w && !w.isDestroyed()) {
+        w.webContents.send(IPC_CHANNELS.EXTERNAL_DOWNLOAD_EVENT, event);
+      }
+    },
+    (sha256) => {
+      if (!watchedProjectId) return false;
+      try {
+        const ws = deps.projects.openProject(watchedProjectId);
+        return ws.takes.some((t) => t.mediaSha256 === sha256);
+      } catch {
+        return false;
+      }
+    },
+  );
+  app.once("before-quit", () => stopDownloadFolderWatcher());
+
+  handle(IPC_CHANNELS.GET_DOWNLOAD_WATCH_STATE, () =>
+    activeDownloadWatcher?.getState() ?? {
+      enabled: false,
+      folderDir: defaultDownloads,
+      defaultDir: defaultDownloads,
+    },
+  );
+
+  handle(
+    IPC_CHANNELS.CONFIGURE_DOWNLOAD_WATCH,
+    async (input: {
+      enabled: boolean;
+      folderDir?: string;
+      pickFolder?: boolean;
+      projectId?: string;
+    }) => {
+      if (input.projectId) watchedProjectId = input.projectId;
+      let folderDir = input.folderDir;
+      if (input.pickFolder) {
+        const win = deps.getWindow();
+        if (win) {
+          const chosen = await dialog.showOpenDialog(win, {
+            title: "选择自动监听下载目录（默认系统 Downloads）",
+            defaultPath: activeDownloadWatcher?.getState().folderDir || defaultDownloads,
+            properties: ["openDirectory"],
+          });
+          if (!chosen.canceled && chosen.filePaths[0]) {
+            folderDir = chosen.filePaths[0];
+          }
+        }
+      }
+      return (
+        activeDownloadWatcher?.configure({ enabled: input.enabled, folderDir }) ?? {
+          enabled: false,
+          folderDir: defaultDownloads,
+          defaultDir: defaultDownloads,
+        }
+      );
+    },
+  );
+
   handle(IPC_CHANNELS.OPEN_EXTERNAL_URL, async (rawUrl: string) => {
     try {
       const parsed = new URL(rawUrl);
       if (parsed.protocol !== "https:" || !ALLOWED_EXTERNAL_HOSTS.has(parsed.hostname)) {
-        return { ok: false, message: "仅允许打开受信任的官方外部文档或 Colab 页面" };
+        return { ok: false, message: "仅允许打开受信任的官方外部文档、Google Flow 或 Colab 页面" };
       }
       await shell.openExternal(parsed.toString());
       return { ok: true };

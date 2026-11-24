@@ -268,6 +268,9 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     exportExternalShotPack: async () => ({ ok: false, message: "请在桌面端导出网页外采包" }),
     scanExternalDropFolder: async () => ({ ok: false, items: [], matchedCount: 0, unmatchedCount: 0, duplicateCount: 0, ignoredTempCount: 0, message: "请在桌面端扫描回流目录" }),
     commitExternalDropImport: async () => ({ ok: false, importedCount: 0, skippedCount: 0, message: "请在桌面端批量导入回流文件" }),
+    getDownloadWatchState: async () => ({ enabled: false, folderDir: "Downloads", defaultDir: "Downloads" }),
+    configureDownloadWatch: async (input) => ({ enabled: input.enabled, folderDir: input.folderDir ?? "Downloads", defaultDir: "Downloads" }),
+    onExternalDownloadDetected: () => () => undefined,
     importProjectBgm: async () => ({ ok: false, message: "请在桌面端导入本地背景音乐" }),
     clearProjectBgm: async (projectId) => {
       const ws = workspaces.get(projectId)!;
@@ -463,7 +466,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     cancelEpisodeExport: async () => ({ ok: false, message: "浏览器预览模式无导出任务" }),
     onFlushBeforeClose: () => () => undefined,
     notifyFlushComplete: () => undefined,
-    getAppInfo: async () => ({ version: "1.3.1", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "1.3.2", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
     resolveDroppedFilePath: () => null,
   };

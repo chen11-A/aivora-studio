@@ -52,3 +52,18 @@ export type ExternalDropCommitResult = {
   workspace?: ProjectWorkspace;
   message: string;
 };
+
+export type ExternalDownloadEvent = {
+  filePath: string;
+  fileName: string;
+  sizeBytes: number;
+  mediaKind: "video" | "image";
+  sha256: string;
+  detectedAt: string;
+};
+
+export type DownloadWatchState = {
+  enabled: boolean;
+  folderDir: string;
+  defaultDir: string;
+};

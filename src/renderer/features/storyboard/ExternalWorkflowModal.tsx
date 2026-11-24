@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CheckCircle2,
   FolderInput,
@@ -6,10 +6,12 @@ import {
   FolderOutput,
   Loader2,
   Package,
+  Radar,
   X,
 } from "lucide-react";
 import type { Shot } from "@shared/types/domain";
 import type {
+  DownloadWatchState,
   ExternalDropScanResult,
   ExternalPackExportResult,
 } from "@shared/types/external-pack";
@@ -31,6 +33,12 @@ export function ExternalWorkflowModal(props: {
   const [manualBindings, setManualBindings] = useState<Record<string, string>>({});
   const [overwriteSelectedVideo, setOverwriteSelectedVideo] = useState(false);
   const [committing, setCommitting] = useState(false);
+  const [watchState, setWatchState] = useState<DownloadWatchState | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    void getDesktopClient().getDownloadWatchState().then(setWatchState);
+  }, [open]);
 
   if (!open) return null;
   const client = getDesktopClient();
@@ -40,6 +48,29 @@ export function ExternalWorkflowModal(props: {
     setTimeout(() => {
       if (useStudioStore.getState().toast === msg) useStudioStore.setState({ toast: null });
     }, 3600);
+  }
+
+  async function handleToggleWatch(nextEnabled: boolean) {
+    const updated = await client.configureDownloadWatch({
+      enabled: nextEnabled,
+      projectId,
+    });
+    setWatchState(updated);
+    flashToast(
+      updated.enabled
+        ? `已开启下载目录自动监听（${updated.folderDir}）`
+        : "已暂停下载目录自动监听",
+    );
+  }
+
+  async function handlePickWatchDir() {
+    const updated = await client.configureDownloadWatch({
+      enabled: true,
+      pickFolder: true,
+      projectId,
+    });
+    setWatchState(updated);
+    flashToast(`已将监听目录切换为：${updated.folderDir}`);
   }
 
   async function handleExportPack() {
@@ -124,6 +155,47 @@ export function ExternalWorkflowModal(props: {
           >
             <X className="w-4 h-4" />
           </button>
+        </div>
+
+        {/* Auto-Watch Downloads Bar */}
+        <div className="px-5 py-2.5 bg-[#0f1218] border-b border-[#252b37] flex items-center justify-between gap-3 flex-wrap shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <Radar className={`w-4 h-4 shrink-0 ${watchState?.enabled ? "text-[#34d399]" : "text-[#768196]"}`} />
+            <div className="min-w-0">
+              <div className="text-[12px] font-medium text-[#f3f5f9] flex items-center gap-2">
+                <span>下载目录自动监听联动</span>
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[10px] ${
+                    watchState?.enabled
+                      ? "bg-[#10b981]/15 text-[#34d399]"
+                      : "bg-[#1b2029] text-[#768196]"
+                  }`}
+                >
+                  {watchState?.enabled ? "监听中" : "已关闭"}
+                </span>
+              </div>
+              <div className="text-[11px] text-[#768196] truncate">
+                监听路径：{watchState?.folderDir ?? "系统 Downloads"}（自动忽略未下完文件并去重）
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => void handlePickWatchDir()}
+              className="btn-secondary h-7 px-2.5 text-[11px]"
+            >
+              更换监听目录
+            </button>
+            <button
+              type="button"
+              data-testid="btn-toggle-download-watch"
+              onClick={() => void handleToggleWatch(!watchState?.enabled)}
+              className={watchState?.enabled ? "btn-secondary h-7 px-2.5 text-[11px]" : "btn-primary h-7 px-2.5 text-[11px]"}
+            >
+              {watchState?.enabled ? "关闭监听" : "开启自动监听"}
+            </button>
+          </div>
         </div>
 
         <div className="panel-scroll flex-1 p-5 grid grid-cols-1 md:grid-cols-2 gap-4">

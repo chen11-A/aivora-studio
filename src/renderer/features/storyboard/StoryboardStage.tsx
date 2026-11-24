@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import { Check, ChevronLeft, ChevronRight, Film, Image as ImageIcon, Layers, Package, Plus, Upload } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, ChevronLeft, ChevronRight, Download, ExternalLink, Film, Image as ImageIcon, Layers, Package, Plus, Upload, X } from "lucide-react";
 import {
   evaluateShotVisualStatus,
   isAudioMediaPath,
@@ -9,6 +9,7 @@ import {
   resolveSelectedSpeechTake,
   resolveShotTrimWindow,
 } from "@shared/media-selection";
+import type { ExternalDownloadEvent } from "@shared/types/external-pack";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
@@ -16,8 +17,11 @@ import { ExternalWorkflowModal } from "./ExternalWorkflowModal";
 import { ShotInspector } from "./ShotInspector";
 import { useStoryboardHotkeys } from "./useStoryboardHotkeys";
 
+const GOOGLE_FLOW_URL = "https://flow.google.com/";
+
 export function StoryboardStage() {
   const [externalModalOpen, setExternalModalOpen] = useState(false);
+  const [detectedDownload, setDetectedDownload] = useState<ExternalDownloadEvent | null>(null);
   const workspace = useStudioStore((s) => s.workspace);
   const activeEpisodeId = useStudioStore((s) => s.activeEpisodeId);
   const activeShotId = useStudioStore((s) => s.activeShotId);
@@ -31,6 +35,13 @@ export function StoryboardStage() {
   const openBatchModal = useAiGenerationStore((s) => s.openBatchModal);
 
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const unsub = getDesktopClient().onExternalDownloadDetected((ev) => {
+      setDetectedDownload(ev);
+    });
+    return unsub;
+  }, []);
 
   const epShots = workspace
     ? workspace.shots
@@ -68,6 +79,33 @@ export function StoryboardStage() {
   const activeTake = currentShot ? resolveActiveVisualTake(currentShot, workspace.takes) : null;
   const speechTake = currentShot ? resolveSelectedSpeechTake(currentShot, workspace.takes) : null;
   const castAssets = workspace.assets.filter((a) => a.kind === "character" || a.kind === "scene");
+
+  async function handleCopyPromptAndOpenFlow() {
+    if (!currentShot || !workspace) return;
+    const lockedRefs = workspace.assets
+      .filter((a) => a.lockedRef && currentShot.characterAssetIds.includes(a.id))
+      .map((a) => `${a.name}：${a.description || "保持设定一致"}`)
+      .join("；");
+    const text = [
+      workspace.project.aspectRatio === "9:16" ? "竖屏 9:16" : "横屏 16:9",
+      workspace.project.stylePreset ? `画风：${workspace.project.stylePreset}` : "",
+      lockedRefs ? `参考设定：${lockedRefs}` : "",
+      `${currentShot.scale}，${currentShot.cameraMove}，${currentShot.durationSec}秒`,
+      currentShot.visualPrompt.trim() || currentShot.title,
+    ]
+      .filter(Boolean)
+      .join("。");
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // clipboard API may be restricted in headless mode
+    }
+    await client.configureDownloadWatch({ enabled: true, projectId: workspace.project.id });
+    await client.openExternalUrl(GOOGLE_FLOW_URL);
+    useStudioStore.setState({
+      toast: "已复制本镜提示词并打开 Google Flow（已自动开启 Downloads 监听，下载后将提示一键入镜）",
+    });
+  }
 
   const resolveSrc = (mediaPath: string | null | undefined) => {
     if (!mediaPath) return null;
@@ -246,23 +284,71 @@ export function StoryboardStage() {
           )}
         </div>
 
+        {/* Floating Auto-Watch New Download Banner */}
+        {detectedDownload && currentShot && (
+          <div
+            data-testid="detected-download-banner"
+            className="mx-4 mb-2 px-3 py-2 rounded-lg bg-[#10b981]/15 border border-[#10b981]/50 flex items-center justify-between gap-3 shrink-0"
+          >
+            <div className="flex items-center gap-2 min-w-0 text-[12px] text-[#d1fae5]">
+              <Download className="w-4 h-4 text-[#34d399] shrink-0" />
+              <span className="truncate">
+                检测到新下载{detectedDownload.mediaKind === "video" ? "视频" : "图片"}：
+                <strong className="font-semibold text-white">{detectedDownload.fileName}</strong>
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                data-testid="btn-adopt-detected-download"
+                onClick={() => {
+                  const ev = detectedDownload;
+                  setDetectedDownload(null);
+                  void importShotTake(currentShot.id, ev.mediaKind, ev.filePath);
+                }}
+                className="h-7 px-2.5 rounded bg-[#10b981] hover:bg-[#059669] text-[#0b0e14] text-[11px] font-semibold cursor-pointer"
+              >
+                一键归入当前镜头
+              </button>
+              <button
+                type="button"
+                onClick={() => setDetectedDownload(null)}
+                className="p-1 rounded hover:bg-white/10 text-[#a7f3d0] cursor-pointer"
+                title="忽略"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Bottom Horizontal Take Filmstrip */}
         <div className="h-[118px] shrink-0 bg-[#14171e] border-t border-[#252b37] px-4 py-2.5 flex flex-col gap-2" data-testid="take-filmstrip">
           <div className="flex items-center justify-between gap-2">
             <span className="text-[11px] font-semibold text-[#a4aec0] truncate">
-              版本胶片条（{shotTakes.length} 个候选 · ↑/↓ 切镜 · 1~9 切版本 · 支持拖入素材）
+              版本胶片条（{shotTakes.length} 候选 · ↑/↓ 切镜 · 1~9 切版 · 拖入素材）
             </span>
             {currentShot && (
-              <div className="flex items-center gap-3 shrink-0">
+              <div className="flex items-center gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  data-testid="btn-copy-open-flow"
+                  onClick={() => void handleCopyPromptAndOpenFlow()}
+                  className="text-[11px] text-[#34d399] hover:text-[#6ee7b7] flex items-center gap-1 cursor-pointer"
+                  title="复制当前镜头完整提示词、开启 Downloads 监听并打开 Google Flow 网页"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  <span>复制提示词开 Flow</span>
+                </button>
                 <button
                   type="button"
                   data-testid="open-external-pack-btn"
                   onClick={() => setExternalModalOpen(true)}
                   className="text-[11px] text-[#93c5fd] hover:text-[#bfdbfe] flex items-center gap-1 cursor-pointer"
-                  title="导出外采镜头包（Google Flow / 即梦 / 可灵网页版）或扫描回流目录批量入镜"
+                  title="导出外采镜头包（Google Flow / 即梦 / 可灵网页版）、配置下载监听或扫描回流目录批量入镜"
                 >
                   <Package className="w-3 h-3" />
-                  <span>网页外采（Flow/即梦）</span>
+                  <span>网页外采</span>
                 </button>
                 <button type="button" onClick={() => void importShotTake(currentShot.id, "video")} className="text-[11px] text-[#a4aec0] hover:text-[#f3f5f9] flex items-center gap-1 cursor-pointer">
                   <Upload className="w-3 h-3" />

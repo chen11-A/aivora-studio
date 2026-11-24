@@ -24,6 +24,8 @@ import type {
   ProviderTestResult,
 } from "./types/jobs";
 import type {
+  DownloadWatchState,
+  ExternalDownloadEvent,
   ExternalDropCommitInput,
   ExternalDropCommitResult,
   ExternalDropScanResult,
@@ -163,6 +165,14 @@ export type AivoraDesktopApi = {
     folderDir?: string;
   }) => Promise<ExternalDropScanResult>;
   commitExternalDropImport: (input: ExternalDropCommitInput) => Promise<ExternalDropCommitResult>;
+  getDownloadWatchState: () => Promise<DownloadWatchState>;
+  configureDownloadWatch: (input: {
+    enabled: boolean;
+    folderDir?: string;
+    pickFolder?: boolean;
+    projectId?: string;
+  }) => Promise<DownloadWatchState>;
+  onExternalDownloadDetected: (listener: (event: ExternalDownloadEvent) => void) => () => void;
 
   // Project BGM & real FFmpeg export
   importProjectBgm: (
@@ -287,6 +297,9 @@ export const IPC_CHANNELS = {
   EXPORT_EXTERNAL_PACK: "aivora:external:export-pack",
   SCAN_EXTERNAL_DROP: "aivora:external:scan-drop",
   COMMIT_EXTERNAL_DROP: "aivora:external:commit-drop",
+  GET_DOWNLOAD_WATCH_STATE: "aivora:external:watch-state",
+  CONFIGURE_DOWNLOAD_WATCH: "aivora:external:watch-configure",
+  EXTERNAL_DOWNLOAD_EVENT: "aivora:external:download-detected",
   IMPORT_PROJECT_BGM: "aivora:bgm:import",
   CLEAR_PROJECT_BGM: "aivora:bgm:clear",
   CHECK_FFMPEG_STATUS: "aivora:media:ffmpeg-status",

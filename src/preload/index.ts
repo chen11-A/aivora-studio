@@ -4,6 +4,7 @@ import {
   type AivoraDesktopApi,
   type ExportProgressEvent,
 } from "../shared/ipc-contract";
+import type { ExternalDownloadEvent } from "../shared/types/external-pack";
 
 const api: AivoraDesktopApi = {
   listProjects: () => ipcRenderer.invoke(IPC_CHANNELS.LIST_PROJECTS),
@@ -31,6 +32,15 @@ const api: AivoraDesktopApi = {
   exportExternalShotPack: (input) => ipcRenderer.invoke(IPC_CHANNELS.EXPORT_EXTERNAL_PACK, input),
   scanExternalDropFolder: (input) => ipcRenderer.invoke(IPC_CHANNELS.SCAN_EXTERNAL_DROP, input),
   commitExternalDropImport: (input) => ipcRenderer.invoke(IPC_CHANNELS.COMMIT_EXTERNAL_DROP, input),
+  getDownloadWatchState: () => ipcRenderer.invoke(IPC_CHANNELS.GET_DOWNLOAD_WATCH_STATE),
+  configureDownloadWatch: (input) => ipcRenderer.invoke(IPC_CHANNELS.CONFIGURE_DOWNLOAD_WATCH, input),
+  onExternalDownloadDetected: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: ExternalDownloadEvent) => {
+      listener(payload);
+    };
+    ipcRenderer.on(IPC_CHANNELS.EXTERNAL_DOWNLOAD_EVENT, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.EXTERNAL_DOWNLOAD_EVENT, handler);
+  },
   importProjectBgm: (projectId, sourceFilePath) =>
     ipcRenderer.invoke(IPC_CHANNELS.IMPORT_PROJECT_BGM, projectId, sourceFilePath),
   clearProjectBgm: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.CLEAR_PROJECT_BGM, projectId),
