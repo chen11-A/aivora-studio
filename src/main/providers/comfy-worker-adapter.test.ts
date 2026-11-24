@@ -188,4 +188,30 @@ describe("ComfyUI GPU Worker adapter, model fetching, and >4MB reference image a
     expect(untouched?.compressed).toBe(false);
     expect(untouched?.mime).toBe("image/png");
   });
+
+  it("parses Colab one-click AIVORA-COMFY connection code and plain URL+Token paste", async () => {
+    const { parseComfyConnectCode } = await import("../../shared/comfy-connect");
+    const payload = {
+      url: "https://warm-sky.trycloudflare.com/",
+      token: "tok_abc1234567890",
+      models: ["flux-schnell", "wan2.2-i2v-5b"],
+      name: "Google Colab GPU 算力",
+    };
+    const code = `AIVORA-COMFY::${Buffer.from(JSON.stringify(payload), "utf8").toString("base64")}`;
+    const parsed = parseComfyConnectCode(code);
+    expect(parsed).toEqual({
+      baseUrl: "https://warm-sky.trycloudflare.com",
+      apiKey: "tok_abc1234567890",
+      models: ["flux-schnell", "wan2.2-i2v-5b"],
+      suggestedName: "Google Colab GPU 算力",
+    });
+
+    const plain = parseComfyConnectCode(
+      "Base URL: https://alt-tunnel.trycloudflare.com\nAccess Token: sec_9988776655",
+    );
+    expect(plain?.baseUrl).toBe("https://alt-tunnel.trycloudflare.com");
+    expect(plain?.apiKey).toBe("sec_9988776655");
+
+    expect(parseComfyConnectCode("not-a-valid-code")).toBeNull();
+  });
 });

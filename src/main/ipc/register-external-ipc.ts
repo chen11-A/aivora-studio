@@ -1,4 +1,4 @@
-import { dialog, ipcMain, type BrowserWindow } from "electron";
+import { dialog, ipcMain, shell, type BrowserWindow } from "electron";
 import path from "node:path";
 import { IPC_CHANNELS } from "../../shared/ipc-contract";
 import type { ExternalDropCommitInput } from "../../shared/types/external-pack";
@@ -11,6 +11,8 @@ import {
 import { fetchRemoteProviderModels } from "../providers/openai-compat-adapter";
 import type { GlobalConfigStore } from "../storage/global-store";
 import type { ProjectStore } from "../storage/project-store";
+
+const ALLOWED_EXTERNAL_HOSTS = new Set(["colab.research.google.com", "github.com"]);
 
 export type ExternalIpcDeps = {
   projects: ProjectStore;
@@ -27,6 +29,19 @@ export function registerExternalAndModelExtraIpc(deps: ExternalIpcDeps): void {
     ipcMain.removeHandler(channel);
     ipcMain.handle(channel, (_event, ...args) => fn(...(args as Args)));
   };
+
+  handle(IPC_CHANNELS.OPEN_EXTERNAL_URL, async (rawUrl: string) => {
+    try {
+      const parsed = new URL(rawUrl);
+      if (parsed.protocol !== "https:" || !ALLOWED_EXTERNAL_HOSTS.has(parsed.hostname)) {
+        return { ok: false, message: "仅允许打开受信任的官方外部文档或 Colab 页面" };
+      }
+      await shell.openExternal(parsed.toString());
+      return { ok: true };
+    } catch {
+      return { ok: false, message: "无效的外部链接地址" };
+    }
+  });
 
   handle(IPC_CHANNELS.FETCH_PROVIDER_MODELS, async (providerId: string) => {
     const creds = deps.globalConfig.getProviderCredentials(providerId);

@@ -287,6 +287,10 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     }),
     onExportProgress: () => () => undefined,
     revealPathInFolder: async () => ({ ok: false }),
+    openExternalUrl: async (url) => {
+      if (typeof window !== "undefined") window.open(url, "_blank", "noopener,noreferrer");
+      return { ok: true };
+    },
     exportProjectArchive: async () => ({ ok: true, message: "浏览器预览模式不写入磁盘" }),
     importProjectArchive: async () => ({ ok: false, message: "请在桌面端使用工程包导入" }),
     cleanUnreferencedAssets: async () => ({ ok: true, removedFiles: 0, freedBytes: 0, message: "当前作品目录干净，没有未引用的孤儿缓存文件" }),
@@ -459,7 +463,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     cancelEpisodeExport: async () => ({ ok: false, message: "浏览器预览模式无导出任务" }),
     onFlushBeforeClose: () => () => undefined,
     notifyFlushComplete: () => undefined,
-    getAppInfo: async () => ({ version: "1.3.0", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "1.3.1", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
     resolveDroppedFilePath: () => null,
   };

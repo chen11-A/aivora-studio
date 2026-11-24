@@ -262,7 +262,7 @@ export function StoryboardStage() {
                   title="导出外采镜头包（Google Flow / 即梦 / 可灵网页版）或扫描回流目录批量入镜"
                 >
                   <Package className="w-3 h-3" />
-                  <span>网页外采</span>
+                  <span>网页外采（Flow/即梦）</span>
                 </button>
                 <button type="button" onClick={() => void importShotTake(currentShot.id, "video")} className="text-[11px] text-[#a4aec0] hover:text-[#f3f5f9] flex items-center gap-1 cursor-pointer">
                   <Upload className="w-3 h-3" />

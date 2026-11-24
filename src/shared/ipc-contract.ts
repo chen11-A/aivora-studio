@@ -182,6 +182,7 @@ export type AivoraDesktopApi = {
   cancelEpisodeExport: () => Promise<{ ok: boolean; message: string }>;
   onExportProgress: (listener: (event: ExportProgressEvent) => void) => () => void;
   revealPathInFolder: (filePath: string) => Promise<{ ok: boolean }>;
+  openExternalUrl: (url: string) => Promise<{ ok: boolean; message?: string }>;
 
   // Archive, backup & maintenance
   exportProjectArchive: (projectId: string) => Promise<ArchiveResult>;
@@ -294,6 +295,7 @@ export const IPC_CHANNELS = {
   CANCEL_EPISODE_EXPORT: "aivora:media:cancel-export",
   EXPORT_PROGRESS_EVENT: "aivora:media:export-progress",
   REVEAL_PATH: "aivora:shell:reveal-path",
+  OPEN_EXTERNAL_URL: "aivora:shell:open-external-url",
   EXPORT_ARCHIVE: "aivora:archive:export",
   IMPORT_ARCHIVE: "aivora:archive:import",
   CLEAN_UNREFERENCED_ASSETS: "aivora:maintenance:clean-assets",

@@ -47,6 +47,7 @@ const api: AivoraDesktopApi = {
     return () => ipcRenderer.removeListener(IPC_CHANNELS.EXPORT_PROGRESS_EVENT, handler);
   },
   revealPathInFolder: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.REVEAL_PATH, filePath),
+  openExternalUrl: (url) => ipcRenderer.invoke(IPC_CHANNELS.OPEN_EXTERNAL_URL, url),
   exportProjectArchive: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.EXPORT_ARCHIVE, projectId),
   importProjectArchive: () => ipcRenderer.invoke(IPC_CHANNELS.IMPORT_ARCHIVE),
   cleanUnreferencedAssets: (projectId) =>

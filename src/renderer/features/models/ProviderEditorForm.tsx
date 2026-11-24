@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { Plus, Save, X } from "lucide-react";
+import { ClipboardPaste, ExternalLink, Plus, Save, X } from "lucide-react";
+import { COLAB_NOTEBOOK_URL, parseComfyConnectCode } from "@shared/comfy-connect";
 import type {
   CustomProviderProtocol,
   ProviderConfigView,
   SaveProviderConfigInput,
 } from "@shared/types/provider";
+import { getDesktopClient } from "../../lib/desktop-client";
 
 export const PROVIDER_PROTOCOLS: Array<{
   id: CustomProviderProtocol;
@@ -36,7 +38,7 @@ export const PROVIDER_PROTOCOLS: Array<{
     defaultUrl: "https://your-tunnel.trycloudflare.com",
     defaultModels: "flux-schnell, wan2.2-i2v-5b, wan2.2-i2v-14b-gguf, ltx-2.5-distilled",
     keyPlaceholder: "32 位 Bearer Token（Colab / Worker 启动时打印）",
-    hint: "同时支持「生图定妆」与「生成视频」；Colab 重开后点「编辑」更新临时地址与令牌即可",
+    hint: "同时支持「生图定妆」与「生成视频」；Colab 重开后点「编辑」粘贴新连接码即可秒换地址",
   },
   {
     id: "openai-chat",
@@ -78,6 +80,8 @@ export function ProviderEditorForm(props: {
   const [modelsText, setModelsText] = useState(
     "doubao-seedance-2-0-260128, doubao-seedance-2-0-fast-260128",
   );
+  const [connectCodeInput, setConnectCodeInput] = useState("");
+  const [connectNotice, setConnectNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (editingProvider) {
@@ -87,15 +91,19 @@ export function ProviderEditorForm(props: {
       setModelsText(editingProvider.models.join(", "));
       setApiKey("");
       setSecondaryKey("");
+      setConnectCodeInput("");
+      setConnectNotice(null);
     }
   }, [editingProvider]);
 
   const activeMeta =
     PROVIDER_PROTOCOLS.find((p) => p.id === protocol) ?? PROVIDER_PROTOCOLS[0]!;
   const isKling = protocol === "kling-video";
+  const isComfy = protocol === "comfy-worker";
 
   function handleProtocolChange(next: CustomProviderProtocol) {
     setProtocol(next);
+    setConnectNotice(null);
     if (!editingProvider) {
       const preset = PROVIDER_PROTOCOLS.find((p) => p.id === next);
       if (preset) {
@@ -105,10 +113,31 @@ export function ProviderEditorForm(props: {
     }
   }
 
+  function applyConnectCode(raw: string) {
+    setConnectCodeInput(raw);
+    if (!raw.trim()) {
+      setConnectNotice(null);
+      return;
+    }
+    const parsed = parseComfyConnectCode(raw);
+    if (!parsed) {
+      setConnectNotice("未识别到有效连接码（请完整粘贴 AIVORA-COMFY::... 或 Base URL + Access Token）");
+      return;
+    }
+    setBaseUrl(parsed.baseUrl);
+    setApiKey(parsed.apiKey);
+    if (parsed.models.length > 0) setModelsText(parsed.models.join(", "));
+    if (!name.trim() && parsed.suggestedName) setName(parsed.suggestedName);
+    setConnectCodeInput("");
+    setConnectNotice("已自动解析并填入 Base URL、访问令牌与模型列表，点击「保存厂家配置」即可！");
+  }
+
   function resetToCreate() {
     setName("");
     setApiKey("");
     setSecondaryKey("");
+    setConnectCodeInput("");
+    setConnectNotice(null);
     onCancelEdit();
   }
 
@@ -133,6 +162,8 @@ export function ProviderEditorForm(props: {
     setName("");
     setApiKey("");
     setSecondaryKey("");
+    setConnectCodeInput("");
+    setConnectNotice(null);
     if (editingProvider) onCancelEdit();
   }
 
@@ -158,6 +189,47 @@ export function ProviderEditorForm(props: {
           </button>
         </div>
       )}
+
+      {isComfy && (
+        <div
+          className="rounded-md bg-[#14171e] border border-[#3b82f6]/35 p-2.5 flex flex-col gap-2"
+          data-testid="colab-beginner-guide"
+        >
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-[11px] font-semibold text-[#93c5fd]">
+              小白 3 步直连 Google Colab（L4 / A100）算力：
+            </span>
+            <button
+              type="button"
+              data-testid="open-colab-notebook-btn"
+              onClick={() => void getDesktopClient().openExternalUrl(COLAB_NOTEBOOK_URL)}
+              className="h-6 px-2.5 rounded bg-[#3b82f6]/20 hover:bg-[#3b82f6]/30 border border-[#3b82f6]/50 text-[#bfdbfe] text-[11px] inline-flex items-center gap-1 cursor-pointer"
+            >
+              <ExternalLink className="w-3 h-3" />
+              <span>打开 Colab 一键启动页</span>
+            </button>
+          </div>
+          <ol className="text-[11px] text-[#a4aec0] list-decimal list-inside space-y-0.5">
+            <li>点右侧按钮在浏览器打开 Colab，菜单切换运行时为 L4 / A100 GPU；</li>
+            <li>依次点运行 1、2、3 步，底部会打印一段「一键连接码（AIVORA-COMFY::...）」；</li>
+            <li>整段复制到下方输入框，软件自动填入网址、令牌与模型，保存即可生图/生视频。</li>
+          </ol>
+          <div className="flex items-center gap-2">
+            <ClipboardPaste className="w-3.5 h-3.5 text-[#60a5fa] shrink-0" />
+            <input
+              data-testid="comfy-connect-code-input"
+              className="input-field h-8 text-[11px] flex-1"
+              placeholder="一键粘贴连接码（AIVORA-COMFY::...），松手自动解析填入下方全部配置"
+              value={connectCodeInput}
+              onChange={(e) => applyConnectCode(e.target.value)}
+            />
+          </div>
+          {connectNotice && (
+            <div className="text-[11px] text-[#34d399]">{connectNotice}</div>
+          )}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
         <input
           data-testid="provider-name-input"
