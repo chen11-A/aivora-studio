@@ -1,6 +1,7 @@
 import { app, dialog, ipcMain, shell, type BrowserWindow } from "electron";
 import path from "node:path";
 import { IPC_CHANNELS } from "../../shared/ipc-contract";
+import type { ColabManagedConfig } from "../../shared/types/colab";
 import type { ExternalDropCommitInput } from "../../shared/types/external-pack";
 import type { OAuthProviderId } from "../../shared/types/provider";
 import { DownloadFolderWatcher, getDefaultDownloadsDir } from "../media/download-watcher";
@@ -9,6 +10,7 @@ import {
   exportExternalShotPack,
   scanExternalDropFolder,
 } from "../media/external-pack";
+import type { ColabManagedRuntimeManager } from "../providers/colab-runtime-manager";
 import { fetchRemoteProviderModels } from "../providers/openai-compat-adapter";
 import type { GlobalConfigStore } from "../storage/global-store";
 import type { ProjectStore } from "../storage/project-store";
@@ -23,6 +25,7 @@ const ALLOWED_EXTERNAL_HOSTS = new Set([
 export type ExternalIpcDeps = {
   projects: ProjectStore;
   globalConfig: GlobalConfigStore;
+  colabManager: ColabManagedRuntimeManager;
   getWindow: () => BrowserWindow | null;
   allowedRevealPaths: Set<string>;
 };
@@ -229,4 +232,15 @@ export function registerExternalAndModelExtraIpc(deps: ExternalIpcDeps): void {
   handle(IPC_CHANNELS.COMMIT_EXTERNAL_DROP, (input: ExternalDropCommitInput) =>
     commitExternalDropImport(deps.projects, input),
   );
+
+  handle(IPC_CHANNELS.GET_COLAB_MANAGED_STATE, () => ({
+    config: deps.colabManager.getConfig(),
+    status: deps.colabManager.getStatus(),
+  }));
+
+  handle(IPC_CHANNELS.UPDATE_COLAB_MANAGED_CONFIG, (patch: Partial<ColabManagedConfig>) =>
+    deps.colabManager.updateConfig(patch),
+  );
+
+  handle(IPC_CHANNELS.STOP_COLAB_RUNTIME, () => deps.colabManager.stopRuntime());
 }

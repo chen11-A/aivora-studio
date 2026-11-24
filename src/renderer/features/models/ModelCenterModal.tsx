@@ -25,6 +25,7 @@ import type {
 } from "@shared/types/provider";
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
+import { ColabManagedPanel } from "./ColabManagedPanel";
 import { ProviderEditorForm } from "./ProviderEditorForm";
 
 const CAPABILITIES: Array<{ key: CapabilityKey; label: string }> = [
@@ -59,6 +60,11 @@ export function ModelCenterModal() {
 
   function supportsOAuthModel(cap: CapabilityKey, providerId: string, modelId: string): boolean {
     const lower = modelId.toLowerCase();
+    if (providerId === "colab-google") {
+      if (cap === "image") return /flux|image|sd/.test(lower);
+      if (cap === "video") return /wan|ltx|video|i2v|t2v/.test(lower);
+      return false;
+    }
     const isVideo = /video|sora/.test(lower);
     const isImage = /image|dall|flux/.test(lower);
     if (cap === "script") return !isVideo && !isImage;
@@ -162,10 +168,13 @@ export function ModelCenterModal() {
                 const connected = acc.status === "connected";
                 const busy = oauthBusyId === acc.providerId;
                 const isEditingModels = editingOAuthId === acc.providerId;
+                const isColab = acc.providerId === "colab-google";
                 return (
                   <div
                     key={acc.providerId}
-                    className="rounded-lg bg-[#0f1218] border border-[#252b37] p-3.5 flex flex-col gap-2"
+                    className={`rounded-lg bg-[#0f1218] border border-[#252b37] p-3.5 flex flex-col gap-2 ${
+                      isColab ? "md:col-span-2" : ""
+                    }`}
                   >
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -246,6 +255,7 @@ export function ModelCenterModal() {
                         </button>
                       </div>
                     )}
+                    {isColab && <ColabManagedPanel connected={connected} />}
                   </div>
                 );
               })}

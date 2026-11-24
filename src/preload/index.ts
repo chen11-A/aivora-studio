@@ -73,6 +73,10 @@ const api: AivoraDesktopApi = {
   updateOAuthModels: (input) => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_OAUTH_MODELS, input),
   oauthStartLogin: (providerId) => ipcRenderer.invoke(IPC_CHANNELS.OAUTH_START_LOGIN, providerId),
   oauthDisconnect: (providerId) => ipcRenderer.invoke(IPC_CHANNELS.OAUTH_DISCONNECT, providerId),
+  getColabManagedState: () => ipcRenderer.invoke(IPC_CHANNELS.GET_COLAB_MANAGED_STATE),
+  updateColabManagedConfig: (patch) =>
+    ipcRenderer.invoke(IPC_CHANNELS.UPDATE_COLAB_MANAGED_CONFIG, patch),
+  stopColabRuntime: () => ipcRenderer.invoke(IPC_CHANNELS.STOP_COLAB_RUNTIME),
   proposeDirectorSplit: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_PROPOSE, input),
   applyDirectorProposal: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_APPLY, input),
   undoDirectorApply: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_UNDO, input),

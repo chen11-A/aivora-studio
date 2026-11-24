@@ -3,6 +3,7 @@ import type { Job, TakeKind } from "../../shared/types/domain";
 import type { CustomProviderProtocol } from "../../shared/types/provider";
 import type { OAuthManager } from "../auth/auth-manager";
 import { GROK_API } from "../auth/grok-oauth";
+import { COLAB_DOMAIN } from "../providers/colab-client";
 import type { KlingVideoMode } from "../providers/kling-adapter";
 import type { GlobalConfigStore } from "../storage/global-store";
 import type { ProjectStore } from "../storage/project-store";
@@ -11,7 +12,7 @@ export type LockedProviderSnapshot = {
   source: "oauth" | "provider";
   sourceId: string;
   providerLabel: string;
-  protocol: CustomProviderProtocol | "oauth-grok" | "oauth-chatgpt";
+  protocol: CustomProviderProtocol | "oauth-grok" | "oauth-chatgpt" | "oauth-colab";
   baseUrl: string;
   modelId: string;
   klingMode?: KlingVideoMode;
@@ -29,11 +30,22 @@ export async function resolveTrustedLockedSecrets(
   const cleanUrl = (u: string) => u.trim().replace(/\/+$/, "");
 
   if (snapshot.source === "oauth") {
-    const expectedProtocol = snapshot.sourceId === "grok-web" ? "oauth-grok" : "oauth-chatgpt";
+    const expectedProtocol =
+      snapshot.sourceId === "grok-web"
+        ? "oauth-grok"
+        : snapshot.sourceId === "colab-google"
+          ? "oauth-colab"
+          : "oauth-chatgpt";
     const canonicalBaseUrl =
-      snapshot.sourceId === "grok-web" ? cleanUrl(GROK_API) : "https://api.openai.com/v1";
+      snapshot.sourceId === "grok-web"
+        ? cleanUrl(GROK_API)
+        : snapshot.sourceId === "colab-google"
+          ? cleanUrl(COLAB_DOMAIN)
+          : "https://api.openai.com/v1";
     if (
-      (snapshot.sourceId !== "grok-web" && snapshot.sourceId !== "chatgpt-web") ||
+      (snapshot.sourceId !== "grok-web" &&
+        snapshot.sourceId !== "chatgpt-web" &&
+        snapshot.sourceId !== "colab-google") ||
       snapshot.protocol !== expectedProtocol ||
       cleanUrl(snapshot.baseUrl) !== canonicalBaseUrl
     ) {

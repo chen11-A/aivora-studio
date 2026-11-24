@@ -25,6 +25,7 @@ import { exportEpisodeToMp4 } from "../media/export-pipeline";
 import { preflightEpisodeExport } from "../media/export-preflight";
 import { probeFfmpegStatus } from "../media/ffmpeg-locator";
 import { probeFileDurationSec } from "../media/motion-filters";
+import type { ColabManagedRuntimeManager } from "../providers/colab-runtime-manager";
 import { testProviderConnectivity } from "../providers/openai-compat-adapter";
 import type { DirectorService } from "../skills/director-service";
 import type { GlobalConfigStore } from "../storage/global-store";
@@ -36,6 +37,7 @@ export function registerIpcHandlers(deps: {
   projects: ProjectStore;
   globalConfig: GlobalConfigStore;
   oauth: OAuthManager;
+  colabManager: ColabManagedRuntimeManager;
   director: DirectorService;
   jobQueue: GenerationJobQueue;
   batchScheduler: BatchJobScheduler;
@@ -372,9 +374,12 @@ export function registerIpcHandlers(deps: {
   handle(IPC_CHANNELS.OAUTH_START_LOGIN, (providerId: OAuthProviderId) =>
     deps.oauth.startLogin(providerId),
   );
-  handle(IPC_CHANNELS.OAUTH_DISCONNECT, (providerId: OAuthProviderId) =>
-    deps.oauth.disconnect(providerId),
-  );
+  handle(IPC_CHANNELS.OAUTH_DISCONNECT, async (providerId: OAuthProviderId) => {
+    if (providerId === "colab-google") {
+      await deps.colabManager.stopRuntime("已断开 Google Colab 账号并释放 GPU 运行时");
+    }
+    return deps.oauth.disconnect(providerId);
+  });
 
   handle(IPC_CHANNELS.CLEAN_UNREFERENCED_ASSETS, (projectId: string) => {
     const res = deps.projects.cleanUnreferencedAssets(projectId);
@@ -443,6 +448,7 @@ export function registerIpcHandlers(deps: {
   registerExternalAndModelExtraIpc({
     projects: deps.projects,
     globalConfig: deps.globalConfig,
+    colabManager: deps.colabManager,
     getWindow: deps.getWindow,
     allowedRevealPaths,
   });

@@ -101,10 +101,13 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     oauthAccounts: [
       { providerId: "chatgpt-web", displayName: "ChatGPT 官方账号", status: "disconnected", accountLabel: null, models: [], note: "系统浏览器 PKCE 授权，凭据经 DPAPI 加密", updatedAt: null },
       { providerId: "grok-web", displayName: "Grok (xAI) 账号", status: "disconnected", accountLabel: null, models: [], note: "支持 OAuth 与 Device Code 登录", updatedAt: null },
+      { providerId: "colab-google", displayName: "Google Colab 会员算力（免浏览器托管）", status: "disconnected", accountLabel: null, models: ["colab-flux-schnell", "colab-wan2.2-i2v-5b", "colab-wan2.2-i2v-14b-gguf"], note: "纯 TS 官方 OAuth + Jupyter WebSocket 直连（零 Python / 自动闲置停机）", updatedAt: null },
     ],
     providers: [],
     routing: { script: null, image: null, video: null, tts: null },
   };
+  let colabCfg: { gpu: "T4" | "L4" | "A100"; mountDriveCache: boolean; idleShutdownMinutes: number } = { gpu: "L4", mountDriveCache: true, idleShutdownMinutes: 15 };
+  const colabStatus = () => ({ state: "idle" as const, endpoint: null, gpu: colabCfg.gpu, activePreset: null, driveMounted: false, idleShutdownAt: null, ccuBalance: null, lastMessage: "浏览器预览模式：请在桌面端登录 Google 账号启用托管 GPU" });
 
   const toSummary = (ws: ProjectWorkspace): ProjectSummary => ({
     id: ws.project.id,
@@ -346,6 +349,12 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       message: "请在桌面端打开系统浏览器完成网页 OAuth 授权",
     }),
     oauthDisconnect: async () => ({ ok: true, message: "已断开授权" }),
+    getColabManagedState: async () => ({ config: { ...colabCfg }, status: colabStatus() }),
+    updateColabManagedConfig: async (patch) => {
+      colabCfg = { ...colabCfg, ...patch };
+      return { config: { ...colabCfg }, status: colabStatus() };
+    },
+    stopColabRuntime: async () => ({ ok: true, status: colabStatus(), message: "当前无运行中的 Colab GPU" }),
     proposeDirectorSplit: async ({ projectId, episodeId }) => {
       const ws = workspaces.get(projectId);
       const ep = ws?.episodes.find((e) => e.id === episodeId);
@@ -466,7 +475,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     cancelEpisodeExport: async () => ({ ok: false, message: "浏览器预览模式无导出任务" }),
     onFlushBeforeClose: () => () => undefined,
     notifyFlushComplete: () => undefined,
-    getAppInfo: async () => ({ version: "1.3.2", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "1.4.0", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
     resolveDroppedFilePath: () => null,
   };

@@ -147,6 +147,11 @@ CREATE TABLE IF NOT EXISTS model_routing (
   model_id TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS app_kv (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `;
 
 export function initProjectSchema(db: SqliteDriver): void {

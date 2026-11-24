@@ -7,6 +7,8 @@ import type { CapabilityKey } from "../../shared/types/provider";
 import type { OAuthManager } from "../auth/auth-manager";
 import { GROK_API } from "../auth/grok-oauth";
 import { probeFileDurationSec } from "../media/motion-filters";
+import { COLAB_DOMAIN } from "../providers/colab-client";
+import type { ColabManagedRuntimeManager } from "../providers/colab-runtime-manager";
 import { AmbiguousRemoteError } from "../providers/kling-adapter";
 import { buildAssetPortraitPrompt, injectLockedReferences } from "../providers/ref-image-injector";
 import { clampSeedanceDurationSec } from "../providers/seedance-adapter";
@@ -48,6 +50,7 @@ export class GenerationJobQueue {
     private readonly fetcher: typeof fetch = fetch,
     private readonly pollIntervalMs = 5000,
     private readonly maxPollRounds = 120,
+    private readonly colabManager?: ColabManagedRuntimeManager,
   ) {}
 
   hasActiveJobs(): boolean {
@@ -110,14 +113,26 @@ export class GenerationJobQueue {
         blockingReason = "所选官方账号尚未登录或登录已过期，请前往「模型中心」重新授权。";
       } else {
         providerLabel = acc.displayName;
-        protocol = acc.providerId === "grok-web" ? "oauth-grok" : "oauth-chatgpt";
+        const oauthProtocol =
+          acc.providerId === "grok-web"
+            ? "oauth-grok"
+            : acc.providerId === "colab-google"
+              ? "oauth-colab"
+              : "oauth-chatgpt";
+        const oauthBaseUrl =
+          acc.providerId === "grok-web"
+            ? GROK_API
+            : acc.providerId === "colab-google"
+              ? COLAB_DOMAIN
+              : "https://api.openai.com/v1";
+        protocol = oauthProtocol;
         modelId = binding.modelId;
         lockedSnap = {
           source: "oauth",
           sourceId: acc.providerId,
           providerLabel: acc.displayName,
-          protocol: acc.providerId === "grok-web" ? "oauth-grok" : "oauth-chatgpt",
-          baseUrl: acc.providerId === "grok-web" ? GROK_API : "https://api.openai.com/v1",
+          protocol: oauthProtocol,
+          baseUrl: oauthBaseUrl,
           modelId,
         };
       }
@@ -168,6 +183,12 @@ export class GenerationJobQueue {
       upstreamDurationNote = `即梦 Seedance 按 ${sec}s 整数档生成，成片将按本镜 ${shot.durationSec}s 区间裁切采用`;
     } else if (shot && input.kind === "video" && protocol === "comfy-worker") {
       upstreamDurationNote = `将发送至已配置的 ComfyUI 算力 Worker（按 ${shot.durationSec}s 渲染）`;
+    } else if (protocol === "oauth-colab") {
+      const cfg = this.globalConfig.getColabManagedConfig();
+      upstreamDurationNote =
+        input.kind === "video" && shot
+          ? `Google Colab 官方托管 ${cfg.gpu} GPU 远程渲染（按 ${shot.durationSec}s，闲置 ${cfg.idleShutdownMinutes} 分钟自动停机释放）`
+          : `Google Colab 官方托管 ${cfg.gpu} GPU 远程生图（闲置 ${cfg.idleShutdownMinutes} 分钟自动停机释放）`;
     }
 
     return {
@@ -232,6 +253,7 @@ export class GenerationJobQueue {
         fetcher: this.fetcher,
         pollIntervalMs: this.pollIntervalMs,
         maxPollRounds: this.maxPollRounds,
+        colabManager: this.colabManager,
         onUpdateJob: (patch) => updateJobRow(this.projects, plan.projectId, jobId, patch),
       });
 
@@ -302,7 +324,49 @@ export class GenerationJobQueue {
 
     const snapshot = JSON.parse(job.providerSnapshot) as LockedProviderSnapshot;
     if (!supportsAsyncRecovery(snapshot.protocol)) {
-      return { ok: false, job, message: "当前仅可灵、即梦 Seedance、Grok 与 ComfyUI 异步视频任务支持凭任务号查单找回。" };
+      return {
+        ok: false,
+        job,
+        message: "当前仅可灵、即梦 Seedance、Grok、ComfyUI 与 Google Colab 托管 GPU 异步视频任务支持凭任务号查单找回。",
+      };
+    }
+
+    if (snapshot.protocol === "oauth-colab") {
+      if (!this.colabManager) {
+        return { ok: false, job, message: "Colab 托管运行时未初始化，无法查单找回。" };
+      }
+      if (!job.shotId) {
+        return { ok: false, job, message: "该任务未关联镜头，无法拉回视频。" };
+      }
+      const dir = this.projects.resolveProjectDir(input.projectId)!;
+      try {
+        const media = await this.colabManager.recoverVideoOutput(taskId, dir);
+        const durationSec = await probeFileDurationSec(path.join(dir, media.mediaPath), "video");
+        recordSuccessfulTakeInDb(this.projects, {
+          projectId: input.projectId,
+          shotId: job.shotId,
+          kind: "video",
+          media,
+          promptSnapshot: job.summaryText,
+          providerInfo: `${snapshot.providerLabel} · 手动查单找回`,
+          durationSec,
+        });
+        const done = updateJobRow(this.projects, input.projectId, job.id, {
+          status: "succeeded",
+          remoteTaskId: taskId,
+          progress: 100,
+          errorMessage: null,
+        });
+        return { ok: true, job: done, message: "已从 Google Colab 存活实例拉回成片视频并保存。" };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const keep = updateJobRow(this.projects, input.projectId, job.id, {
+          status: "unknown",
+          remoteTaskId: taskId,
+          errorMessage: `Colab 查单暂未拉回（${msg}），任务号已保留，请稍后重试，切勿重发。`,
+        });
+        return { ok: false, job: keep, message: keep.errorMessage! };
+      }
     }
 
     let creds: { apiKey: string; secondaryKey: string | null; trustedBaseUrl: string };

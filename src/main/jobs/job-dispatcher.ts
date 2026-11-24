@@ -5,6 +5,7 @@ import {
 } from "../../shared/media-selection";
 import type { ProjectWorkspace, Shot } from "../../shared/types/domain";
 import type { GenerationPlan } from "../../shared/types/jobs";
+import type { ColabManagedRuntimeManager } from "../providers/colab-runtime-manager";
 import {
   downloadVerifiedComfyVideo,
   pollAndDownloadComfyWorkerVideo,
@@ -67,41 +68,59 @@ export async function dispatchGenerationJob(ctx: {
   fetcher: typeof fetch;
   pollIntervalMs: number;
   maxPollRounds: number;
+  colabManager?: ColabManagedRuntimeManager;
   onUpdateJob: (patch: {
     remoteTaskId?: string;
     providerSnapshot?: string;
     progress?: number;
   }) => void;
 }): Promise<DispatchedJobOutcome> {
-  const { plan, ws, shot, snapshot, creds, fetcher, pollIntervalMs, maxPollRounds, onUpdateJob } =
-    ctx;
+  const {
+    plan,
+    ws,
+    shot,
+    snapshot,
+    creds,
+    fetcher,
+    pollIntervalMs,
+    maxPollRounds,
+    colabManager,
+    onUpdateJob,
+  } = ctx;
 
   // 1. Asset portrait candidate generation
   if (plan.assetId && plan.kind === "image") {
     const media =
-      snapshot.protocol === "comfy-worker"
-        ? await runComfyWorkerImage(
-            {
-              baseUrl: creds.trustedBaseUrl,
-              apiKey: creds.apiKey,
-              modelId: snapshot.modelId,
-              prompt: plan.promptPreview,
-              aspectRatio: ws.project.aspectRatio,
-              projectDir: ws.dirPath,
-            },
-            fetcher,
-          )
-        : await runOpenAiImageGeneration(
-            {
-              baseUrl: creds.trustedBaseUrl,
-              apiKey: creds.apiKey,
-              modelId: snapshot.modelId,
-              prompt: plan.promptPreview,
-              aspectRatio: ws.project.aspectRatio,
-              projectDir: ws.dirPath,
-            },
-            fetcher,
-          );
+      snapshot.protocol === "oauth-colab" && colabManager
+        ? await colabManager.generateImage({
+            modelId: snapshot.modelId,
+            prompt: plan.promptPreview,
+            aspectRatio: ws.project.aspectRatio,
+            projectDir: ws.dirPath,
+          })
+        : snapshot.protocol === "comfy-worker"
+          ? await runComfyWorkerImage(
+              {
+                baseUrl: creds.trustedBaseUrl,
+                apiKey: creds.apiKey,
+                modelId: snapshot.modelId,
+                prompt: plan.promptPreview,
+                aspectRatio: ws.project.aspectRatio,
+                projectDir: ws.dirPath,
+              },
+              fetcher,
+            )
+          : await runOpenAiImageGeneration(
+              {
+                baseUrl: creds.trustedBaseUrl,
+                apiKey: creds.apiKey,
+                modelId: snapshot.modelId,
+                prompt: plan.promptPreview,
+                aspectRatio: ws.project.aspectRatio,
+                projectDir: ws.dirPath,
+              },
+              fetcher,
+            );
     return {
       target: "asset-portrait",
       media,
@@ -273,37 +292,69 @@ export async function dispatchGenerationJob(ctx: {
     };
   }
 
-  // 6. Shot first-frame image generation (OpenAI-compat or ComfyUI Worker)
+  // 5b. Google Colab official managed GPU video (pure TS OAuth + Jupyter WebSocket)
+  if (plan.kind === "video" && snapshot.protocol === "oauth-colab") {
+    if (!colabManager) throw new Error("Colab 托管运行时未初始化");
+    const firstFrame = resolveConfirmedFirstFrameTake(shot, ws.takes);
+    const prepared = injectLockedReferences(ws, ws.dirPath, shot, firstFrame?.mediaPath ?? null);
+    const refImg = await prepareReferenceImageForUpload(prepared.primaryReferenceImagePath);
+    const media = await colabManager.generateVideo({
+      modelId: snapshot.modelId,
+      prompt: prepared.finalPrompt,
+      negativePrompt: shot.negativePrompt,
+      durationSec: shot.durationSec,
+      aspectRatio: ws.project.aspectRatio,
+      imageBase64: refImg?.base64 ?? null,
+      projectDir: ws.dirPath,
+      onSubmitted: (taskId) => onUpdateJob({ remoteTaskId: taskId, progress: 30 }),
+      onProgress: (progress) => onUpdateJob({ progress }),
+    });
+    return {
+      target: "shot-take",
+      kind: "video",
+      media,
+      message: "Google Colab 托管 GPU 视频生成成功并已自动拉回本地保存",
+    };
+  }
+
+  // 6. Shot first-frame image generation (OpenAI-compat, ComfyUI Worker, or Colab Managed GPU)
   if (plan.kind === "image") {
     const prepared = injectLockedReferences(ws, ws.dirPath, shot, null);
     const refImg = await prepareReferenceImageForUpload(prepared.primaryReferenceImagePath);
     const media =
-      snapshot.protocol === "comfy-worker"
-        ? await runComfyWorkerImage(
-            {
-              baseUrl: creds.trustedBaseUrl,
-              apiKey: creds.apiKey,
-              modelId: snapshot.modelId,
-              prompt: plan.promptPreview,
-              negativePrompt: shot.negativePrompt,
-              aspectRatio: ws.project.aspectRatio,
-              projectDir: ws.dirPath,
-              referenceImageBase64: refImg?.base64 ?? null,
-            },
-            fetcher,
-          )
-        : await runOpenAiImageGeneration(
-            {
-              baseUrl: creds.trustedBaseUrl,
-              apiKey: creds.apiKey,
-              modelId: snapshot.modelId,
-              prompt: plan.promptPreview,
-              aspectRatio: ws.project.aspectRatio,
-              projectDir: ws.dirPath,
-              referenceImageBase64: refImg?.base64 ?? null,
-            },
-            fetcher,
-          );
+      snapshot.protocol === "oauth-colab" && colabManager
+        ? await colabManager.generateImage({
+            modelId: snapshot.modelId,
+            prompt: plan.promptPreview,
+            aspectRatio: ws.project.aspectRatio,
+            projectDir: ws.dirPath,
+          })
+        : snapshot.protocol === "comfy-worker"
+          ? await runComfyWorkerImage(
+              {
+                baseUrl: creds.trustedBaseUrl,
+                apiKey: creds.apiKey,
+                modelId: snapshot.modelId,
+                prompt: plan.promptPreview,
+                negativePrompt: shot.negativePrompt,
+                aspectRatio: ws.project.aspectRatio,
+                projectDir: ws.dirPath,
+                referenceImageBase64: refImg?.base64 ?? null,
+              },
+              fetcher,
+            )
+          : await runOpenAiImageGeneration(
+              {
+                baseUrl: creds.trustedBaseUrl,
+                apiKey: creds.apiKey,
+                modelId: snapshot.modelId,
+                prompt: plan.promptPreview,
+                aspectRatio: ws.project.aspectRatio,
+                projectDir: ws.dirPath,
+                referenceImageBase64: refImg?.base64 ?? null,
+              },
+              fetcher,
+            );
     return { target: "shot-take", kind: "image", media, message: "首帧图生成成功，已新增版本并选中" };
   }
 
@@ -346,7 +397,8 @@ export function supportsAsyncRecovery(protocol: LockedProviderSnapshot["protocol
     protocol === "kling-video" ||
     protocol === "seedance-video" ||
     protocol === "comfy-worker" ||
-    protocol === "oauth-grok"
+    protocol === "oauth-grok" ||
+    protocol === "oauth-colab"
   );
 }
 
