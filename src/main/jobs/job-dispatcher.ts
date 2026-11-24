@@ -407,7 +407,13 @@ export async function downloadRecoveredVideo(
 ): Promise<{ mediaPath: string; mediaSha256: string }> {
   if (query.downloadAuth === "gemini") {
     return downloadVerifiedGeminiVideo(
-      { apiKey: creds.apiKey, videoUri: query.downloadUrl, videoBase64: query.inlineBase64 ?? null, projectDir },
+      {
+        baseUrl: creds.trustedBaseUrl,
+        apiKey: creds.apiKey,
+        videoUri: query.downloadUrl,
+        videoBase64: query.inlineBase64 ?? null,
+        projectDir,
+      },
       fetcher,
     );
   }

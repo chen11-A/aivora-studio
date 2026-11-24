@@ -7,6 +7,7 @@ import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AspectRatio } from "../../shared/types/domain";
 import { probeFfmpegStatus, runMediaBinary } from "../media/ffmpeg-locator";
+import { fetchGeminiMediaBytes } from "./gemini-official-adapter";
 import { AmbiguousRemoteError } from "./kling-adapter";
 
 type VideoContentBlock = {
@@ -144,6 +145,7 @@ export async function queryGeminiVideoTask(
 
 export async function downloadVerifiedGeminiVideo(
   input: {
+    baseUrl: string;
     apiKey: string;
     videoUri: string | null;
     videoBase64: string | null;
@@ -155,13 +157,10 @@ export async function downloadVerifiedGeminiVideo(
   if (input.videoBase64) {
     bytes = Buffer.from(input.videoBase64, "base64");
   } else if (input.videoUri) {
-    const res = await fetcher(input.videoUri, {
-      method: "GET",
-      headers: { "x-goog-api-key": input.apiKey.trim() },
-      signal: AbortSignal.timeout(120_000),
-    });
-    if (!res.ok) throw new Error(`下载 Gemini 视频失败 (HTTP ${res.status})`);
-    bytes = Buffer.from(await res.arrayBuffer());
+    bytes = await fetchGeminiMediaBytes(
+      { uri: input.videoUri, baseUrl: input.baseUrl, apiKey: input.apiKey },
+      fetcher,
+    );
   } else {
     throw new Error("Gemini 响应缺少视频下载地址或数据");
   }
@@ -231,6 +230,7 @@ export async function pollAndDownloadGeminiVideo(
       try {
         return await downloadVerifiedGeminiVideo(
           {
+            baseUrl: input.baseUrl,
             apiKey: input.apiKey,
             videoUri: statusRes.videoUri,
             videoBase64: statusRes.videoBase64,

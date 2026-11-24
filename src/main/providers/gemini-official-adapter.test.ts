@@ -10,6 +10,7 @@ import { DirectorService } from "../skills/director-service";
 import { GlobalConfigStore } from "../storage/global-store";
 import { ProjectStore } from "../storage/project-store";
 import {
+  fetchGeminiMediaBytes,
   GEMINI_CURATED_MODELS,
   GEMINI_OFFICIAL_BASE_URL,
   runGeminiMusicGeneration,
@@ -340,5 +341,88 @@ describe("Google Gemini Official All-in-One Adapter", () => {
 
     projects.closeAll();
     globalConfig.close();
+  });
+
+  it("blocks untrusted hosts / HTTP downgrade and strips x-goog-api-key across cross-origin redirects (P1 security regression)", async () => {
+    const seen: Array<{ url: string; key: string | null }> = [];
+    const mockFetch = (async (url: string | URL, init?: RequestInit) => {
+      const s = String(url);
+      const headers = new Headers(init?.headers);
+      seen.push({ url: s, key: headers.get("x-goog-api-key") });
+
+      if (s === "https://generativelanguage.googleapis.com/v1beta/files/signed:download") {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "https://storage.googleapis.com/bucket/clip.mp4?sig=123" },
+        });
+      }
+      if (s === "https://storage.googleapis.com/bucket/clip.mp4?sig=123") {
+        return new Response(Buffer.from("signed-bytes"), { status: 200 });
+      }
+      if (s === "https://generativelanguage.googleapis.com/v1beta/files/evil-redir:download") {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: "https://evil.example/steal" },
+        });
+      }
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+
+    // 1. Direct HTTP downgrade rejected before network call
+    await expect(
+      fetchGeminiMediaBytes(
+        {
+          uri: "http://generativelanguage.googleapis.com/v1beta/files/a",
+          baseUrl: GEMINI_OFFICIAL_BASE_URL,
+          apiKey: "AIzaSecret999",
+        },
+        mockFetch,
+      ),
+    ).rejects.toThrow(/非 HTTPS/);
+
+    // 2. Untrusted third-party host rejected before network call (zero key leak)
+    await expect(
+      fetchGeminiMediaBytes(
+        {
+          uri: "https://evil.example/payload.mp4",
+          baseUrl: GEMINI_OFFICIAL_BASE_URL,
+          apiKey: "AIzaSecret999",
+        },
+        mockFetch,
+      ),
+    ).rejects.toThrow(/未核准域名/);
+    expect(seen).toHaveLength(0);
+
+    // 3. Trusted redirect to storage.googleapis.com succeeds AND strips x-goog-api-key on hop 2
+    const bytes = await fetchGeminiMediaBytes(
+      {
+        uri: "https://generativelanguage.googleapis.com/v1beta/files/signed:download",
+        baseUrl: GEMINI_OFFICIAL_BASE_URL,
+        apiKey: "AIzaSecret999",
+      },
+      mockFetch,
+    );
+    expect(bytes.toString("utf8")).toBe("signed-bytes");
+    expect(seen[0]).toEqual({
+      url: "https://generativelanguage.googleapis.com/v1beta/files/signed:download",
+      key: "AIzaSecret999",
+    });
+    expect(seen[1]).toEqual({
+      url: "https://storage.googleapis.com/bucket/clip.mp4?sig=123",
+      key: null,
+    });
+
+    // 4. Redirect to untrusted third-party domain is blocked before touching evil.example
+    await expect(
+      fetchGeminiMediaBytes(
+        {
+          uri: "https://generativelanguage.googleapis.com/v1beta/files/evil-redir:download",
+          baseUrl: GEMINI_OFFICIAL_BASE_URL,
+          apiKey: "AIzaSecret999",
+        },
+        mockFetch,
+      ),
+    ).rejects.toThrow(/未核准域名/);
+    expect(seen.some((s) => s.url.includes("evil.example"))).toBe(false);
   });
 });

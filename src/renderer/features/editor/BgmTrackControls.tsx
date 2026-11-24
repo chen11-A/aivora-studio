@@ -1,8 +1,14 @@
-import { useState } from "react";
-import { Loader2, Music, Sparkles, Trash2, Upload } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, Loader2, Music, Sparkles, Trash2, Upload, X } from "lucide-react";
 import type { Asset } from "@shared/types/domain";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useStudioStore } from "../../store/useStudioStore";
+
+type BgmCandidate = {
+  projectId: string;
+  mediaPath: string;
+  modelId: string;
+};
 
 export function BgmTrackControls(props: {
   projectId: string;
@@ -15,28 +21,87 @@ export function BgmTrackControls(props: {
   onClearBgm: () => void;
   onVolumeChange: (db: number) => void;
 }) {
+  const defaultPrompt = `Cinematic instrumental background music for "${props.projectName}" (${props.episodeTitle}), mood: ${props.stylePreset}, subtle warm underscore suitable behind spoken dialogue, no vocals.`;
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [promptDraft, setPromptDraft] = useState(defaultPrompt);
   const [generating, setGenerating] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [candidate, setCandidate] = useState<BgmCandidate | null>(null);
   const client = getDesktopClient();
 
-  async function handleGenerateAiBgm() {
+  // Clear pending UI confirm/candidate whenever the active project changes
+  useEffect(() => {
+    setConfirmOpen(false);
+    setCandidate(null);
+    setPromptDraft(defaultPrompt);
+  }, [props.projectId, defaultPrompt]);
+
+  async function handleConfirmGenerate() {
     if (generating) return;
+    const targetProjectId = props.projectId;
+    const targetProjectName = props.projectName;
     setGenerating(true);
+    setConfirmOpen(false);
     try {
-      const prompt = `Cinematic instrumental background music for "${props.projectName}" (${props.episodeTitle}), mood: ${props.stylePreset}, subtle warm underscore suitable behind spoken dialogue, no vocals.`;
-      const res = await client.generateProjectBgm({ projectId: props.projectId, prompt });
-      if (res.ok && res.workspace) {
-        useStudioStore.setState({ workspace: res.workspace, toast: res.message });
-      } else {
-        useStudioStore.setState({ toast: res.message });
-      }
-    } catch (err) {
-      useStudioStore.setState({
-        toast: err instanceof Error ? err.message : "AI 生成配乐失败",
+      const res = await client.generateProjectBgm({
+        projectId: targetProjectId,
+        prompt: promptDraft.trim() || defaultPrompt,
       });
+      const stillOnSameProject =
+        useStudioStore.getState().workspace?.project.id === targetProjectId;
+      if (!stillOnSameProject) {
+        if (res.ok) {
+          useStudioStore.setState({
+            toast: `《${targetProjectName}》的 AI 候选配乐已生成并保存在其作品目录中（未切换当前界面）`,
+          });
+        }
+        return;
+      }
+      if (res.ok && res.candidateMediaPath) {
+        setCandidate({
+          projectId: targetProjectId,
+          mediaPath: res.candidateMediaPath,
+          modelId: res.modelId || "lyria-3.5",
+        });
+      }
+      useStudioStore.setState({ toast: res.message });
+    } catch (err) {
+      if (useStudioStore.getState().workspace?.project.id === targetProjectId) {
+        useStudioStore.setState({
+          toast: err instanceof Error ? err.message : "AI 生成候选配乐失败",
+        });
+      }
     } finally {
       setGenerating(false);
     }
   }
+
+  async function handleApplyCandidate() {
+    if (!candidate || applying) return;
+    const targetProjectId = candidate.projectId;
+    setApplying(true);
+    try {
+      const res = await client.applyProjectBgmCandidate({
+        projectId: targetProjectId,
+        candidateMediaPath: candidate.mediaPath,
+      });
+      // Strictly guard against cross-project workspace overwrite
+      if (useStudioStore.getState().workspace?.project.id !== targetProjectId) return;
+      if (res.ok && res.workspace) {
+        setCandidate(null);
+        useStudioStore.setState({ workspace: res.workspace, toast: res.message });
+      } else {
+        useStudioStore.setState({ toast: res.message });
+      }
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  const candidateSrc =
+    candidate && candidate.projectId === props.projectId
+      ? client.mediaUrl(candidate.projectId, candidate.mediaPath)
+      : null;
 
   return (
     <div
@@ -56,24 +121,25 @@ export function BgmTrackControls(props: {
         </span>
         <span className="font-mono text-[#f3f5f9]">{props.bgmVolumeDb} dB</span>
       </div>
+
       <div className="flex items-center justify-between gap-2 rounded-md bg-[#0f1218] border border-[#252b37] px-2.5 py-1.5 text-[11px]">
         <span className="text-[#cbd5e1] truncate">
-          {props.bgmAsset ? props.bgmAsset.name : "未导入（支持拖入音频或 AI 生成）"}
+          {props.bgmAsset ? props.bgmAsset.name : "未导入（支持拖入音频或 AI 生成候选）"}
         </span>
         <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
             disabled={generating}
-            onClick={() => void handleGenerateAiBgm()}
+            onClick={() => setConfirmOpen((v) => !v)}
             className="text-[#34d399] hover:underline flex items-center gap-0.5 cursor-pointer disabled:opacity-50"
-            title="使用模型中心已配置的 Google Gemini (Lyria 3.5) 一键生成背景配乐"
+            title="使用 Google Gemini (Lyria 3.5) 生成候选配乐，试听满意后再手动采用"
           >
             {generating ? (
               <Loader2 className="w-3 h-3 animate-spin" />
             ) : (
               <Sparkles className="w-3 h-3" />
             )}
-            <span>{generating ? "配乐中…" : "AI 配乐"}</span>
+            <span>{generating ? "生成候选中…" : "AI 配乐"}</span>
           </button>
           <button
             type="button"
@@ -95,6 +161,72 @@ export function BgmTrackControls(props: {
           )}
         </div>
       </div>
+
+      {confirmOpen && (
+        <div className="rounded-md bg-[#121722] border border-[#3b82f6]/40 p-2 flex flex-col gap-1.5 text-[11px]">
+          <div className="text-[#93c5fd] font-medium">
+            确认调用 Google Gemini（Lyria 3.5）生成候选配乐（不会直接覆盖现有配乐）
+          </div>
+          <textarea
+            rows={2}
+            className="input-field text-[11px] resize-none"
+            value={promptDraft}
+            onChange={(e) => setPromptDraft(e.target.value)}
+          />
+          <div className="flex items-center justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={() => setConfirmOpen(false)}
+              className="btn-secondary h-7 px-2 text-[11px]"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleConfirmGenerate()}
+              className="btn-primary h-7 px-2.5 text-[11px]"
+            >
+              确认生成候选
+            </button>
+          </div>
+        </div>
+      )}
+
+      {candidate && candidateSrc && (
+        <div className="rounded-md bg-[#101c1a] border border-[#10b981]/40 p-2 flex flex-col gap-1.5 text-[11px]">
+          <div className="flex items-center justify-between text-[#34d399]">
+            <span>AI 配乐候选已就绪（{candidate.modelId} · 尚未替换原配乐）</span>
+            <button
+              type="button"
+              onClick={() => setCandidate(null)}
+              className="text-[#94a3b8] hover:text-[#f3f5f9] cursor-pointer"
+              title="放弃此候选"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <audio controls src={candidateSrc} className="w-full h-7" />
+          <div className="flex items-center justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={() => setCandidate(null)}
+              className="btn-secondary h-7 px-2 text-[11px]"
+            >
+              放弃候选
+            </button>
+            <button
+              type="button"
+              disabled={applying}
+              onClick={() => void handleApplyCandidate()}
+              className="h-7 px-2.5 rounded bg-[#10b981] hover:bg-[#059669] text-[#052e16] font-semibold inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+            >
+              {applying ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+              <span>采用为本片配乐</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       <input
         type="range"
         min={-30}

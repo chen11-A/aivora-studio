@@ -245,7 +245,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <span>存储引擎：{sqliteEngine}</span>
-          <span>v1.5.2</span>
+          <span>v1.5.3</span>
         </div>
       </footer>
     </div>

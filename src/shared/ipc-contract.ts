@@ -182,7 +182,17 @@ export type AivoraDesktopApi = {
   generateProjectBgm: (input: {
     projectId: string;
     prompt: string;
-  }) => Promise<{ ok: boolean; workspace?: ProjectWorkspace; message: string }>;
+  }) => Promise<{
+    ok: boolean;
+    projectId: string;
+    candidateMediaPath?: string;
+    modelId?: string;
+    message: string;
+  }>;
+  applyProjectBgmCandidate: (input: {
+    projectId: string;
+    candidateMediaPath: string;
+  }) => Promise<{ ok: boolean; projectId: string; workspace?: ProjectWorkspace; message: string }>;
   clearProjectBgm: (projectId: string) => Promise<ProjectWorkspace>;
   checkFfmpegStatus: () => Promise<FfmpegStatus>;
   preflightExportEpisode: (input: {
@@ -306,6 +316,7 @@ export const IPC_CHANNELS = {
   EXTERNAL_DOWNLOAD_EVENT: "aivora:external:download-detected",
   IMPORT_PROJECT_BGM: "aivora:bgm:import",
   GENERATE_PROJECT_BGM: "aivora:bgm:generate",
+  APPLY_PROJECT_BGM_CANDIDATE: "aivora:bgm:apply-candidate",
   CLEAR_PROJECT_BGM: "aivora:bgm:clear",
   CHECK_FFMPEG_STATUS: "aivora:media:ffmpeg-status",
   PREFLIGHT_EXPORT_EPISODE: "aivora:media:preflight-export",

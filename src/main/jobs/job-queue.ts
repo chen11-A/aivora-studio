@@ -167,7 +167,7 @@ export class GenerationJobQueue {
       const sec = clampSeedanceDurationSec(modelId, shot.durationSec);
       upstreamDurationNote = `即梦 Seedance 按 ${sec}s 整数档生成，成片将按本镜 ${shot.durationSec}s 区间裁切采用`;
     } else if (shot && input.kind === "video" && protocol === "gemini-official") {
-      upstreamDurationNote = `将通过 Google Gemini 官方 Interactions 异步接口生成（成片按本镜 ${shot.durationSec}s 区间采用）`;
+      upstreamDurationNote = `Google Gemini 异步视频按模型默认时长生成，成片将按本镜 ${shot.durationSec}s 区间裁切采用`;
     } else if (shot && input.kind === "video" && protocol === "comfy-worker") {
       upstreamDurationNote = `将发送至已配置的 ComfyUI 算力 Worker（按 ${shot.durationSec}s 渲染）`;
     }

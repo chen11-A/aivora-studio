@@ -241,15 +241,22 @@ export function registerExternalAndModelExtraIpc(deps: ExternalIpcDeps): void {
       if (!gemini) {
         return {
           ok: false,
-          message: "请先在「模型中心」保存一个 Google Gemini 官方全家桶 API Key，即可一键生成 Lyria 背景配乐。",
+          projectId: input.projectId,
+          message: "请先在「模型中心」保存一个 Google Gemini 官方全家桶 API Key，即可生成 Lyria 候选配乐。",
         };
       }
       const creds = deps.globalConfig.getProviderCredentials(gemini.id);
       if (!creds?.apiKey) {
-        return { ok: false, message: "Gemini API Key 不可用，请在模型中心重新保存。" };
+        return {
+          ok: false,
+          projectId: input.projectId,
+          message: "Gemini API Key 不可用，请在模型中心重新保存。",
+        };
       }
       const projectDir = deps.projects.resolveProjectDir(input.projectId);
-      if (!projectDir) return { ok: false, message: "作品目录不存在" };
+      if (!projectDir) {
+        return { ok: false, projectId: input.projectId, message: "作品目录不存在" };
+      }
       const musicModel = gemini.models.find((m) => /lyria/i.test(m)) ?? "lyria-3.5";
       try {
         const media = await runGeminiMusicGeneration({
@@ -259,21 +266,44 @@ export function registerExternalAndModelExtraIpc(deps: ExternalIpcDeps): void {
           prompt: input.prompt.trim() || "warm cinematic background music, gentle piano and strings",
           projectDir,
         });
-        const workspace = deps.projects.importProjectBgmFromPath(
-          input.projectId,
-          path.join(projectDir, media.mediaPath),
-        );
+        // Never overwrite the project's currently bound BGM automatically: return candidate for audition first!
         return {
           ok: true,
-          workspace,
-          message: `已通过 ${musicModel} 生成专属配乐并自动绑定至背景配乐轨`,
+          projectId: input.projectId,
+          candidateMediaPath: media.mediaPath,
+          modelId: musicModel,
+          message: `已通过 ${musicModel} 生成候选配乐（未覆盖当前配乐，请试听满意后再点「采用」）`,
         };
       } catch (err) {
         return {
           ok: false,
+          projectId: input.projectId,
           message: err instanceof Error ? err.message : "AI 生成配乐失败",
         };
       }
+    },
+  );
+
+  handle(
+    IPC_CHANNELS.APPLY_PROJECT_BGM_CANDIDATE,
+    (input: { projectId: string; candidateMediaPath: string }) => {
+      const projectDir = deps.projects.resolveProjectDir(input.projectId);
+      if (!projectDir) {
+        return { ok: false, projectId: input.projectId, message: "作品目录不存在" };
+      }
+      const assetsRoot = path.resolve(projectDir, "assets");
+      const resolved = path.resolve(projectDir, input.candidateMediaPath);
+      const rel = path.relative(assetsRoot, resolved);
+      if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+        return { ok: false, projectId: input.projectId, message: "拒绝绑定作品资源目录以外的音频路径" };
+      }
+      const workspace = deps.projects.importProjectBgmFromPath(input.projectId, resolved);
+      return {
+        ok: true,
+        projectId: input.projectId,
+        workspace,
+        message: "已将试听候选设为当前作品的背景配乐",
+      };
     },
   );
 }

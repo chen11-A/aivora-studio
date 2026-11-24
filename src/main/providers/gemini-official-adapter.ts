@@ -123,20 +123,74 @@ function saveProjectAsset(projectDir: string, bytes: Buffer, ext: string): { med
   return { mediaPath: `assets/${fileName}`, mediaSha256: sha };
 }
 
+function isTrustedGeminiKeyOrigin(target: URL, configuredBaseUrl: string): boolean {
+  if (target.protocol !== "https:") return false;
+  try {
+    const base = new URL(cleanGeminiBase(configuredBaseUrl));
+    if (base.protocol === "https:" && target.origin === base.origin) return true;
+  } catch {
+    // ignore invalid base
+  }
+  return target.hostname === "generativelanguage.googleapis.com";
+}
+
+function isAllowedGeminiDownloadHost(target: URL, configuredBaseUrl: string): boolean {
+  if (isTrustedGeminiKeyOrigin(target, configuredBaseUrl)) return true;
+  if (target.protocol !== "https:") return false;
+  return (
+    target.hostname === "storage.googleapis.com" ||
+    target.hostname.endsWith(".googleusercontent.com")
+  );
+}
+
+/**
+ * Downloads media referenced by a Gemini response URI while enforcing HTTPS,
+ * host allowlisting, manual redirect inspection, and strict `x-goog-api-key`
+ * scoping (never leaking the API key to third-party hosts or cross-origin redirects).
+ */
+export async function fetchGeminiMediaBytes(
+  input: { uri: string; baseUrl: string; apiKey: string },
+  fetcher: typeof fetch = fetch,
+): Promise<Buffer> {
+  let current = new URL(input.uri);
+  for (let hop = 0; hop <= 5; hop += 1) {
+    if (current.protocol !== "https:") {
+      throw new Error(`安全拦截：拒绝通过非 HTTPS 地址下载 Gemini 媒体（${current.protocol}）`);
+    }
+    if (!isAllowedGeminiDownloadHost(current, input.baseUrl)) {
+      throw new Error(`安全拦截：拒绝向未核准域名下载 Gemini 媒体（${current.hostname}）`);
+    }
+    const headers: Record<string, string> = {};
+    if (isTrustedGeminiKeyOrigin(current, input.baseUrl)) {
+      headers["x-goog-api-key"] = input.apiKey.trim();
+    }
+    const res = await fetcher(current.toString(), {
+      method: "GET",
+      headers,
+      redirect: "manual",
+      signal: AbortSignal.timeout(120_000),
+    });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get("location");
+      if (!location) throw new Error(`Gemini 媒体下载重定向缺少 Location (HTTP ${res.status})`);
+      current = new URL(location, current);
+      continue;
+    }
+    if (!res.ok) throw new Error(`下载 Gemini 媒体结果失败 (HTTP ${res.status})`);
+    return Buffer.from(await res.arrayBuffer());
+  }
+  throw new Error("Gemini 媒体下载重定向次数过多（超过 5 次）");
+}
+
 async function resolveBlockBytes(
   block: InteractionContentBlock,
+  baseUrl: string,
   apiKey: string,
   fetcher: typeof fetch,
 ): Promise<Buffer> {
   if (block.data) return Buffer.from(block.data, "base64");
   if (block.uri) {
-    const res = await fetcher(block.uri, {
-      method: "GET",
-      headers: geminiHeaders(apiKey, false),
-      signal: AbortSignal.timeout(120_000),
-    });
-    if (!res.ok) throw new Error(`下载 Gemini 媒体结果失败 (HTTP ${res.status})`);
-    return Buffer.from(await res.arrayBuffer());
+    return fetchGeminiMediaBytes({ uri: block.uri, baseUrl, apiKey }, fetcher);
   }
   throw new Error("Gemini 响应中缺少媒体数据（data/uri）");
 }
@@ -293,7 +347,7 @@ export async function runGeminiImageGeneration(
     (b) => b.type === "image" || (b.mime_type ?? b.mimeType ?? "").startsWith("image/"),
   );
   if (!imgBlock) throw new Error("Gemini 生图未返回有效图片数据");
-  const bytes = await resolveBlockBytes(imgBlock, input.apiKey, fetcher);
+  const bytes = await resolveBlockBytes(imgBlock, input.baseUrl, input.apiKey, fetcher);
   const mime = (imgBlock.mime_type ?? imgBlock.mimeType ?? "image/png").toLowerCase();
   const ext = mime.includes("jpeg") || mime.includes("jpg") ? "jpg" : mime.includes("webp") ? "webp" : "png";
   return saveProjectAsset(input.projectDir, bytes, ext);
@@ -321,7 +375,7 @@ export async function runGeminiSpeechSynthesis(
     (b) => b.type === "audio" || (b.mime_type ?? b.mimeType ?? "").startsWith("audio/"),
   );
   if (!audioBlock) throw new Error("Gemini 配音未返回有效音频数据");
-  const raw = await resolveBlockBytes(audioBlock, input.apiKey, fetcher);
+  const raw = await resolveBlockBytes(audioBlock, input.baseUrl, input.apiKey, fetcher);
   const fmt = parsePcmMime(audioBlock.mime_type ?? audioBlock.mimeType ?? "audio/l16");
   const finalBytes = fmt.isPcm
     ? Buffer.concat([buildWavHeader(raw.length, audioBlock.sample_rate || fmt.sampleRate, audioBlock.channels || fmt.channels), raw])
@@ -350,7 +404,7 @@ export async function runGeminiMusicGeneration(
     (b) => b.type === "audio" || (b.mime_type ?? b.mimeType ?? "").startsWith("audio/"),
   );
   if (!audioBlock) throw new Error("Lyria 配乐生成未返回有效音频数据");
-  const raw = await resolveBlockBytes(audioBlock, input.apiKey, fetcher);
+  const raw = await resolveBlockBytes(audioBlock, input.baseUrl, input.apiKey, fetcher);
   const fmt = parsePcmMime(audioBlock.mime_type ?? audioBlock.mimeType ?? "audio/wav");
   const finalBytes = fmt.isPcm
     ? Buffer.concat([buildWavHeader(raw.length, audioBlock.sample_rate || fmt.sampleRate, audioBlock.channels || fmt.channels), raw])
