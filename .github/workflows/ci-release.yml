@@ -305,7 +305,7 @@ jobs:
         run: |
           set -euo pipefail
           TAG="$GITHUB_REF_NAME"
-          cat dist-release/SHA256SUMS-win.txt dist-release/SHA256SUMS-linux.txt > dist-release/SHA256SUMS.txt
+          cat dist-release/SHA256SUMS-win.txt dist-release/SHA256SUMS-linux.txt | tr -d '\r' > dist-release/SHA256SUMS.txt
           WIN_NAME=$(basename dist-release/AIVORA-Studio-Setup-*.exe)
           APPIMAGE_NAME=$(basename dist-release/AIVORA-Studio-*.AppImage)
           DEB_NAME=$(basename dist-release/AIVORA-Studio-*.deb)
