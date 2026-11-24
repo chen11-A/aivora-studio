@@ -2,7 +2,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { evaluateQcSignals, runPostExportQc, type ShotTimelineWindow } from "./export-qc";
+import { ProjectStore } from "../storage/project-store";
+import { exportEpisodeToMp4 } from "./export-pipeline";
+import {
+  buildFailedQcReport,
+  buildSkippedQcReport,
+  evaluateQcSignals,
+  resolveExportResultMessage,
+  runPostExportQc,
+  type ShotTimelineWindow,
+} from "./export-qc";
 import { probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
 
 const tempDirs: string[] = [];
@@ -45,6 +54,7 @@ describe("export-qc (aivora-qc port with shot mapping)", () => {
       loudnessNormalized: true,
     });
 
+    expect(report.status).toBe("issues");
     expect(report.ok).toBe(false);
     const types = report.issues.map((i) => i.type);
     expect(types).toContain("black");
@@ -61,6 +71,49 @@ describe("export-qc (aivora-qc port with shot mapping)", () => {
     const tpIssue = report.issues.find((i) => i.type === "true_peak")!;
     expect(tpIssue.severity).toBe("error");
   });
+
+  it(
+    "distinguishes passed, issues, skipped, and failed QC messages without falsely claiming passed (GPT P1 regression)",
+    async () => {
+      const skipped = buildSkippedQcReport(12);
+      expect(skipped.status).toBe("skipped");
+      expect(resolveExportResultMessage(skipped)).toContain("未执行成片质检");
+      expect(resolveExportResultMessage(skipped)).not.toContain("通过");
+
+      const failed = buildFailedQcReport(12, "ffmpeg exited with code 1");
+      expect(failed.status).toBe("failed");
+      expect(failed.ok).toBe(false);
+      expect(failed.errorMessage).toContain("ffmpeg exited with code 1");
+      expect(resolveExportResultMessage(failed)).toContain("扫描失败");
+      expect(resolveExportResultMessage(failed)).not.toContain("通过");
+
+      const ff = await probeFfmpegStatus();
+      if (!ff.available || !ff.ffmpegPath) return;
+
+      const wsRoot = makeTempDir();
+      const store = new ProjectStore(wsRoot);
+      try {
+        const ws = store.createProject({ name: "关闭质检测试", aspectRatio: "16:9" });
+        const ep = ws.episodes[0]!;
+        const outMp4 = path.join(ws.dirPath, "exports", "skip-qc.mp4");
+        const res = await exportEpisodeToMp4({
+          workspace: ws,
+          projectDir: ws.dirPath,
+          episodeId: ep.id,
+          outputPath: outMp4,
+          runQc: false,
+        });
+        expect(res.ok).toBe(true);
+        expect(res.qcReport?.status).toBe("skipped");
+        expect(res.qcReport?.skipped).toBe(true);
+        expect(res.message).toContain("未执行成片质检");
+        expect(res.message).not.toContain("通过");
+      } finally {
+        store.closeAll();
+      }
+    },
+    30_000,
+  );
 
   it("runs real FFmpeg post-export QC to detect black frames and >2s silence on a synthesized MP4", async () => {
     const ff = await probeFfmpegStatus();
@@ -104,6 +157,7 @@ describe("export-qc (aivora-qc port with shot mapping)", () => {
       loudnessNormalized: false,
     });
 
+    expect(report.status).toBe("issues");
     expect(report.ok).toBe(false);
     expect(report.issues.some((i) => i.type === "black" && i.shotId === "sh_black")).toBe(true);
     expect(report.issues.some((i) => i.type === "silence" && i.shotId === "sh_black")).toBe(true);
@@ -132,7 +186,7 @@ describe("export-qc (aivora-qc port with shot mapping)", () => {
       "-i",
       "sine=frequency=440:sample_rate=48000",
       "-af",
-      "volume=-14dB",
+      "loudnorm=I=-16:TP=-2",
       "-c:v",
       "libx264",
       "-pix_fmt",
@@ -152,6 +206,7 @@ describe("export-qc (aivora-qc port with shot mapping)", () => {
       loudnessNormalized: false,
     });
 
+    expect(report.status).toBe("passed");
     expect(report.issues.some((i) => i.type === "black")).toBe(false);
     expect(report.issues.some((i) => i.type === "freeze")).toBe(false);
     expect(report.issues.some((i) => i.type === "silence")).toBe(false);

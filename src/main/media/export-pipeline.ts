@@ -17,7 +17,7 @@ import {
   measureAudioLoudness,
 } from "./audio-normalize";
 import { EXPORT_TEMP_PREFIX } from "./export-guard";
-import { runPostExportQc, type ShotTimelineWindow } from "./export-qc";
+import { buildFailedQcReport, buildSkippedQcReport, resolveExportResultMessage, runPostExportQc, type ShotTimelineWindow } from "./export-qc";
 import {
   MediaProcessAbortedError,
   probeFfmpegStatus,
@@ -445,8 +445,10 @@ export async function exportEpisodeToMp4(params: {
     // Atomic publish intentionally runs un-aborted so target MP4 is never half-written
     const published = await atomicPublishFile(masterAbs, params.outputPath);
 
-    let qcReport: ExportEpisodeResult["qcReport"];
-    if (params.runQc !== false) {
+    let qcReport: NonNullable<ExportEpisodeResult["qcReport"]>;
+    if (params.runQc === false) {
+      qcReport = buildSkippedQcReport(actualDuration);
+    } else {
       emit(97, "成片质检", "正在扫描黑屏、静帧、无声与 -16 LUFS 峰值…");
       try {
         qcReport = await runPostExportQc({
@@ -459,8 +461,9 @@ export async function exportEpisodeToMp4(params: {
           loudnessNormalized: loudnessApplied,
           signal,
         });
-      } catch {
-        // Non-blocking: MP4 is already safely published on disk
+      } catch (qcErr) {
+        // Non-blocking: MP4 is already safely published on disk; report scan failure truthfully
+        qcReport = buildFailedQcReport(actualDuration, qcErr instanceof Error ? qcErr.message : String(qcErr));
       }
     }
     emit(100, "导出完成", `已保存成片：${published}`);
@@ -473,7 +476,7 @@ export async function exportEpisodeToMp4(params: {
       height: vStream.height,
       loudnessApplied,
       qcReport,
-      message: qcReport && !qcReport.ok ? "MP4 成片已保存（质检发现提醒，请查看下方清单）" : "MP4 成片已导出并通过质检",
+      message: resolveExportResultMessage(qcReport),
     };
   } catch (err) {
     if (err instanceof MediaProcessAbortedError || signal?.aborted) {

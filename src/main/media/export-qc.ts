@@ -251,6 +251,7 @@ export function evaluateQcSignals(input: {
     : `成片质检发现 ${issues.length} 项提醒 · ${lufsText} · 峰值 ${tpText}`;
 
   return {
+    status: ok ? "passed" : "issues",
     ok,
     durationSec: Number(durationSec.toFixed(2)),
     integratedLufs: input.integratedLufs,
@@ -258,6 +259,46 @@ export function evaluateQcSignals(input: {
     issues,
     summary,
   };
+}
+
+export function buildSkippedQcReport(durationSec: number): ExportQcReport {
+  return {
+    status: "skipped",
+    ok: true,
+    skipped: true,
+    durationSec: Number(durationSec.toFixed(2)),
+    integratedLufs: null,
+    truePeakDbtp: null,
+    issues: [],
+    summary: "未执行成片质检（已关闭导出后自动质检，仅完成 ffprobe 流与时长校验）",
+  };
+}
+
+export function buildFailedQcReport(durationSec: number, errorMessage: string): ExportQcReport {
+  const detail = errorMessage.trim().slice(0, 160);
+  return {
+    status: "failed",
+    ok: false,
+    errorMessage: detail || "FFmpeg 质检进程异常退出",
+    durationSec: Number(durationSec.toFixed(2)),
+    integratedLufs: null,
+    truePeakDbtp: null,
+    issues: [],
+    summary: "成片质检扫描失败（成片已正常保存，建议手动播放复核）",
+  };
+}
+
+export function resolveExportResultMessage(qcReport: ExportQcReport): string {
+  switch (qcReport.status) {
+    case "passed":
+      return "MP4 成片已导出并通过成片质检";
+    case "issues":
+      return "MP4 成片已保存（成片质检发现提醒，请查看下方清单）";
+    case "skipped":
+      return "MP4 成片已保存（未执行成片质检）";
+    case "failed":
+      return "MP4 成片已保存（成片质检扫描失败，请手动复核）";
+  }
 }
 
 /**

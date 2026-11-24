@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DirectorProposal, DirectorProposedShot } from "../../shared/types/jobs";
 import {
@@ -8,39 +10,14 @@ import {
 } from "./director-grounding";
 import { buildOfflineDirectorProposal } from "./director-prompt";
 
-const WANZHAO_SCRIPT = `第一场\u3000雨夜旧书店
-
-入秋后的第一场大雨来得又急又猛。巷子尽头那家“晚照书店”还亮着灯，玻璃门上贴着一张褪色的纸条：本店月底停业。
-
-门铃“叮”地响了一声。
-
-“打烊了。”林晚头也没抬，“要买书的话，明天来吧，全场五折。”
-
-“我不买书。”男人的声音很低，“我找林国栋。”
-
-“他三年前就不在了。”她说，“你是谁？”
-
-男人沉默了几秒，从风衣内袋里掏出一个用油纸包着的信封，放在收银台上。“我叫沈砚。十年前，你父亲借给我母亲一笔钱，救了她一命。她临走前让我一定把钱还上。”
-
-林晚低下头，声音有些发紧：“你来晚了。这家店，下个月就没了。”
-
-第二场\u3000码头仓库
-
-“我爸没欠过你们钱！”林晚攥紧了衣角，“那张借条是假的，我已经报警了。”
-
-沈砚扣住周烈的手腕，一拧，铁棍“当啷”落地。
-
-“小心！”林晚尖叫。
-
-“算你狠。”周烈啐了一口，带着人钻进雨里，消失在仓库后门。
-
-第三场\u3000医院走廊
-
-“你本来可以不管的。”她的声音很轻，“这是我家的事。”
-
-“因为那张照片里，你爸笑得很开心。”他顿了顿，“我想让那扇门一直亮着灯。”
-
-天亮的时候，两人一起回到青石巷。林晚蹲下去，捡起一本封面被踩脏的诗集，用袖子一点点擦干净。沈砚把倒下的书架扶起来，一层一层地摆正。巷口卖早点的阿婆探头看了一眼，端来两碗热豆浆，什么也没问，只说了一句：“灯还亮着，就好。”`;
+const FIXTURES_DIR = path.resolve(__dirname, "__fixtures__");
+const FULL_WANZHAO_SCRIPT = readFileSync(path.join(FIXTURES_DIR, "wanzhao-bookstore.txt"), "utf8");
+const FULL_WANZHAO_NOTES = JSON.parse(
+  readFileSync(path.join(FIXTURES_DIR, "wanzhao-bookstore.notes.json"), "utf8"),
+) as {
+  not_dialogue: Array<{ paragraph: string; text: string; why: string }>;
+  speakers: Array<{ paragraph: string; line: string; speaker: string }>;
+};
 
 function makeShot(partial: Partial<DirectorProposedShot> & { title: string }): DirectorProposedShot {
   return {
@@ -57,39 +34,87 @@ function makeShot(partial: Partial<DirectorProposedShot> & { title: string }): D
   };
 }
 
-describe("director-grounding (Wanzhao Bookstore acceptance & >16-shot merge)", () => {
-  it("extracts spoken dialogues from Wanzhao Bookstore while ignoring shop names and onomatopoeia", () => {
-    const lines = extractScriptDialogueLines(WANZHAO_SCRIPT);
-    expect(lines).not.toContain("晚照书店");
-    expect(lines).not.toContain("叮");
-    expect(lines).not.toContain("当啷");
-    expect(lines).toContain("打烊了。");
-    expect(lines).toContain("要买书的话，明天来吧，全场五折。");
-    expect(lines).toContain("灯还亮着，就好。");
-    expect(lines.length).toBe(17);
+describe("director-grounding (full Wanzhao Bookstore acceptance & >16-shot merge)", () => {
+  it("extracts all 33 exact spoken lines from the full Wanzhao Bookstore novel while excluding shop names & sound effects", () => {
+    const lines = extractScriptDialogueLines(FULL_WANZHAO_SCRIPT);
+    for (const nonDlg of FULL_WANZHAO_NOTES.not_dialogue) {
+      expect(lines).not.toContain(nonDlg.text);
+    }
+    const expected = FULL_WANZHAO_NOTES.speakers.map((s) => s.line);
+    expect(lines).toEqual(expected);
+    expect(lines.length).toBe(33);
   });
 
-  it("splits the full 3-scene Wanzhao Bookstore script offline with 100% dialogue & ending coverage", () => {
-    const proposal = buildOfflineDirectorProposal("晚照书店", WANZHAO_SCRIPT);
+  it("splits the full unabridged 3-scene Wanzhao Bookstore script offline with 100% dialogue, action & ending coverage", () => {
+    const proposal = buildOfflineDirectorProposal("晚照书店", FULL_WANZHAO_SCRIPT);
     expect(proposal.scenes.length).toBe(3);
     expect(proposal.scenes[0]?.title).toContain("第一场");
+    expect(proposal.scenes[1]?.title).toContain("第二场");
     expect(proposal.scenes[2]?.title).toContain("第三场");
+
+    // Full Scene 2 has 17 paragraphs in the original novel and gets merged down cleanly without dropping any line
+    for (const sc of proposal.scenes) {
+      expect(sc.shots.length).toBeLessThanOrEqual(16);
+    }
+
+    // Key narrative actions remain attached to their respective scenes
+    const scene1Visuals = proposal.scenes[0]!.shots.map((s) => s.visualPrompt).join("\n");
+    const scene2Visuals = proposal.scenes[1]!.shots.map((s) => s.visualPrompt).join("\n");
+    const scene3Visuals = proposal.scenes[2]!.shots.map((s) => s.visualPrompt).join("\n");
+    expect(scene1Visuals).toContain("推门进来");
+    expect(scene2Visuals).toContain("把书架推倒了");
+    expect(scene2Visuals).toContain("抄起一根铁棍");
+    expect(scene3Visuals).toContain("捡起一本封面被踩脏的诗集");
+
     expect(proposal.grounding?.ok).toBe(true);
+    expect(proposal.grounding?.scriptDialogueCount).toBe(33);
+    expect(proposal.grounding?.matchedDialogueCount).toBe(33);
     expect(proposal.grounding?.dialogueCoveragePct).toBe(100);
     expect(proposal.grounding?.endingCovered).toBe(true);
     expect(proposal.grounding?.missingDialogues).toEqual([]);
     expect(proposal.grounding?.ungroundedDialogues).toEqual([]);
   });
 
+  it("does NOT count sourceExcerpt as filmed dialogue when dialogue and subtitle are left empty (GPT P1 regression)", () => {
+    const full = buildOfflineDirectorProposal("晚照书店", FULL_WANZHAO_SCRIPT);
+    const lastSceneIdx = full.scenes.length - 1;
+    const tampered: DirectorProposal = {
+      ...full,
+      scenes: full.scenes.map((sc, sIdx) => {
+        if (sIdx !== lastSceneIdx) return sc;
+        const lastShotIdx = sc.shots.length - 1;
+        return {
+          ...sc,
+          shots: sc.shots.map((sh, i) =>
+            i === lastShotIdx
+              ? {
+                  ...sh,
+                  dialogue: "",
+                  subtitle: "",
+                  sourceExcerpt: "巷口卖早点的阿婆只说了一句：“灯还亮着，就好。”",
+                }
+              : sh,
+          ),
+        };
+      }),
+    };
+
+    const report = evaluateDirectorProposalGrounding(tampered, FULL_WANZHAO_SCRIPT);
+    expect(report.ok).toBe(false);
+    expect(report.dialogueCoveragePct).toBeLessThan(100);
+    expect(report.missingDialogues).toContain("灯还亮着，就好。");
+    expect(report.endingCovered).toBe(false);
+  });
+
   it("catches missing ending sentence and missing dialogue when a model truncates the tail", () => {
-    const full = buildOfflineDirectorProposal("晚照书店", WANZHAO_SCRIPT);
+    const full = buildOfflineDirectorProposal("晚照书店", FULL_WANZHAO_SCRIPT);
     const truncated: DirectorProposal = {
       ...full,
       scenes: full.scenes.map((sc, idx) =>
         idx === full.scenes.length - 1 ? { ...sc, shots: sc.shots.slice(0, -1) } : sc,
       ),
     };
-    const report = evaluateDirectorProposalGrounding(truncated, WANZHAO_SCRIPT);
+    const report = evaluateDirectorProposalGrounding(truncated, FULL_WANZHAO_SCRIPT);
     expect(report.ok).toBe(false);
     expect(report.endingCovered).toBe(false);
     expect(report.missingDialogues).toContain("灯还亮着，就好。");
@@ -97,7 +122,7 @@ describe("director-grounding (Wanzhao Bookstore acceptance & >16-shot merge)", (
   });
 
   it("flags ungrounded/hallucinated dialogue that does not exist in the original script", () => {
-    const full = buildOfflineDirectorProposal("晚照书店", WANZHAO_SCRIPT);
+    const full = buildOfflineDirectorProposal("晚照书店", FULL_WANZHAO_SCRIPT);
     const mutated: DirectorProposal = {
       ...full,
       scenes: full.scenes.map((sc, sIdx) =>
@@ -117,7 +142,7 @@ describe("director-grounding (Wanzhao Bookstore acceptance & >16-shot merge)", (
           : sc,
       ),
     };
-    const report = evaluateDirectorProposalGrounding(mutated, WANZHAO_SCRIPT);
+    const report = evaluateDirectorProposalGrounding(mutated, FULL_WANZHAO_SCRIPT);
     expect(report.ok).toBe(false);
     expect(report.ungroundedDialogues).toContain("其实我来自十年后的火星空间站。");
   });

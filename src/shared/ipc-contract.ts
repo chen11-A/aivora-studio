@@ -94,9 +94,13 @@ export type ExportQcIssue = {
   suggestion: string;
 };
 
+export type ExportQcStatus = "passed" | "issues" | "skipped" | "failed";
+
 export type ExportQcReport = {
+  status: ExportQcStatus;
   ok: boolean;
   skipped?: boolean;
+  errorMessage?: string;
   durationSec: number;
   integratedLufs: number | null;
   truePeakDbtp: number | null;

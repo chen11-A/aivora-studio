@@ -76,14 +76,15 @@ export function extractScriptDialogueLines(scriptText: string): string[] {
 
 export function extractScriptFinalBeat(scriptText: string): {
   snippet: string;
-  keyPhrases: string[];
+  lastDialogue: string;
+  visualPhrase: string;
 } {
   const paragraphs = scriptText
     .split(/\r?\n+/)
     .map((p) => p.trim())
     .filter(Boolean);
   const lastParagraph = paragraphs.at(-1) ?? "";
-  if (!lastParagraph) return { snippet: "", keyPhrases: [] };
+  if (!lastParagraph) return { snippet: "", lastDialogue: "", visualPhrase: "" };
 
   const lastDialogues = extractScriptDialogueLines(lastParagraph);
   const lastDialogue = lastDialogues.at(-1) ?? "";
@@ -91,14 +92,10 @@ export function extractScriptFinalBeat(scriptText: string): {
     .split(/(?<=[。！？!?])/)
     .map((s) => s.trim())
     .filter((s) => normalizeGroundingText(s).length >= 3);
-  const lastSentence = sentences.at(-1) ?? lastParagraph;
+  const visualPhrase = sentences.at(-1) ?? lastParagraph;
 
-  const keyPhrases = new Set<string>();
-  if (lastDialogue) keyPhrases.add(lastDialogue);
-  if (lastSentence) keyPhrases.add(lastSentence);
-
-  const snippet = (lastDialogue || lastSentence).slice(0, 36);
-  return { snippet, keyPhrases: [...keyPhrases] };
+  const snippet = (lastDialogue || visualPhrase).slice(0, 36);
+  return { snippet, lastDialogue, visualPhrase };
 }
 
 function uniqueStrings(items: string[]): string[] {
@@ -283,8 +280,9 @@ export function evaluateDirectorProposalGrounding(
   const allShots = proposal.scenes.flatMap((s) => s.shots);
   const scriptNorm = normalizeGroundingText(scriptText);
   const scriptDialogues = extractScriptDialogueLines(scriptText);
+  // sourceExcerpt is strictly for traceability; only dialogue/subtitle count as filmed speech
   const shotDialogueCorpus = normalizeGroundingText(
-    allShots.map((s) => `${s.dialogue} ${s.subtitle} ${s.sourceExcerpt}`).join(" "),
+    allShots.map((s) => `${s.dialogue} ${s.subtitle}`).join(" "),
   );
 
   const missingDialogues: string[] = [];
@@ -312,18 +310,23 @@ export function evaluateDirectorProposalGrounding(
 
   const finalBeat = extractScriptFinalBeat(scriptText);
   const tailShots = allShots.slice(-2);
-  const tailCorpus = normalizeGroundingText(
-    tailShots.map((s) => `${s.dialogue} ${s.subtitle} ${s.sourceExcerpt} ${s.visualPrompt}`).join(" "),
-  );
-  const endingCovered =
-    finalBeat.keyPhrases.length === 0 ||
-    finalBeat.keyPhrases.some((phrase) => {
-      const norm = normalizeGroundingText(phrase);
-      if (!norm) return true;
-      if (tailCorpus.includes(norm)) return true;
-      const tailSlice = norm.slice(-Math.min(6, norm.length));
-      return tailSlice.length >= 3 && tailCorpus.includes(tailSlice);
-    });
+  let endingCovered = true;
+  if (finalBeat.lastDialogue) {
+    const tailDialogueCorpus = normalizeGroundingText(
+      tailShots.map((s) => `${s.dialogue} ${s.subtitle}`).join(" "),
+    );
+    endingCovered = textMatchesSource(finalBeat.lastDialogue, tailDialogueCorpus);
+  } else if (finalBeat.visualPhrase) {
+    const tailVisualCorpus = normalizeGroundingText(
+      tailShots.map((s) => `${s.visualPrompt} ${s.subtitle}`).join(" "),
+    );
+    const norm = normalizeGroundingText(finalBeat.visualPhrase);
+    const tailSlice = norm.slice(-Math.min(6, norm.length));
+    endingCovered =
+      !norm ||
+      tailVisualCorpus.includes(norm) ||
+      (tailSlice.length >= 3 && tailVisualCorpus.includes(tailSlice));
+  }
 
   const matchedDialogueCount = scriptDialogues.length - missingDialogues.length;
   const dialogueCoveragePct =

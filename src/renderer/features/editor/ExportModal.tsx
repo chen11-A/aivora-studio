@@ -229,12 +229,19 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
               <div
                 data-testid="export-qc-report"
                 className={`mt-1 rounded-md p-2.5 border text-[11px] flex flex-col gap-1.5 ${
-                  qcReport.ok
+                  qcReport.status === "passed"
                     ? "bg-[#064e3b]/40 border-[#10b981]/35 text-[#a7f3d0]"
-                    : "bg-[#1c1917]/70 border-[#f59e0b]/40 text-[#fde68a]"
+                    : qcReport.status === "skipped"
+                      ? "bg-[#1e2430]/70 border-[#343d4e] text-[#cbd5e1]"
+                      : qcReport.status === "failed"
+                        ? "bg-[#ef4444]/10 border-[#ef4444]/40 text-[#fecaca]"
+                        : "bg-[#1c1917]/70 border-[#f59e0b]/40 text-[#fde68a]"
                 }`}
               >
                 <div className="font-medium">{qcReport.summary}</div>
+                {qcReport.status === "failed" && qcReport.errorMessage && (
+                  <div className="text-[10px] opacity-85 break-all">错误详情：{qcReport.errorMessage}</div>
+                )}
                 {qcReport.issues.slice(0, 6).map((item) => (
                   <div
                     key={item.id}
