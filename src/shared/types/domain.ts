@@ -86,6 +86,7 @@ export const AssetSchema = z.object({
   description: z.string().default(""),
   mediaPath: z.string().nullable().default(null),
   mediaSha256: z.string().nullable().default(null),
+  candidatePaths: z.array(z.string()).default([]),
   lockedRef: z.boolean().default(false),
   voiceId: z.string().nullable().default(null),
   updatedAt: z.string(),

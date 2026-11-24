@@ -27,6 +27,7 @@ export function CastStage() {
   const editAsset = useStudioStore((s) => s.editAsset);
   const toggleAssetLock = useStudioStore((s) => s.toggleAssetLock);
   const importAssetImage = useStudioStore((s) => s.importAssetImage);
+  const selectAssetCandidate = useStudioStore((s) => s.selectAssetCandidate);
   const openAssetPortraitConfirm = useAiGenerationStore((s) => s.openAssetPortraitConfirm);
 
   const [filter, setFilter] = useState<"all" | AssetKind>("all");
@@ -53,6 +54,14 @@ export function CastStage() {
         ? mediaPath
         : client.mediaUrl(workspace.project.id, mediaPath)
       : null;
+
+  function handleDropImage(assetId: string, e: React.DragEvent) {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    const filePath = client.resolveDroppedFilePath?.(file);
+    if (filePath) void importAssetImage(assetId, filePath);
+  }
 
   async function handleCreate() {
     if (!newName.trim()) return;
@@ -90,7 +99,7 @@ export function CastStage() {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-[12px] text-[#768196] hidden lg:inline">
-              生成或上传定妆候选图，确认满意后点「设为已确认参考」
+              支持直接拖入图片，生成候选后检视满意再「设为已确认参考」
             </span>
             <button
               type="button"
@@ -124,6 +133,8 @@ export function CastStage() {
                     key={asset.id}
                     data-testid={`asset-card-${asset.id}`}
                     onClick={() => setSelectedId(asset.id)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => handleDropImage(asset.id, e)}
                     className={`rounded-xl overflow-hidden bg-[#14171e] border transition-colors flex flex-col cursor-pointer ${
                       active ? "border-[#3b82f6] ring-1 ring-[#3b82f6]/40" : "border-[#252b37] hover:border-[#343d4e]"
                     }`}
@@ -166,7 +177,7 @@ export function CastStage() {
         </div>
       </section>
 
-      {/* Right Selected Asset Inspector (Reference Image, Lock, Appearance & Voice) */}
+      {/* Right Selected Asset Inspector (Reference Image, Candidate Strip, Lock, Appearance & Voice) */}
       <aside
         className="bg-[#14171e] border-l border-[#252b37] flex flex-col min-h-0 overflow-hidden"
         data-testid="cast-inspector"
@@ -193,7 +204,11 @@ export function CastStage() {
 
         {selected ? (
           <div className="panel-scroll flex-1 p-4 flex flex-col gap-3.5">
-            <div className="rounded-lg overflow-hidden bg-[#0f1218] border border-[#252b37]">
+            <div
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => handleDropImage(selected.id, e)}
+              className="rounded-lg overflow-hidden bg-[#0f1218] border border-[#252b37]"
+            >
               <div className="aspect-video w-full relative overflow-hidden">
                 {resolveSrc(selected.mediaPath) && (
                   <img
@@ -203,11 +218,32 @@ export function CastStage() {
                   />
                 )}
               </div>
+              {selected.candidatePaths.length > 1 && (
+                <div className="px-2.5 pt-2 flex items-center gap-1.5 overflow-x-auto" data-testid="asset-candidate-strip">
+                  {selected.candidatePaths.map((cp, idx) => {
+                    const cSrc = resolveSrc(cp);
+                    const isCur = cp === selected.mediaPath;
+                    return (
+                      <button
+                        key={cp}
+                        type="button"
+                        onClick={() => void selectAssetCandidate(selected.id, cp)}
+                        title={`切换候选定妆 #${idx + 1}`}
+                        className={`shrink-0 w-12 h-8 rounded overflow-hidden border cursor-pointer ${
+                          isCur ? "border-[#3b82f6] ring-1 ring-[#3b82f6]/50" : "border-[#252b37] opacity-75 hover:opacity-100"
+                        }`}
+                      >
+                        {cSrc && <img src={cSrc} alt={`候选 ${idx + 1}`} className="w-full h-full object-cover" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               <div className="p-2.5 border-t border-[#252b37] flex flex-col gap-2">
                 <span className="text-[11px] text-[#768196] truncate">
                   {selected.lockedRef
                     ? "已确认参考：生首帧/生视频将注入此设定与参考图"
-                    : "候选状态：满意后请点右上角「设为已确认参考」"}
+                    : "候选状态（支持拖入图片）：满意后点「设为已确认参考」"}
                 </span>
                 <div className="grid grid-cols-2 gap-1.5">
                   <button

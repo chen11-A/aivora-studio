@@ -72,9 +72,9 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
           },
         ],
         assets: [
-          { id: "ast_lin", projectId: demoId, kind: "character", name: "林晚", description: "24岁插画师，浅灰风衣，眼神沉静温柔", mediaPath: imgLin, mediaSha256: null, lockedRef: true, voiceId: "zh_female_warm", updatedAt: now },
-          { id: "ast_chen", projectId: demoId, kind: "character", name: "陈伯", description: "68岁旧书店店主，圆框眼镜，语调舒缓", mediaPath: imgChen, mediaSha256: null, lockedRef: true, voiceId: "zh_male_elder", updatedAt: now },
-          { id: "ast_shop", projectId: demoId, kind: "scene", name: "晚照书店", description: "老街木结构书店，黄昏暖光与雨后青石板", mediaPath: imgShop, mediaSha256: null, lockedRef: true, voiceId: null, updatedAt: now },
+          { id: "ast_lin", projectId: demoId, kind: "character", name: "林晚", description: "24岁插画师，浅灰风衣，眼神沉静温柔", mediaPath: imgLin, mediaSha256: null, candidatePaths: [imgLin], lockedRef: true, voiceId: "zh_female_warm", updatedAt: now },
+          { id: "ast_chen", projectId: demoId, kind: "character", name: "陈伯", description: "68岁旧书店店主，圆框眼镜，语调舒缓", mediaPath: imgChen, mediaSha256: null, candidatePaths: [imgChen], lockedRef: true, voiceId: "zh_male_elder", updatedAt: now },
+          { id: "ast_shop", projectId: demoId, kind: "scene", name: "晚照书店", description: "老街木结构书店，黄昏暖光与雨后青石板", mediaPath: imgShop, mediaSha256: null, candidatePaths: [imgShop], lockedRef: true, voiceId: null, updatedAt: now },
         ],
         scenes: [
           { id: "sc_1", episodeId: "ep_1", orderIndex: 0, title: "第一场 · 晚照书店外", locationAssetId: "ast_shop", summary: "雨后傍晚，林晚重返老街书店门口", paragraphStart: 0, paragraphEnd: 2 },
@@ -164,7 +164,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     },
     createAsset: async (input) => {
       const ws = workspaces.get(input.projectId)!;
-      const asset: Asset = { id: `ast_${Date.now()}`, projectId: input.projectId, kind: input.kind, name: input.name, description: input.description ?? "", mediaPath: imgLin, mediaSha256: null, lockedRef: false, voiceId: input.voiceId ?? null, updatedAt: new Date().toISOString() };
+      const asset: Asset = { id: `ast_${Date.now()}`, projectId: input.projectId, kind: input.kind, name: input.name, description: input.description ?? "", mediaPath: imgLin, mediaSha256: null, candidatePaths: [imgLin], lockedRef: false, voiceId: input.voiceId ?? null, updatedAt: new Date().toISOString() };
       ws.assets.unshift(asset);
       return structuredClone(asset);
     },
@@ -181,6 +181,13 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       return structuredClone(asset);
     },
     importAssetImage: async () => ({ ok: false, message: "请在桌面端导入本地定妆参考图" }),
+    selectAssetCandidate: async (input) => {
+      const ws = workspaces.get(input.projectId)!;
+      const asset = ws.assets.find((a) => a.id === input.assetId)!;
+      asset.mediaPath = input.mediaPath;
+      asset.lockedRef = false;
+      return structuredClone(asset);
+    },
     createShot: async (input) => {
       const ws = workspaces.get(input.projectId)!;
       const epShots = ws.shots.filter((s) => s.episodeId === input.episodeId).sort((a, b) => a.orderIndex - b.orderIndex);
@@ -279,6 +286,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     revealPathInFolder: async () => ({ ok: false }),
     exportProjectArchive: async () => ({ ok: true, message: "浏览器预览模式不写入磁盘" }),
     importProjectArchive: async () => ({ ok: false, message: "请在桌面端使用工程包导入" }),
+    cleanUnreferencedAssets: async () => ({ ok: true, removedFiles: 0, freedBytes: 0, message: "当前作品目录干净，没有未引用的孤儿缓存文件" }),
     getModelCenter: async () => structuredClone(modelCenter),
     saveProviderConfig: async (input) => {
       const saved: ProviderConfigView = {
@@ -361,6 +369,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       workspace: structuredClone(workspaces.get(projectId)!),
       message: "已撤销拆镜提案",
     }),
+    getDirectorUndoState: async () => ({ undoToken: null }),
     prepareGenerationPlan: async ({ projectId, shotId, assetId, kind }) => {
       const ws = workspaces.get(projectId)!;
       const shot = ws.shots.find((s) => s.id === shotId) ?? ws.shots[0]!;
@@ -388,6 +397,8 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
         estimatedSec: kind === "video" ? 60 : 12,
         promptPreview: targetAsset ? `${targetAsset.name} · ${targetAsset.description}` : shot.visualPrompt || shot.title,
         injectedRefs: targetAsset ? [] : locked,
+        firstFramePath: null,
+        upstreamDurationNote: null,
         idempotencyKey: `idem_${Date.now()}`,
         inputSha256: "preview",
         providerSnapshotJson: "",
@@ -402,6 +413,29 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       throw new Error("请在桌面端使用查单找回");
     },
     listProjectJobs: async () => [],
+    prepareBatchPlan: async ({ projectId, episodeId, mode }) => {
+      const ws = workspaces.get(projectId)!;
+      const epShots = ws.shots.filter((s) => s.episodeId === episodeId);
+      return {
+        batchId: `bat_${Date.now()}`,
+        projectId,
+        episodeId,
+        mode,
+        totalShotsInEpisode: epShots.length,
+        skippedReadyCount: 0,
+        plans: [],
+        providerLabel: "未配置模型",
+        modelId: "",
+        estimatedTotalSec: 0,
+        canRun: false,
+        blockingReason: "请先在「模型中心」配置对应环节的模型路由与密钥，再启动批量补齐。",
+      };
+    },
+    startBatchRun: async () => {
+      throw new Error("请在桌面端发起批量生成");
+    },
+    pauseBatchRun: async () => ({ ok: false, message: "当前没有运行中的批量任务" }),
+    getBatchProgress: async () => null,
     preflightExportEpisode: async () => ({
       ok: true,
       blockingIssues: [],
@@ -412,8 +446,9 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     cancelEpisodeExport: async () => ({ ok: false, message: "浏览器预览模式无导出任务" }),
     onFlushBeforeClose: () => () => undefined,
     notifyFlushComplete: () => undefined,
-    getAppInfo: async () => ({ version: "1.1.1", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "1.2.0", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
+    resolveDroppedFilePath: () => null,
   };
 }
 

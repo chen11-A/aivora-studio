@@ -1,6 +1,12 @@
 import { create } from "zustand";
 import type { Job } from "@shared/types/domain";
-import type { DirectorProposal, GenerationPlan } from "@shared/types/jobs";
+import type {
+  BatchGenerationMode,
+  BatchGenerationPlan,
+  BatchProgressSnapshot,
+  DirectorProposal,
+  GenerationPlan,
+} from "@shared/types/jobs";
 import type { OAuthProviderId } from "@shared/types/provider";
 import { getDesktopClient } from "../lib/desktop-client";
 import { useStudioStore } from "./useStudioStore";
@@ -15,11 +21,16 @@ interface AiGenerationStore {
   lastUndoToken: string | null;
   oauthBusyId: OAuthProviderId | null;
   testingProviderId: string | null;
+  batchModalOpen: boolean;
+  batchMode: BatchGenerationMode;
+  pendingBatchPlan: BatchGenerationPlan | null;
+  batchProgress: BatchProgressSnapshot | null;
 
   setJobDrawerOpen: (open: boolean) => void;
   closePendingPlan: () => void;
   closeDirectorProposal: () => void;
   refreshJobs: () => Promise<void>;
+  syncDirectorUndoState: () => Promise<void>;
 
   startOAuthLogin: (providerId: OAuthProviderId) => Promise<void>;
   disconnectOAuth: (providerId: OAuthProviderId) => Promise<void>;
@@ -33,6 +44,13 @@ interface AiGenerationStore {
   openAssetPortraitConfirm: (assetId: string) => Promise<void>;
   confirmRunPendingPlan: () => Promise<void>;
   recoverJob: (jobId: string, remoteTaskId?: string) => Promise<void>;
+
+  openBatchModal: (mode?: BatchGenerationMode) => Promise<void>;
+  closeBatchModal: () => void;
+  selectBatchMode: (mode: BatchGenerationMode) => Promise<void>;
+  startBatchRun: () => Promise<void>;
+  pauseBatchRun: () => Promise<void>;
+  pollBatchProgress: () => Promise<void>;
 }
 
 function showToast(message: string) {
@@ -62,6 +80,10 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
     lastUndoToken: null,
     oauthBusyId: null,
     testingProviderId: null,
+    batchModalOpen: false,
+    batchMode: "image",
+    pendingBatchPlan: null,
+    batchProgress: null,
 
     setJobDrawerOpen(open) {
       set({ jobDrawerOpen: open });
@@ -79,6 +101,17 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
       if (!ws) return;
       const jobs = await client.listProjectJobs(ws.project.id);
       set({ jobs });
+    },
+
+    async syncDirectorUndoState() {
+      const { workspace, activeEpisodeId } = useStudioStore.getState();
+      const epId = activeEpisodeId ?? workspace?.episodes[0]?.id;
+      if (!workspace || !epId) {
+        set({ lastUndoToken: null });
+        return;
+      }
+      const res = await client.getDirectorUndoState({ projectId: workspace.project.id, episodeId: epId });
+      set({ lastUndoToken: res.undoToken });
     },
 
     async startOAuthLogin(providerId) {
@@ -116,9 +149,7 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
       set({ directorLoading: true });
       try {
         const res = await client.proposeDirectorSplit({ projectId: workspace.project.id, episodeId: epId });
-        if (res.ok && res.proposal) {
-          set({ directorProposal: res.proposal });
-        }
+        if (res.ok && res.proposal) set({ directorProposal: res.proposal });
         showToast(res.message);
       } finally {
         set({ directorLoading: false });
@@ -138,11 +169,7 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
       if (res.ok && res.workspace) {
         const firstShot =
           res.workspace.shots.find((s) => s.episodeId === epId)?.id ?? res.workspace.shots[0]?.id ?? null;
-        useStudioStore.setState({
-          workspace: res.workspace,
-          activeShotId: firstShot,
-          saveState: "saved",
-        });
+        useStudioStore.setState({ workspace: res.workspace, activeShotId: firstShot, saveState: "saved" });
         set({ directorProposal: null, lastUndoToken: res.undoToken ?? null });
       }
       showToast(res.message);
@@ -204,6 +231,58 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
       useStudioStore.setState({ workspace: freshWs, saveState: "saved" });
       await get().refreshJobs();
       showToast(res.message);
+    },
+
+    async openBatchModal(mode = "image") {
+      set({ batchModalOpen: true, batchMode: mode });
+      await get().selectBatchMode(mode);
+      await get().pollBatchProgress();
+    },
+
+    closeBatchModal() {
+      set({ batchModalOpen: false });
+    },
+
+    async selectBatchMode(mode) {
+      const { workspace, activeEpisodeId } = useStudioStore.getState();
+      const epId = activeEpisodeId ?? workspace?.episodes[0]?.id;
+      set({ batchMode: mode });
+      if (!workspace || !epId) return;
+      const plan = await client.prepareBatchPlan({ projectId: workspace.project.id, episodeId: epId, mode });
+      set({ pendingBatchPlan: plan });
+    },
+
+    async startBatchRun() {
+      const plan = get().pendingBatchPlan;
+      if (!plan || !plan.canRun) return;
+      try {
+        const snap = await client.startBatchRun(plan);
+        set({ batchProgress: snap });
+        showToast(`已启动批量补齐（共 ${snap.totalCount} 镜，并发 2 路）`);
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : "启动批量生成失败");
+      }
+    },
+
+    async pauseBatchRun() {
+      const ws = useStudioStore.getState().workspace;
+      if (!ws) return;
+      const res = await client.pauseBatchRun(ws.project.id);
+      await get().pollBatchProgress();
+      showToast(res.message);
+    },
+
+    async pollBatchProgress() {
+      const ws = useStudioStore.getState().workspace;
+      if (!ws) return;
+      const prevRunning = get().batchProgress?.running ?? false;
+      const snap = await client.getBatchProgress(ws.project.id);
+      set({ batchProgress: snap });
+      if (snap && (snap.running || prevRunning)) {
+        const freshWs = await client.openProject(ws.project.id);
+        useStudioStore.setState({ workspace: freshWs, saveState: "saved" });
+        await get().refreshJobs();
+      }
     },
   };
 });

@@ -66,21 +66,23 @@ interface StudioStore {
   createAsset: (input: { kind: AssetKind; name: string; description?: string; voiceId?: string | null }) => Promise<void>;
   editAsset: (patch: Omit<UpdateAssetInput, "projectId">) => void;
   toggleAssetLock: (assetId: string) => Promise<void>;
-  importAssetImage: (assetId: string) => Promise<void>;
+  importAssetImage: (assetId: string, sourceFilePath?: string) => Promise<void>;
+  selectAssetCandidate: (assetId: string, mediaPath: string) => Promise<void>;
   createShot: (sceneId: string, beforeShotId?: string | null) => Promise<void>;
   moveShot: (shotId: string, direction: "up" | "down") => Promise<void>;
   deleteShot: (shotId: string) => Promise<void>;
   editShot: (patch: Omit<UpdateShotInput, "projectId">) => void;
   selectTake: (shotId: string, takeId: string, kind: TakeKind) => Promise<void>;
   addSyntheticTake: (shotId: string, kind: TakeKind, label?: string) => Promise<void>;
-  importShotTake: (shotId: string, kind: TakeKind) => Promise<void>;
-  importProjectBgm: () => Promise<void>;
+  importShotTake: (shotId: string, kind: TakeKind, sourceFilePath?: string) => Promise<void>;
+  importProjectBgm: (sourceFilePath?: string) => Promise<void>;
   clearProjectBgm: () => Promise<void>;
   exportCurrentEpisode: () => Promise<void>;
   revealPath: (filePath: string) => Promise<void>;
   updateProjectSettings: (patch: Omit<UpdateProjectSettingsInput, "projectId">) => Promise<void>;
   exportArchive: () => Promise<void>;
   importArchive: () => Promise<void>;
+  cleanUnreferencedAssets: () => Promise<void>;
   saveProvider: (input: SaveProviderConfigInput) => Promise<void>;
   deleteProvider: (providerId: string) => Promise<void>;
   updateRouting: (routing: ModelRouting) => Promise<void>;
@@ -377,39 +379,36 @@ export const useStudioStore = create<StudioStore>((set, get) => {
         });
     },
 
-    async importAssetImage(assetId) {
+    async importAssetImage(assetId, sourceFilePath) {
       const ws = get().workspace;
       if (!ws || !(await guardFlush())) return;
-      const res = await client.importAssetImage({ projectId: ws.project.id, assetId });
+      const res = await client.importAssetImage({ projectId: ws.project.id, assetId, sourceFilePath });
       if (res.ok && res.asset) {
-        set({
-          workspace: {
-            ...ws,
-            assets: ws.assets.map((a) => (a.id === assetId ? res.asset! : a)),
-          },
-          saveState: "saved",
-        });
+        set({ workspace: { ...ws, assets: ws.assets.map((a) => (a.id === assetId ? res.asset! : a)) }, saveState: "saved" });
       }
       flashToast(res.message);
     },
 
-    async importShotTake(shotId, kind) {
+    async selectAssetCandidate(assetId, mediaPath) {
+      const ws = get().workspace;
+      if (!ws) return;
+      const updated = await client.selectAssetCandidate({ projectId: ws.project.id, assetId, mediaPath });
+      set({ workspace: { ...ws, assets: ws.assets.map((a) => (a.id === assetId ? updated : a)) }, saveState: "saved" });
+    },
+
+    async importShotTake(shotId, kind, sourceFilePath) {
       const ws = get().workspace;
       if (!ws || !(await guardFlush())) return;
-      const res = await client.importShotTake({ projectId: ws.project.id, shotId, kind });
-      if (res.ok && res.workspace) {
-        set({ workspace: res.workspace, saveState: "saved" });
-      }
+      const res = await client.importShotTake({ projectId: ws.project.id, shotId, kind, sourceFilePath });
+      if (res.ok && res.workspace) set({ workspace: res.workspace, saveState: "saved" });
       flashToast(res.message);
     },
 
-    async importProjectBgm() {
+    async importProjectBgm(sourceFilePath) {
       const ws = get().workspace;
       if (!ws || !(await guardFlush())) return;
-      const res = await client.importProjectBgm(ws.project.id);
-      if (res.ok && res.workspace) {
-        set({ workspace: res.workspace, saveState: "saved" });
-      }
+      const res = await client.importProjectBgm(ws.project.id, sourceFilePath);
+      if (res.ok && res.workspace) set({ workspace: res.workspace, saveState: "saved" });
       flashToast(res.message);
     },
 
@@ -424,13 +423,8 @@ export const useStudioStore = create<StudioStore>((set, get) => {
     async exportCurrentEpisode() {
       const ws = get().workspace;
       const epId = get().activeEpisodeId ?? ws?.episodes[0]?.id;
-      if (!ws || !epId || get().exporting) return;
-      if (!(await guardFlush())) return;
-      set({
-        exporting: true,
-        lastExportResult: null,
-        exportProgress: { percent: 2, stage: "准备导出", detail: "请选择 MP4 成片保存路径…" },
-      });
+      if (!ws || !epId || get().exporting || !(await guardFlush())) return;
+      set({ exporting: true, lastExportResult: null, exportProgress: { percent: 2, stage: "准备导出", detail: "请选择 MP4 成片保存路径…" } });
       const unsub = client.onExportProgress((ev) => set({ exportProgress: ev }));
       try {
         const res = await client.exportEpisodeVideo({ projectId: ws.project.id, episodeId: epId });
@@ -472,24 +466,28 @@ export const useStudioStore = create<StudioStore>((set, get) => {
       flashToast(res.message);
     },
 
+    async cleanUnreferencedAssets() {
+      const ws = get().workspace;
+      if (!ws || !(await guardFlush())) return;
+      const res = await client.cleanUnreferencedAssets(ws.project.id);
+      flashToast(res.message);
+    },
+
     async saveProvider(input) {
       await client.saveProviderConfig(input);
-      const mc = await client.getModelCenter();
-      set({ modelCenter: mc });
+      set({ modelCenter: await client.getModelCenter() });
       flashToast(`已保存厂家「${input.name}」`);
     },
 
     async deleteProvider(providerId) {
       await client.deleteProviderConfig(providerId);
-      const mc = await client.getModelCenter();
-      set({ modelCenter: mc });
+      set({ modelCenter: await client.getModelCenter() });
       flashToast("已移除厂家配置");
     },
 
     async updateRouting(routing) {
       await client.updateModelRouting(routing);
-      const mc = await client.getModelCenter();
-      set({ modelCenter: mc });
+      set({ modelCenter: await client.getModelCenter() });
       flashToast("默认模型路由已更新");
     },
   };

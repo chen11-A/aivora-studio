@@ -220,4 +220,25 @@ describe("ProjectStore & VACUUM INTO ZIP archive", () => {
     expect(finalShots[2]!.subtitle).toBe("【手修1】");
     store.closeAll();
   });
+
+  it("cleanUnreferencedAssets deletes only orphan files in assets/ while preserving all takes and candidatePaths", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const base = makeTempDir("aivora-gc-");
+    const store = new ProjectStore(join(base, "清理缓存 空间"));
+    const demo = store.openDemoProject();
+    const orphanPath = join(demo.dirPath, "assets", "orphan_unused_temp.png");
+    writeFileSync(orphanPath, Buffer.from("orphan-bytes-123456"));
+    expect(existsSync(orphanPath)).toBe(true);
+
+    const res = store.cleanUnreferencedAssets(demo.project.id);
+    expect(res.removedFiles).toBe(1);
+    expect(res.freedBytes).toBeGreaterThan(0);
+    expect(existsSync(orphanPath)).toBe(false);
+
+    // All existing takes remain intact on disk
+    for (const tk of demo.takes) {
+      expect(existsSync(join(demo.dirPath, tk.mediaPath))).toBe(true);
+    }
+    store.closeAll();
+  });
 });

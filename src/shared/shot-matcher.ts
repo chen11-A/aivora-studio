@@ -1,5 +1,5 @@
-import type { Shot } from "../../shared/types/domain";
-import type { DirectorProposedShot } from "../../shared/types/jobs";
+import type { Shot } from "./types/domain";
+import type { DirectorProposedShot } from "./types/jobs";
 
 export type FlatProposedShot = {
   flatIndex: number;
@@ -57,7 +57,6 @@ export function scoreProposedAgainstExisting(
 ): number {
   let score = 0;
 
-  // 1. Dialogue similarity (strongest anchor for narrative shots)
   const pDlg = proposed.dialogue.trim();
   const eDlg = existing.dialogue.trim();
   if (pDlg && eDlg) {
@@ -71,7 +70,6 @@ export function scoreProposedAgainstExisting(
     score -= 10;
   }
 
-  // 2. Core title similarity (ignoring `镜 01 · ` numeric prefix)
   const pTitle = stripShotPrefix(proposed.title);
   const eTitle = stripShotPrefix(existing.title);
   if (pTitle && eTitle) {
@@ -81,7 +79,6 @@ export function scoreProposedAgainstExisting(
     }
   }
 
-  // 3. Visual prompt & sourceExcerpt vs existing visualPrompt / subtitle
   const promptSim = Math.max(
     diceSimilarity(proposed.visualPrompt, existing.visualPrompt),
     proposed.sourceExcerpt ? diceSimilarity(proposed.sourceExcerpt, existing.visualPrompt) : 0,
@@ -93,7 +90,6 @@ export function scoreProposedAgainstExisting(
     score += 52 * promptSim;
   }
 
-  // 4. Speaker continuity bonus
   const pSpk = proposed.speaker.trim();
   const eSpk = existing.speaker.trim();
   if (pSpk && eSpk && pSpk === eSpk && score > 15) {
@@ -116,10 +112,8 @@ function isUntouchedStarterShot(shot: Shot): boolean {
 }
 
 /**
- * Matches proposed shots to existing shots by content similarity (dialogue, core title,
- * visual prompt, source excerpt, speaker) rather than array index, so inserting a new shot
- * before Shot 1, deleting a middle shot, or reordering shots never attaches an existing
- * shot's selected video/image take or hand-edited subtitle to the wrong shot.
+ * Shared content-anchored shot alignment used by both main-process DirectorService
+ * and renderer DirectorProposalModal diff preview.
  */
 export function matchProposedShotsToExisting(
   proposedList: FlatProposedShot[],
@@ -162,7 +156,6 @@ export function matchProposedShotsToExisting(
     usedExisting.add(pair.existing.id);
   }
 
-  // Special case: brand-new project with a single untouched starter placeholder shot
   if (
     matched.size === 0 &&
     prevShots.length === 1 &&
@@ -175,12 +168,6 @@ export function matchProposedShotsToExisting(
   return matched;
 }
 
-/**
- * Preserves hand-edited subtitles on matched existing shots:
- * - If the user customized `existing.subtitle` (non-empty and distinct from `existing.dialogue`),
- *   or if the shot's dialogue did not change and `existing.subtitle` is already non-empty,
- *   keep `existing.subtitle` instead of overwriting it with the AI proposal's default subtitle.
- */
 export function resolveMergedSubtitle(
   proposed: DirectorProposedShot,
   existing: Shot,

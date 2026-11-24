@@ -49,6 +49,23 @@ export function resolveActiveVisualTake(shot: Shot, takes: Take[]): Take | null 
   return fallbackSelected ?? null;
 }
 
+/**
+ * Resolves the confirmed raster first-frame image for image-to-video generation.
+ * Never returns a `.mp4` video take or `.svg` placeholder card, so regenerating video
+ * on a shot that already has an older video take still anchors on its confirmed first frame.
+ */
+export function resolveConfirmedFirstFrameTake(shot: Shot, takes: Take[]): Take | null {
+  const shotImageTakes = takes.filter(
+    (t) => t.shotId === shot.id && t.kind === "image" && !isSvgPlaceholderPath(t.mediaPath),
+  );
+  if (shot.selectedImageTakeId) {
+    const exact = shotImageTakes.find((t) => t.id === shot.selectedImageTakeId);
+    if (exact) return exact;
+  }
+  const sorted = [...shotImageTakes].sort((a, b) => b.versionNumber - a.versionNumber);
+  return sorted[0] ?? null;
+}
+
 export function resolveSelectedSpeechTake(shot: Shot, takes: Take[]): Take | null {
   if (!shot.selectedSpeechTakeId) return null;
   return takes.find((t) => t.id === shot.selectedSpeechTakeId && t.shotId === shot.id) ?? null;

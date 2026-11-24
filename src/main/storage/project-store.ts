@@ -23,9 +23,12 @@ import {
   importAssetImageInDb,
   importProjectBgmInDb,
   importShotTakeInDb,
+  parseCandidatePaths,
+  selectAssetCandidateInDb,
   updateAssetInDb,
 } from "./media-import";
 import { exportProjectArchive, importProjectArchive } from "./project-archive";
+import { cleanUnreferencedAssetsInProject } from "./project-maintenance";
 import { readWorkspaceFromDb } from "./project-reader";
 import { initProjectSchema } from "./schema";
 import {
@@ -348,31 +351,18 @@ export class ProjectStore {
     });
     db.transaction(() => {
       db.run(
-        `INSERT INTO assets (id, project_id, kind, name, description, media_path, media_sha256, locked_ref, voice_id, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-        id,
-        input.projectId,
-        input.kind,
-        input.name.trim(),
-        input.description?.trim() ?? "",
-        card.mediaPath,
-        card.mediaSha256,
-        input.voiceId ?? null,
-        now,
+        `INSERT INTO assets (id, project_id, kind, name, description, media_path, media_sha256, candidate_paths_json, locked_ref, voice_id, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+        id, input.projectId, input.kind, input.name.trim(), input.description?.trim() ?? "",
+        card.mediaPath, card.mediaSha256, JSON.stringify([card.mediaPath]), input.voiceId ?? null, now,
       );
       db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
     });
     return {
-      id,
-      projectId: input.projectId,
-      kind: input.kind,
-      name: input.name.trim(),
-      description: input.description?.trim() ?? "",
-      mediaPath: card.mediaPath,
-      mediaSha256: card.mediaSha256,
-      lockedRef: false,
-      voiceId: input.voiceId ?? null,
-      updatedAt: now,
+      id, projectId: input.projectId, kind: input.kind, name: input.name.trim(),
+      description: input.description?.trim() ?? "", mediaPath: card.mediaPath,
+      mediaSha256: card.mediaSha256, candidatePaths: [card.mediaPath],
+      lockedRef: false, voiceId: input.voiceId ?? null, updatedAt: now,
     };
   }
 
@@ -383,26 +373,17 @@ export class ProjectStore {
     if (!row) throw new Error("资产不存在");
     const nextLocked = Number(row.locked_ref) === 1 ? 0 : 1;
     db.run(`UPDATE assets SET locked_ref = ?, updated_at = ? WHERE id = ?`, nextLocked, now, assetId);
+    const mediaPath = row.media_path ? String(row.media_path) : null;
     return {
-      id: String(row.id),
-      projectId: String(row.project_id),
-      kind: row.kind as AssetKind,
-      name: String(row.name),
-      description: String(row.description ?? ""),
-      mediaPath: row.media_path ? String(row.media_path) : null,
+      id: String(row.id), projectId: String(row.project_id), kind: row.kind as AssetKind,
+      name: String(row.name), description: String(row.description ?? ""), mediaPath,
       mediaSha256: row.media_sha256 ? String(row.media_sha256) : null,
-      lockedRef: nextLocked === 1,
-      voiceId: row.voice_id ? String(row.voice_id) : null,
-      updatedAt: now,
+      candidatePaths: parseCandidatePaths(row.candidate_paths_json, mediaPath),
+      lockedRef: nextLocked === 1, voiceId: row.voice_id ? String(row.voice_id) : null, updatedAt: now,
     };
   }
 
-  createShot(input: {
-    projectId: string;
-    episodeId: string;
-    sceneId: string;
-    beforeShotId?: string | null;
-  }): Shot {
+  createShot(input: { projectId: string; episodeId: string; sceneId: string; beforeShotId?: string | null }): Shot {
     return createShotInDb(this.getDb(input.projectId), input);
   }
 
@@ -439,14 +420,14 @@ export class ProjectStore {
     return updateAssetInDb(this.getDb(rawInput.projectId), rawInput);
   }
 
-  importAssetImageFromPath(input: {
-    projectId: string;
-    assetId: string;
-    sourceFilePath: string;
-  }): Asset {
+  importAssetImageFromPath(input: { projectId: string; assetId: string; sourceFilePath: string }): Asset {
     const dir = this.resolveProjectDir(input.projectId);
     if (!dir) throw new Error("作品不存在");
     return importAssetImageInDb(this.getDb(input.projectId), dir, input);
+  }
+
+  selectAssetCandidate(input: { projectId: string; assetId: string; mediaPath: string }): Asset {
+    return selectAssetCandidateInDb(this.getDb(input.projectId), input);
   }
 
   importShotTakeFromPath(input: {
@@ -454,6 +435,7 @@ export class ProjectStore {
     shotId: string;
     kind: TakeKind;
     sourceFilePath: string;
+    durationSec?: number | null;
   }): ProjectWorkspace {
     const dir = this.resolveProjectDir(input.projectId);
     if (!dir) throw new Error("作品不存在");
@@ -468,6 +450,12 @@ export class ProjectStore {
     return this.openProject(projectId);
   }
 
+  cleanUnreferencedAssets(projectId: string): { removedFiles: number; freedBytes: number } {
+    const dir = this.resolveProjectDir(projectId);
+    if (!dir) throw new Error("作品不存在");
+    return cleanUnreferencedAssetsInProject(dir, this.getDb(projectId));
+  }
+
   async exportArchiveToPath(projectId: string, outputZipPath: string): Promise<void> {
     const dir = this.resolveProjectDir(projectId);
     if (!dir) throw new Error("作品不存在");
@@ -476,10 +464,7 @@ export class ProjectStore {
 
   async importArchiveFromPath(zipPath: string): Promise<ProjectWorkspace> {
     const { projectId, dirPath } = await importProjectArchive(
-      this.workspaceRoot,
-      zipPath,
-      (id) => Boolean(this.resolveProjectDir(id)),
-      safeFolderSegment,
+      this.workspaceRoot, zipPath, (id) => Boolean(this.resolveProjectDir(id)), safeFolderSegment,
     );
     this.dirByProjectId.set(projectId, dirPath);
     return this.openProject(projectId);

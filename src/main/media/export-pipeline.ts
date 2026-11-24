@@ -23,6 +23,7 @@ import {
   runMediaBinary,
 } from "./ffmpeg-locator";
 import { resolveConfinedMediaPath } from "./media-protocol";
+import { buildRasterMotionFilter, buildSmoothDuckingFilter } from "./motion-filters";
 import {
   resolveEffectiveAudioDurationSec,
   resolveEffectiveVideoDurationSec,
@@ -177,8 +178,9 @@ async function renderShotSegment(params: {
       segName,
     );
   } else {
-    // Real raster image (.png / .jpg / .webp)
-    args.push("-loop", "1", "-t", dur, "-i", visualAbs);
+    // Real raster image (.png / .jpg / .webp) with optional Ken Burns zoompan motion
+    const motionFilter = buildRasterMotionFilter(aspectRatio, shot.cameraMove, durNum, 30);
+    args.push("-framerate", "30", "-loop", "1", "-t", dur, "-i", visualAbs);
     if (speechAbs) {
       args.push("-i", speechAbs);
     } else {
@@ -190,7 +192,7 @@ async function renderShotSegment(params: {
       "-map",
       "1:a:0",
       "-vf",
-      fitFilter(aspectRatio),
+      motionFilter,
       "-af",
       `apad=whole_dur=${durNum}`,
       "-t",
@@ -340,17 +342,11 @@ export async function exportEpisodeToMp4(params: {
     const bgmAbs =
       bgmAsset?.mediaPath ? resolveConfinedMediaPath(params.projectDir, bgmAsset.mediaPath) : null;
     if (bgmAbs && existsSync(bgmAbs)) {
-      emit(70, "混合背景音乐", `正在按 ${params.workspace.project.bgmVolumeDb} dB 混入背景音乐（对白段自动降音闪避）…`);
-      const db = params.workspace.project.bgmVolumeDb;
-      const baseGain = Math.pow(10, db / 20).toFixed(5);
-      const duckGain = Math.pow(10, (db - 8) / 20).toFixed(5);
-      const duckCond = dialogueIntervals
-        .map((iv) => `between(t,${iv.start.toFixed(2)},${iv.end.toFixed(2)})`)
-        .join("+");
-      const bgmVolExpr =
-        dialogueIntervals.length > 0
-          ? `volume='if(${duckCond},${duckGain},${baseGain})':eval=frame`
-          : `volume=${db}dB`;
+      emit(70, "混合背景音乐", `正在按 ${params.workspace.project.bgmVolumeDb} dB 混入背景音乐（对白段平滑降音闪避）…`);
+      const bgmVolExpr = buildSmoothDuckingFilter(
+        params.workspace.project.bgmVolumeDb,
+        dialogueIntervals,
+      );
       await runStep(
         ffmpegPath,
         [

@@ -160,12 +160,33 @@ export function recordAssetPortraitCandidateInDb(
 ): void {
   const now = new Date().toISOString();
   projects.withProjectDb(input.projectId, (db) => {
+    const cur = db.get<{ media_path: string | null; candidate_paths_json: string | null }>(
+      `SELECT media_path, candidate_paths_json FROM assets WHERE id = ?`,
+      input.assetId,
+    );
+    let prevList: string[] = [];
+    try {
+      const parsed = JSON.parse(String(cur?.candidate_paths_json ?? "[]")) as unknown;
+      if (Array.isArray(parsed)) {
+        prevList = parsed.filter((v): v is string => typeof v === "string" && v.length > 0);
+      }
+    } catch {
+      prevList = [];
+    }
+    if (cur?.media_path && !prevList.includes(cur.media_path)) {
+      prevList = [cur.media_path, ...prevList];
+    }
+    const nextCandidates = [
+      input.media.mediaPath,
+      ...prevList.filter((p) => p !== input.media.mediaPath),
+    ].slice(0, 8);
     db.transaction(() => {
       // Deliberately sets locked_ref = 0 so the user inspects the generated candidate before locking!
       db.run(
-        `UPDATE assets SET media_path = ?, media_sha256 = ?, locked_ref = 0, updated_at = ? WHERE id = ?`,
+        `UPDATE assets SET media_path = ?, media_sha256 = ?, candidate_paths_json = ?, locked_ref = 0, updated_at = ? WHERE id = ?`,
         input.media.mediaPath,
         input.media.mediaSha256,
+        JSON.stringify(nextCandidates),
         now,
         input.assetId,
       );
@@ -213,10 +234,15 @@ export function recordSuccessfulTakeInDb(
     media: { mediaPath: string; mediaSha256: string };
     promptSnapshot: string;
     providerInfo: string;
+    durationSec?: number | null;
   },
 ): void {
   const now = new Date().toISOString();
   const takeId = `tk_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
+  const dur =
+    typeof input.durationSec === "number" && Number.isFinite(input.durationSec) && input.durationSec > 0
+      ? Number(input.durationSec.toFixed(2))
+      : null;
   projects.withProjectDb(input.projectId, (db) => {
     const maxVer =
       db.get<{ v: number | null }>(
@@ -236,8 +262,8 @@ export function recordSuccessfulTakeInDb(
         );
       }
       db.run(
-        `INSERT INTO takes (id, shot_id, kind, version_number, media_path, media_sha256, prompt_snapshot, provider_info, is_selected, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+        `INSERT INTO takes (id, shot_id, kind, version_number, media_path, media_sha256, prompt_snapshot, provider_info, is_selected, duration_sec, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
         takeId,
         input.shotId,
         input.kind,
@@ -246,6 +272,7 @@ export function recordSuccessfulTakeInDb(
         input.media.mediaSha256,
         input.promptSnapshot,
         input.providerInfo,
+        dur,
         now,
       );
       if (input.kind === "video") {

@@ -48,18 +48,34 @@ export function readWorkspaceFromDb(
 
   const assets: Asset[] = db
     .all<Record<string, unknown>>(`SELECT * FROM assets ORDER BY updated_at DESC`)
-    .map((r) => ({
-      id: String(r.id),
-      projectId: String(r.project_id),
-      kind: r.kind as AssetKind,
-      name: String(r.name),
-      description: String(r.description ?? ""),
-      mediaPath: r.media_path ? String(r.media_path) : null,
-      mediaSha256: r.media_sha256 ? String(r.media_sha256) : null,
-      lockedRef: Number(r.locked_ref) === 1,
-      voiceId: r.voice_id ? String(r.voice_id) : null,
-      updatedAt: String(r.updated_at),
-    }));
+    .map((r) => {
+      const mediaPath = r.media_path ? String(r.media_path) : null;
+      let parsedCandidates: string[] = [];
+      try {
+        const arr = JSON.parse(String(r.candidate_paths_json ?? "[]")) as unknown;
+        if (Array.isArray(arr)) {
+          parsedCandidates = arr.filter((v): v is string => typeof v === "string" && v.length > 0);
+        }
+      } catch {
+        parsedCandidates = [];
+      }
+      if (mediaPath && !parsedCandidates.includes(mediaPath)) {
+        parsedCandidates = [mediaPath, ...parsedCandidates];
+      }
+      return {
+        id: String(r.id),
+        projectId: String(r.project_id),
+        kind: r.kind as AssetKind,
+        name: String(r.name),
+        description: String(r.description ?? ""),
+        mediaPath,
+        mediaSha256: r.media_sha256 ? String(r.media_sha256) : null,
+        candidatePaths: parsedCandidates,
+        lockedRef: Number(r.locked_ref) === 1,
+        voiceId: r.voice_id ? String(r.voice_id) : null,
+        updatedAt: String(r.updated_at),
+      };
+    });
 
   const scenes: Scene[] = db
     .all<Record<string, unknown>>(`SELECT * FROM scenes ORDER BY order_index ASC`)

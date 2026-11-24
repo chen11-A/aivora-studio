@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ProjectWorkspace, Scene, Shot, Take } from "../../shared/types/domain";
+import type { ProjectWorkspace } from "../../shared/types/domain";
 import { DirectorProposalSchema, type DirectorProposal } from "../../shared/types/jobs";
 import type { OAuthManager } from "../auth/auth-manager";
 import { completeChatGptResponsesText } from "../auth/chatgpt-oauth";
@@ -8,35 +8,37 @@ import { runOpenAiChatCompletion } from "../providers/openai-compat-adapter";
 import type { GlobalConfigStore } from "../storage/global-store";
 import type { ProjectStore } from "../storage/project-store";
 import {
+  matchProposedShotsToExisting,
+  resolveMergedSubtitle,
+  type FlatProposedShot,
+} from "../../shared/shot-matcher";
+import {
+  deleteDirectorUndoSnapshot,
+  getLatestDirectorUndoToken,
+  loadDirectorUndoSnapshot,
+  saveDirectorUndoSnapshot,
+  type PersistedDirectorUndoSnapshot,
+} from "../storage/project-maintenance";
+import {
   buildDirectorUserPrompt,
   buildOfflineDirectorProposal,
   DIRECTOR_SYSTEM_PROMPT,
   parseDirectorProposalJson,
 } from "./director-prompt";
-import {
-  matchProposedShotsToExisting,
-  resolveMergedSubtitle,
-  type FlatProposedShot,
-} from "./director-shot-matcher";
-
-type UndoSnapshot = {
-  projectId: string;
-  episodeId: string;
-  createdAssetIds: string[];
-  scenes: Scene[];
-  shots: Shot[];
-  takes: Take[];
-};
 
 export class DirectorService {
-  private readonly undoMap = new Map<string, UndoSnapshot>();
-
   constructor(
     private readonly projects: ProjectStore,
     private readonly globalConfig: GlobalConfigStore,
     private readonly oauth: OAuthManager,
     private readonly fetcher: typeof fetch = fetch,
   ) {}
+
+  getLatestUndoToken(projectId: string, episodeId: string): string | null {
+    return this.projects.withProjectDb(projectId, (db) =>
+      getLatestDirectorUndoToken(db, episodeId),
+    );
+  }
 
   async proposeSplit(input: {
     projectId: string;
@@ -180,13 +182,16 @@ export class DirectorService {
       createdAssetIds.push(created.id);
     }
 
-    this.undoMap.set(undoToken, {
+    const undoSnapshot: PersistedDirectorUndoSnapshot = {
       projectId: input.projectId,
       episodeId: input.episodeId,
       createdAssetIds,
       scenes: before.scenes.filter((s) => s.episodeId === input.episodeId),
       shots: prevShots,
       takes: before.takes.filter((t) => prevShotIds.has(t.shotId)),
+    };
+    this.projects.withProjectDb(input.projectId, (db) => {
+      saveDirectorUndoSnapshot(db, undoToken, undoSnapshot);
     });
 
     let preservedShotsCount = 0;
@@ -329,7 +334,9 @@ export class DirectorService {
     projectId: string;
     undoToken: string;
   }): { ok: boolean; workspace?: ProjectWorkspace; message: string } {
-    const snap = this.undoMap.get(input.undoToken);
+    const snap = this.projects.withProjectDb(input.projectId, (db) =>
+      loadDirectorUndoSnapshot(db, input.undoToken),
+    );
     if (!snap || snap.projectId !== input.projectId) {
       return { ok: false, message: "撤销快照已失效或不存在" };
     }
@@ -345,14 +352,8 @@ export class DirectorService {
           db.run(
             `INSERT INTO scenes (id, episode_id, order_index, title, location_asset_id, summary, paragraph_start, paragraph_end)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            sc.id,
-            sc.episodeId,
-            sc.orderIndex,
-            sc.title,
-            sc.locationAssetId,
-            sc.summary,
-            sc.paragraphStart,
-            sc.paragraphEnd,
+            sc.id, sc.episodeId, sc.orderIndex, sc.title, sc.locationAssetId,
+            sc.summary, sc.paragraphStart, sc.paragraphEnd,
           );
         }
         for (const sh of snap.shots) {
@@ -362,26 +363,10 @@ export class DirectorService {
                trim_in_sec, trim_out_sec, visual_prompt, negative_prompt, dialogue, speaker, subtitle, character_asset_ids_json,
                selected_image_take_id, selected_video_take_id, selected_speech_take_id, updated_at
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            sh.id,
-            sh.sceneId,
-            sh.episodeId,
-            sh.orderIndex,
-            sh.title,
-            sh.scale,
-            sh.cameraMove,
-            sh.durationSec,
-            sh.trimInSec ?? 0,
-            sh.trimOutSec ?? 0,
-            sh.visualPrompt,
-            sh.negativePrompt,
-            sh.dialogue,
-            sh.speaker,
-            sh.subtitle,
-            JSON.stringify(sh.characterAssetIds),
-            sh.selectedImageTakeId,
-            sh.selectedVideoTakeId,
-            sh.selectedSpeechTakeId,
-            now,
+            sh.id, sh.sceneId, sh.episodeId, sh.orderIndex, sh.title, sh.scale, sh.cameraMove,
+            sh.durationSec, sh.trimInSec ?? 0, sh.trimOutSec ?? 0, sh.visualPrompt, sh.negativePrompt,
+            sh.dialogue, sh.speaker, sh.subtitle, JSON.stringify(sh.characterAssetIds),
+            sh.selectedImageTakeId, sh.selectedVideoTakeId, sh.selectedSpeechTakeId, now,
           );
         }
         for (const tk of snap.takes) {
@@ -390,23 +375,14 @@ export class DirectorService {
                id, shot_id, kind, version_number, media_path, media_sha256,
                prompt_snapshot, provider_info, is_selected, duration_sec, created_at
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            tk.id,
-            tk.shotId,
-            tk.kind,
-            tk.versionNumber,
-            tk.mediaPath,
-            tk.mediaSha256,
-            tk.promptSnapshot,
-            tk.providerInfo,
-            tk.isSelected ? 1 : 0,
-            tk.durationSec,
-            tk.createdAt,
+            tk.id, tk.shotId, tk.kind, tk.versionNumber, tk.mediaPath, tk.mediaSha256,
+            tk.promptSnapshot, tk.providerInfo, tk.isSelected ? 1 : 0, tk.durationSec, tk.createdAt,
           );
         }
+        deleteDirectorUndoSnapshot(db, input.undoToken);
         db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
       });
     });
-    this.undoMap.delete(input.undoToken);
     return {
       ok: true,
       workspace: this.projects.openProject(input.projectId),

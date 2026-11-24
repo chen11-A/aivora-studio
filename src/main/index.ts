@@ -5,6 +5,7 @@ import { IPC_CHANNELS } from "../shared/ipc-contract";
 import { OAuthManager } from "./auth/auth-manager";
 import { createSecretVault } from "./auth/secret-vault";
 import { registerIpcHandlers } from "./ipc/register-ipc";
+import { BatchJobScheduler } from "./jobs/batch-scheduler";
 import { GenerationJobQueue } from "./jobs/job-queue";
 import { ExportWriteGuard } from "./media/export-guard";
 import { exportEpisodeToMp4 } from "./media/export-pipeline";
@@ -323,6 +324,7 @@ app.whenReady().then(() => {
   const oauth = new OAuthManager(globalConfig, (url) => shell.openExternal(url));
   const director = new DirectorService(projects, globalConfig, oauth);
   jobQueue = new GenerationJobQueue(projects, globalConfig, oauth);
+  const batchScheduler = new BatchJobScheduler(projects, jobQueue);
 
   protocol.handle(
     "aivora-media",
@@ -336,6 +338,7 @@ app.whenReady().then(() => {
     oauth,
     director,
     jobQueue,
+    batchScheduler,
     exportGuard,
     appVersion: app.getVersion(),
   });

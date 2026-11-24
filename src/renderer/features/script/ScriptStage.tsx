@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -22,6 +23,12 @@ export function ScriptStage() {
   const lastUndoToken = useAiGenerationStore((s) => s.lastUndoToken);
   const proposeDirector = useAiGenerationStore((s) => s.proposeDirector);
   const undoDirector = useAiGenerationStore((s) => s.undoDirector);
+  const syncDirectorUndoState = useAiGenerationStore((s) => s.syncDirectorUndoState);
+
+  const projectId = workspace?.project.id ?? null;
+  useEffect(() => {
+    if (projectId) void syncDirectorUndoState();
+  }, [projectId, activeEpisodeId, syncDirectorUndoState]);
 
   if (!workspace) return null;
   const episode = workspace.episodes.find((e) => e.id === activeEpisodeId) ?? workspace.episodes[0];

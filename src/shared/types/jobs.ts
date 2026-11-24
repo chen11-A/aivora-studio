@@ -60,11 +60,50 @@ export type GenerationPlan = {
   estimatedSec: number;
   promptPreview: string;
   injectedRefs: InjectedRefSummary[];
+  firstFramePath?: string | null;
+  upstreamDurationNote?: string | null;
   idempotencyKey: string;
   inputSha256: string;
   providerSnapshotJson: string;
   canRun: boolean;
   blockingReason: string | null;
+};
+
+export type BatchGenerationMode = "speech" | "image" | "video";
+
+export type BatchGenerationPlan = {
+  batchId: string;
+  projectId: string;
+  episodeId: string;
+  mode: BatchGenerationMode;
+  totalShotsInEpisode: number;
+  skippedReadyCount: number;
+  plans: GenerationPlan[];
+  providerLabel: string;
+  modelId: string;
+  estimatedTotalSec: number;
+  canRun: boolean;
+  blockingReason: string | null;
+};
+
+export type BatchItemStatus = "queued" | "running" | "succeeded" | "unknown" | "failed" | "paused";
+
+export type BatchProgressSnapshot = {
+  batchId: string;
+  projectId: string;
+  mode: BatchGenerationMode;
+  running: boolean;
+  paused: boolean;
+  completedCount: number;
+  failedCount: number;
+  unknownCount: number;
+  totalCount: number;
+  items: Array<{
+    shotId: string;
+    shotTitle: string;
+    status: BatchItemStatus;
+    message: string;
+  }>;
 };
 
 export type OAuthLoginResult = {

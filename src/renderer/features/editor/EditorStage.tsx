@@ -1,25 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  Monitor,
-  Music,
-  Pause,
-  Play,
-  RotateCcw,
-  Scissors,
-  Smartphone,
-  Subtitles,
-  Trash2,
-  Upload,
-} from "lucide-react";
-import {
-  evaluateEpisodeExportReadiness,
-  isVideoMediaPath,
-  resolveActiveVisualTake,
-  resolveSelectedSpeechTake,
-  resolveShotTrimWindow,
-} from "@shared/media-selection";
+import { AlertTriangle, CheckCircle2, Monitor, Music, Pause, Play, RotateCcw, Scissors, Smartphone, Subtitles, Trash2, Upload } from "lucide-react";
+import { evaluateEpisodeExportReadiness, isVideoMediaPath, resolveActiveVisualTake, resolveSelectedSpeechTake, resolveShotTrimWindow } from "@shared/media-selection";
 import type { SubtitleStyle } from "@shared/types/domain";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useStudioStore } from "../../store/useStudioStore";
@@ -139,6 +120,38 @@ export function EditorStage() {
     }
   }, [playback.playing, bgmSrc, workspace?.project.bgmVolumeDb, hasActiveDialogue]);
 
+  // Keyboard shortcuts in Editor: Space = play/pause, I = mark trim in, O = mark trim out
+  const markTrimIn = () => {
+    if (!currentShot || !currentTrim) return;
+    const t = Number(Math.max(0, playback.sourceVideoTimeSec).toFixed(1));
+    const nextOut = currentTrim.trimOutSec > t + 0.5 ? currentTrim.trimOutSec : Number((t + 1).toFixed(1));
+    editShot({ shotId: currentShot.id, trimInSec: t, trimOutSec: nextOut });
+  };
+  const markTrimOut = () => {
+    if (!currentShot || !currentTrim) return;
+    const t = Number(Math.max(currentTrim.trimInSec + 0.5, playback.sourceVideoTimeSec).toFixed(1));
+    editShot({ shotId: currentShot.id, trimInSec: currentTrim.trimInSec, trimOutSec: t });
+  };
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.target instanceof HTMLElement && ["input", "textarea", "select"].includes(e.target.tagName.toLowerCase())) return;
+      if (e.key === " ") {
+        e.preventDefault();
+        playback.togglePlay();
+      } else if (e.key === "i" || e.key === "I") {
+        e.preventDefault();
+        markTrimIn();
+      } else if (e.key === "o" || e.key === "O") {
+        e.preventDefault();
+        markTrimOut();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
+
   if (!workspace) return null;
 
   const readiness = evaluateEpisodeExportReadiness(workspace, activeEpisodeId);
@@ -195,9 +208,7 @@ export function EditorStage() {
                 type="button"
                 onClick={() => void updateProjectSettings({ aspectRatio: "16:9" })}
                 className={`h-7 px-2.5 rounded-md text-[11px] flex items-center gap-1 border cursor-pointer ${
-                  !isPortrait
-                    ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]"
-                    : "bg-[#14171e] border-[#252b37] text-[#a4aec0]"
+                  !isPortrait ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]" : "bg-[#14171e] border-[#252b37] text-[#a4aec0]"
                 }`}
               >
                 <Monitor className="w-3 h-3" />
@@ -207,9 +218,7 @@ export function EditorStage() {
                 type="button"
                 onClick={() => void updateProjectSettings({ aspectRatio: "9:16" })}
                 className={`h-7 px-2.5 rounded-md text-[11px] flex items-center gap-1 border cursor-pointer ${
-                  isPortrait
-                    ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]"
-                    : "bg-[#14171e] border-[#252b37] text-[#a4aec0]"
+                  isPortrait ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]" : "bg-[#14171e] border-[#252b37] text-[#a4aec0]"
                 }`}
               >
                 <Smartphone className="w-3 h-3" />
@@ -259,26 +268,25 @@ export function EditorStage() {
           {bgmSrc && <audio ref={bgmRef} src={bgmSrc} loop />}
 
           <div className="h-10 px-4 border-t border-[#252b37] bg-[#14171e] flex items-center justify-center gap-3 shrink-0">
-            <button
-              type="button"
-              onClick={playback.resetToStart}
-              className="p-1.5 rounded hover:bg-[#222834] text-[#a4aec0] cursor-pointer"
-              title="回到片头"
-            >
+            <button type="button" onClick={playback.resetToStart} className="p-1.5 rounded hover:bg-[#222834] text-[#a4aec0] cursor-pointer" title="回到片头">
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
-            <button
-              type="button"
-              data-testid="editor-play-toggle"
-              onClick={playback.togglePlay}
-              className="w-7 h-7 rounded-full bg-[#3b82f6] hover:bg-[#2563eb] text-white flex items-center justify-center cursor-pointer"
-              title={playback.playing ? "暂停预览" : "连续播放成片"}
-            >
+            <button type="button" data-testid="editor-play-toggle" onClick={playback.togglePlay} className="w-7 h-7 rounded-full bg-[#3b82f6] hover:bg-[#2563eb] text-white flex items-center justify-center cursor-pointer" title={playback.playing ? "暂停预览 (Space)" : "连续播放成片 (Space)"}>
               {playback.playing ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
             </button>
             <span className="font-mono text-[12px] text-[#f3f5f9]" data-testid="editor-timecode">
               {fmtTime(playback.playheadSec)} / {fmtTime(playback.totalSec)}
             </span>
+            {currentShot && (
+              <div className="flex items-center gap-1 pl-2 border-l border-[#252b37]">
+                <button type="button" data-testid="btn-mark-in" onClick={markTrimIn} className="h-6 px-2 rounded bg-[#0f1218] hover:bg-[#1b2029] border border-[#252b37] text-[10px] text-[#a4aec0] hover:text-[#f3f5f9] cursor-pointer" title="将当前播放位置设为本镜入点 (快捷键 I)">
+                  [ 设为入点
+                </button>
+                <button type="button" data-testid="btn-mark-out" onClick={markTrimOut} className="h-6 px-2 rounded bg-[#0f1218] hover:bg-[#1b2029] border border-[#252b37] text-[10px] text-[#a4aec0] hover:text-[#f3f5f9] cursor-pointer" title="将当前播放位置设为本镜出点 (快捷键 O)">
+                  设为出点 ]
+                </button>
+              </div>
+            )}
           </div>
         </section>
 
@@ -412,46 +420,38 @@ export function EditorStage() {
               </div>
             </div>
 
-            <div className="flex flex-col gap-1.5">
+            <div
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const file = e.dataTransfer.files?.[0];
+                const filePath = file ? client.resolveDroppedFilePath?.(file) : null;
+                if (filePath) void importProjectBgm(filePath);
+              }}
+              className="flex flex-col gap-1.5"
+            >
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-[#a4aec0] flex items-center gap-1.5">
                   <Music className="w-3.5 h-3.5 text-[#38bdf8]" />
-                  <span>背景配乐（对白自动压低 8 dB）</span>
+                  <span>背景配乐（对白平滑压低 8 dB）</span>
                 </span>
                 <span className="font-mono text-[#f3f5f9]">{workspace.project.bgmVolumeDb} dB</span>
               </div>
               <div className="flex items-center justify-between gap-2 rounded-md bg-[#0f1218] border border-[#252b37] px-2.5 py-1.5 text-[11px]">
-                <span className="text-[#cbd5e1] truncate">{bgmAsset ? bgmAsset.name : "未导入背景音乐"}</span>
+                <span className="text-[#cbd5e1] truncate">{bgmAsset ? bgmAsset.name : "未导入（支持拖入音频）"}</span>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => void importProjectBgm()}
-                    className="text-[#60a5fa] hover:underline flex items-center gap-0.5 cursor-pointer"
-                  >
+                  <button type="button" onClick={() => void importProjectBgm()} className="text-[#60a5fa] hover:underline flex items-center gap-0.5 cursor-pointer">
                     <Upload className="w-3 h-3" />
                     <span>{bgmAsset ? "更换" : "导入"}</span>
                   </button>
                   {bgmAsset && (
-                    <button
-                      type="button"
-                      onClick={() => void clearProjectBgm()}
-                      className="text-[#f87171] hover:underline cursor-pointer"
-                      title="移除背景音乐"
-                    >
+                    <button type="button" onClick={() => void clearProjectBgm()} className="text-[#f87171] hover:underline cursor-pointer" title="移除背景音乐">
                       <Trash2 className="w-3 h-3" />
                     </button>
                   )}
                 </div>
               </div>
-              <input
-                type="range"
-                min={-30}
-                max={0}
-                step={1}
-                value={workspace.project.bgmVolumeDb}
-                onChange={(e) => void updateProjectSettings({ bgmVolumeDb: Number(e.target.value) })}
-                className="w-full accent-[#3b82f6]"
-              />
+              <input type="range" min={-30} max={0} step={1} value={workspace.project.bgmVolumeDb} onChange={(e) => void updateProjectSettings({ bgmVolumeDb: Number(e.target.value) })} className="w-full accent-[#3b82f6]" />
             </div>
 
             <label className="flex items-start gap-2.5 p-2.5 rounded-lg bg-[#0f1218] border border-[#252b37] cursor-pointer">

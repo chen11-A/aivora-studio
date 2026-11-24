@@ -10,14 +10,21 @@ import type {
   UpdateProjectSettingsInput,
   UpdateShotInput,
 } from "../../shared/types/domain";
-import type { DirectorProposal, GenerationPlan } from "../../shared/types/jobs";
+import type {
+  BatchGenerationMode,
+  BatchGenerationPlan,
+  DirectorProposal,
+  GenerationPlan,
+} from "../../shared/types/jobs";
 import type { ModelRouting, OAuthProviderId, SaveProviderConfigInput } from "../../shared/types/provider";
 import type { OAuthManager } from "../auth/auth-manager";
+import type { BatchJobScheduler } from "../jobs/batch-scheduler";
 import type { GenerationJobQueue } from "../jobs/job-queue";
 import type { ExportWriteGuard } from "../media/export-guard";
 import { exportEpisodeToMp4 } from "../media/export-pipeline";
 import { preflightEpisodeExport } from "../media/export-preflight";
 import { probeFfmpegStatus } from "../media/ffmpeg-locator";
+import { probeFileDurationSec } from "../media/motion-filters";
 import { testProviderConnectivity } from "../providers/openai-compat-adapter";
 import type { DirectorService } from "../skills/director-service";
 import type { GlobalConfigStore } from "../storage/global-store";
@@ -30,6 +37,7 @@ export function registerIpcHandlers(deps: {
   oauth: OAuthManager;
   director: DirectorService;
   jobQueue: GenerationJobQueue;
+  batchScheduler: BatchJobScheduler;
   exportGuard: ExportWriteGuard;
   appVersion: string;
 }): void {
@@ -86,24 +94,36 @@ export function registerIpcHandlers(deps: {
   handle(IPC_CHANNELS.TOGGLE_ASSET_LOCK, (projectId: string, assetId: string) =>
     deps.projects.toggleAssetLock(projectId, assetId),
   );
-  handle(IPC_CHANNELS.IMPORT_ASSET_IMAGE, async (input: { projectId: string; assetId: string }) => {
-    const win = deps.getWindow();
-    if (!win) return { ok: false, message: "窗口不可用" };
-    const chosen = await dialog.showOpenDialog(win, {
-      title: "选择角色或场景定妆参考图",
-      properties: ["openFile"],
-      filters: [{ name: "图片素材", extensions: ["png", "jpg", "jpeg", "webp"] }],
-    });
-    if (chosen.canceled || !chosen.filePaths[0]) {
-      return { ok: false, message: "已取消选择参考图" };
-    }
-    const asset = deps.projects.importAssetImageFromPath({
-      projectId: input.projectId,
-      assetId: input.assetId,
-      sourceFilePath: chosen.filePaths[0],
-    });
-    return { ok: true, asset, message: "定妆参考图已更新" };
-  });
+  handle(
+    IPC_CHANNELS.IMPORT_ASSET_IMAGE,
+    async (input: { projectId: string; assetId: string; sourceFilePath?: string }) => {
+      let filePath = input.sourceFilePath?.trim() || "";
+      if (!filePath) {
+        const win = deps.getWindow();
+        if (!win) return { ok: false, message: "窗口不可用" };
+        const chosen = await dialog.showOpenDialog(win, {
+          title: "选择角色或场景定妆参考图",
+          properties: ["openFile"],
+          filters: [{ name: "图片素材", extensions: ["png", "jpg", "jpeg", "webp"] }],
+        });
+        if (chosen.canceled || !chosen.filePaths[0]) {
+          return { ok: false, message: "已取消选择参考图" };
+        }
+        filePath = chosen.filePaths[0];
+      }
+      const asset = deps.projects.importAssetImageFromPath({
+        projectId: input.projectId,
+        assetId: input.assetId,
+        sourceFilePath: filePath,
+      });
+      return { ok: true, asset, message: "定妆参考图已更新并保留历史候选" };
+    },
+  );
+  handle(
+    IPC_CHANNELS.SELECT_ASSET_CANDIDATE,
+    (input: { projectId: string; assetId: string; mediaPath: string }) =>
+      deps.projects.selectAssetCandidate(input),
+  );
 
   handle(
     IPC_CHANNELS.CREATE_SHOT,
@@ -131,50 +151,64 @@ export function registerIpcHandlers(deps: {
   );
   handle(
     IPC_CHANNELS.IMPORT_SHOT_TAKE,
-    async (input: { projectId: string; shotId: string; kind: TakeKind }) => {
-      const win = deps.getWindow();
-      if (!win) return { ok: false, message: "窗口不可用" };
-      const filters =
-        input.kind === "video"
-          ? [{ name: "视频素材", extensions: ["mp4", "webm", "mov", "m4v", "mkv"] }]
-          : input.kind === "image"
-            ? [{ name: "图片素材", extensions: ["png", "jpg", "jpeg", "webp"] }]
-            : [{ name: "音频素材", extensions: ["mp3", "wav", "m4a", "aac", "ogg", "flac"] }];
-      const chosen = await dialog.showOpenDialog(win, {
-        title:
+    async (input: { projectId: string; shotId: string; kind: TakeKind; sourceFilePath?: string }) => {
+      let filePath = input.sourceFilePath?.trim() || "";
+      if (!filePath) {
+        const win = deps.getWindow();
+        if (!win) return { ok: false, message: "窗口不可用" };
+        const filters =
           input.kind === "video"
-            ? "导入镜头视频作为新版本"
+            ? [{ name: "视频素材", extensions: ["mp4", "webm", "mov", "m4v", "mkv"] }]
             : input.kind === "image"
-              ? "导入镜头图片作为新版本"
-              : "导入镜头对白配音",
-        properties: ["openFile"],
-        filters,
-      });
-      if (chosen.canceled || !chosen.filePaths[0]) {
-        return { ok: false, message: "已取消导入素材" };
+              ? [{ name: "图片素材", extensions: ["png", "jpg", "jpeg", "webp"] }]
+              : [{ name: "音频素材", extensions: ["mp3", "wav", "m4a", "aac", "ogg", "flac"] }];
+        const chosen = await dialog.showOpenDialog(win, {
+          title:
+            input.kind === "video"
+              ? "导入镜头视频作为新版本"
+              : input.kind === "image"
+                ? "导入镜头图片作为新版本"
+                : "导入镜头对白配音",
+          properties: ["openFile"],
+          filters,
+        });
+        if (chosen.canceled || !chosen.filePaths[0]) {
+          return { ok: false, message: "已取消导入素材" };
+        }
+        filePath = chosen.filePaths[0];
       }
+      const durationSec =
+        input.kind === "video" || input.kind === "speech"
+          ? await probeFileDurationSec(filePath, input.kind)
+          : null;
       const workspace = deps.projects.importShotTakeFromPath({
         projectId: input.projectId,
         shotId: input.shotId,
         kind: input.kind,
-        sourceFilePath: chosen.filePaths[0],
+        sourceFilePath: filePath,
+        durationSec,
       });
-      return { ok: true, workspace, message: "已导入本地素材并设为当前选用版本" };
+      const durNote = durationSec ? `（实测 ${durationSec}s）` : "";
+      return { ok: true, workspace, message: `已导入本地素材${durNote}并设为当前选用版本` };
     },
   );
 
-  handle(IPC_CHANNELS.IMPORT_PROJECT_BGM, async (projectId: string) => {
-    const win = deps.getWindow();
-    if (!win) return { ok: false, message: "窗口不可用" };
-    const chosen = await dialog.showOpenDialog(win, {
-      title: "选择项目背景音乐（BGM）",
-      properties: ["openFile"],
-      filters: [{ name: "音频文件", extensions: ["mp3", "wav", "m4a", "aac", "ogg", "flac"] }],
-    });
-    if (chosen.canceled || !chosen.filePaths[0]) {
-      return { ok: false, message: "已取消导入背景音乐" };
+  handle(IPC_CHANNELS.IMPORT_PROJECT_BGM, async (projectId: string, sourceFilePath?: string) => {
+    let filePath = sourceFilePath?.trim() || "";
+    if (!filePath) {
+      const win = deps.getWindow();
+      if (!win) return { ok: false, message: "窗口不可用" };
+      const chosen = await dialog.showOpenDialog(win, {
+        title: "选择项目背景音乐（BGM）",
+        properties: ["openFile"],
+        filters: [{ name: "音频文件", extensions: ["mp3", "wav", "m4a", "aac", "ogg", "flac"] }],
+      });
+      if (chosen.canceled || !chosen.filePaths[0]) {
+        return { ok: false, message: "已取消导入背景音乐" };
+      }
+      filePath = chosen.filePaths[0];
     }
-    const workspace = deps.projects.importProjectBgmFromPath(projectId, chosen.filePaths[0]);
+    const workspace = deps.projects.importProjectBgmFromPath(projectId, filePath);
     return { ok: true, workspace, message: "已导入背景音乐并绑定至配乐轨" };
   });
 
@@ -333,6 +367,19 @@ export function registerIpcHandlers(deps: {
     deps.oauth.disconnect(providerId),
   );
 
+  handle(IPC_CHANNELS.CLEAN_UNREFERENCED_ASSETS, (projectId: string) => {
+    const res = deps.projects.cleanUnreferencedAssets(projectId);
+    const kb = Math.round(res.freedBytes / 1024);
+    return {
+      ok: true,
+      ...res,
+      message:
+        res.removedFiles > 0
+          ? `已清理 ${res.removedFiles} 个未引用缓存文件，释放约 ${kb} KB（所有历史版本均已保留）`
+          : "当前作品目录干净，没有未引用的孤儿缓存文件",
+    };
+  });
+
   handle(IPC_CHANNELS.DIRECTOR_PROPOSE, (input: { projectId: string; episodeId: string }) =>
     deps.director.proposeSplit(input),
   );
@@ -343,6 +390,12 @@ export function registerIpcHandlers(deps: {
   );
   handle(IPC_CHANNELS.DIRECTOR_UNDO, (input: { projectId: string; undoToken: string }) =>
     deps.director.undoApply(input),
+  );
+  handle(
+    IPC_CHANNELS.DIRECTOR_UNDO_STATE,
+    (input: { projectId: string; episodeId: string }) => ({
+      undoToken: deps.director.getLatestUndoToken(input.projectId, input.episodeId),
+    }),
   );
 
   handle(
@@ -357,6 +410,19 @@ export function registerIpcHandlers(deps: {
       deps.jobQueue.recoverUnknownJob(input),
   );
   handle(IPC_CHANNELS.JOB_LIST, (projectId: string) => deps.jobQueue.listJobs(projectId));
+
+  handle(
+    IPC_CHANNELS.BATCH_PREPARE_PLAN,
+    (input: { projectId: string; episodeId: string; mode: BatchGenerationMode }) =>
+      deps.batchScheduler.prepareBatchPlan(input),
+  );
+  handle(IPC_CHANNELS.BATCH_START_RUN, (plan: BatchGenerationPlan) =>
+    deps.batchScheduler.startBatchRun(plan),
+  );
+  handle(IPC_CHANNELS.BATCH_PAUSE_RUN, (projectId: string) => deps.batchScheduler.pause(projectId));
+  handle(IPC_CHANNELS.BATCH_GET_PROGRESS, (projectId: string) =>
+    deps.batchScheduler.getProgress(projectId),
+  );
 
   handle(IPC_CHANNELS.GET_APP_INFO, () => ({
     version: deps.appVersion,

@@ -38,15 +38,33 @@ function copyContentAddressedAsset(
   };
 }
 
+export function parseCandidatePaths(raw: unknown, currentPath?: string | null): string[] {
+  let list: string[] = [];
+  try {
+    const parsed = JSON.parse(String(raw ?? "[]")) as unknown;
+    if (Array.isArray(parsed)) {
+      list = parsed.filter((v): v is string => typeof v === "string" && v.length > 0);
+    }
+  } catch {
+    list = [];
+  }
+  if (currentPath && !list.includes(currentPath)) {
+    list = [currentPath, ...list];
+  }
+  return list.slice(0, 8);
+}
+
 function rowToAsset(row: Record<string, unknown>): Asset {
+  const mediaPath = row.media_path ? String(row.media_path) : null;
   return {
     id: String(row.id),
     projectId: String(row.project_id),
     kind: row.kind as AssetKind,
     name: String(row.name),
     description: String(row.description ?? ""),
-    mediaPath: row.media_path ? String(row.media_path) : null,
+    mediaPath,
     mediaSha256: row.media_sha256 ? String(row.media_sha256) : null,
+    candidatePaths: parseCandidatePaths(row.candidate_paths_json, mediaPath),
     lockedRef: Number(row.locked_ref) === 1,
     voiceId: row.voice_id ? String(row.voice_id) : null,
     updatedAt: String(row.updated_at),
@@ -91,12 +109,19 @@ export function importAssetImageInDb(
   const row = db.get<Record<string, unknown>>(`SELECT * FROM assets WHERE id = ?`, input.assetId);
   if (!row) throw new Error("资产不存在");
   const copied = copyContentAddressedAsset(projectDir, input.sourceFilePath, ALLOWED_IMAGE_EXTS);
+  const prevMedia = row.media_path ? String(row.media_path) : null;
+  const prevCandidates = parseCandidatePaths(row.candidate_paths_json, prevMedia);
+  const nextCandidates = [
+    copied.mediaPath,
+    ...prevCandidates.filter((p) => p !== copied.mediaPath),
+  ].slice(0, 8);
   const now = new Date().toISOString();
   db.transaction(() => {
     db.run(
-      `UPDATE assets SET media_path = ?, media_sha256 = ?, updated_at = ? WHERE id = ?`,
+      `UPDATE assets SET media_path = ?, media_sha256 = ?, candidate_paths_json = ?, updated_at = ? WHERE id = ?`,
       copied.mediaPath,
       copied.mediaSha256,
+      JSON.stringify(nextCandidates),
       now,
       input.assetId,
     );
@@ -107,10 +132,44 @@ export function importAssetImageInDb(
   return rowToAsset(updated);
 }
 
+export function selectAssetCandidateInDb(
+  db: SqliteDriver,
+  input: { projectId: string; assetId: string; mediaPath: string },
+): Asset {
+  const row = db.get<Record<string, unknown>>(`SELECT * FROM assets WHERE id = ?`, input.assetId);
+  if (!row) throw new Error("资产不存在");
+  const candidates = parseCandidatePaths(
+    row.candidate_paths_json,
+    row.media_path ? String(row.media_path) : null,
+  );
+  if (!candidates.includes(input.mediaPath)) {
+    throw new Error("指定的定妆候选图不在历史列表中");
+  }
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    db.run(
+      `UPDATE assets SET media_path = ?, locked_ref = 0, updated_at = ? WHERE id = ?`,
+      input.mediaPath,
+      now,
+      input.assetId,
+    );
+    db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
+  });
+  const updated = db.get<Record<string, unknown>>(`SELECT * FROM assets WHERE id = ?`, input.assetId);
+  if (!updated) throw new Error("切换定妆候选图失败");
+  return rowToAsset(updated);
+}
+
 export function importShotTakeInDb(
   db: SqliteDriver,
   projectDir: string,
-  input: { projectId: string; shotId: string; kind: TakeKind; sourceFilePath: string },
+  input: {
+    projectId: string;
+    shotId: string;
+    kind: TakeKind;
+    sourceFilePath: string;
+    durationSec?: number | null;
+  },
 ): void {
   const shot = db.get<{ visual_prompt: string }>(
     `SELECT visual_prompt FROM shots WHERE id = ?`,
@@ -126,6 +185,10 @@ export function importShotTakeInDb(
         : ALLOWED_AUDIO_EXTS;
   const copied = copyContentAddressedAsset(projectDir, input.sourceFilePath, allowed);
   const now = new Date().toISOString();
+  const dur =
+    typeof input.durationSec === "number" && Number.isFinite(input.durationSec) && input.durationSec > 0
+      ? Number(input.durationSec.toFixed(2))
+      : null;
 
   const maxVer =
     db.get<{ v: number | null }>(
@@ -141,8 +204,8 @@ export function importShotTakeInDb(
     if (input.kind === "speech") {
       db.run(`UPDATE takes SET is_selected = 0 WHERE shot_id = ? AND kind = 'speech'`, input.shotId);
       db.run(
-        `INSERT INTO takes (id, shot_id, kind, version_number, media_path, media_sha256, prompt_snapshot, provider_info, is_selected, created_at)
-         VALUES (?, ?, 'speech', ?, ?, ?, ?, ?, 1, ?)`,
+        `INSERT INTO takes (id, shot_id, kind, version_number, media_path, media_sha256, prompt_snapshot, provider_info, is_selected, duration_sec, created_at)
+         VALUES (?, ?, 'speech', ?, ?, ?, ?, ?, 1, ?, ?)`,
         takeId,
         input.shotId,
         nextVer,
@@ -150,6 +213,7 @@ export function importShotTakeInDb(
         copied.mediaSha256,
         shot.visual_prompt,
         `本地导入音频 · ${copied.baseName}`,
+        dur,
         now,
       );
       db.run(
@@ -164,8 +228,8 @@ export function importShotTakeInDb(
         input.shotId,
       );
       db.run(
-        `INSERT INTO takes (id, shot_id, kind, version_number, media_path, media_sha256, prompt_snapshot, provider_info, is_selected, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+        `INSERT INTO takes (id, shot_id, kind, version_number, media_path, media_sha256, prompt_snapshot, provider_info, is_selected, duration_sec, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
         takeId,
         input.shotId,
         input.kind,
@@ -174,6 +238,7 @@ export function importShotTakeInDb(
         copied.mediaSha256,
         shot.visual_prompt,
         `本地导入 · ${copied.baseName}`,
+        dur,
         now,
       );
       if (input.kind === "video") {

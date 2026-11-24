@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   IPC_CHANNELS,
   type AivoraDesktopApi,
@@ -20,6 +20,7 @@ const api: AivoraDesktopApi = {
   toggleAssetLock: (projectId, assetId) =>
     ipcRenderer.invoke(IPC_CHANNELS.TOGGLE_ASSET_LOCK, projectId, assetId),
   importAssetImage: (input) => ipcRenderer.invoke(IPC_CHANNELS.IMPORT_ASSET_IMAGE, input),
+  selectAssetCandidate: (input) => ipcRenderer.invoke(IPC_CHANNELS.SELECT_ASSET_CANDIDATE, input),
   createShot: (input) => ipcRenderer.invoke(IPC_CHANNELS.CREATE_SHOT, input),
   moveShot: (input) => ipcRenderer.invoke(IPC_CHANNELS.MOVE_SHOT, input),
   deleteShot: (input) => ipcRenderer.invoke(IPC_CHANNELS.DELETE_SHOT, input),
@@ -27,7 +28,8 @@ const api: AivoraDesktopApi = {
   selectTake: (input) => ipcRenderer.invoke(IPC_CHANNELS.SELECT_TAKE, input),
   addSyntheticTake: (input) => ipcRenderer.invoke(IPC_CHANNELS.ADD_SYNTHETIC_TAKE, input),
   importShotTake: (input) => ipcRenderer.invoke(IPC_CHANNELS.IMPORT_SHOT_TAKE, input),
-  importProjectBgm: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.IMPORT_PROJECT_BGM, projectId),
+  importProjectBgm: (projectId, sourceFilePath) =>
+    ipcRenderer.invoke(IPC_CHANNELS.IMPORT_PROJECT_BGM, projectId, sourceFilePath),
   clearProjectBgm: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.CLEAR_PROJECT_BGM, projectId),
   checkFfmpegStatus: () => ipcRenderer.invoke(IPC_CHANNELS.CHECK_FFMPEG_STATUS),
   preflightExportEpisode: (input) =>
@@ -44,6 +46,8 @@ const api: AivoraDesktopApi = {
   revealPathInFolder: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.REVEAL_PATH, filePath),
   exportProjectArchive: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.EXPORT_ARCHIVE, projectId),
   importProjectArchive: () => ipcRenderer.invoke(IPC_CHANNELS.IMPORT_ARCHIVE),
+  cleanUnreferencedAssets: (projectId) =>
+    ipcRenderer.invoke(IPC_CHANNELS.CLEAN_UNREFERENCED_ASSETS, projectId),
   getModelCenter: () => ipcRenderer.invoke(IPC_CHANNELS.GET_MODEL_CENTER),
   saveProviderConfig: (input) => ipcRenderer.invoke(IPC_CHANNELS.SAVE_PROVIDER_CONFIG, input),
   deleteProviderConfig: (providerId) =>
@@ -55,10 +59,15 @@ const api: AivoraDesktopApi = {
   proposeDirectorSplit: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_PROPOSE, input),
   applyDirectorProposal: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_APPLY, input),
   undoDirectorApply: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_UNDO, input),
+  getDirectorUndoState: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_UNDO_STATE, input),
   prepareGenerationPlan: (input) => ipcRenderer.invoke(IPC_CHANNELS.JOB_PREPARE_PLAN, input),
   confirmAndRunJob: (plan) => ipcRenderer.invoke(IPC_CHANNELS.JOB_CONFIRM_RUN, plan),
   recoverUnknownJob: (input) => ipcRenderer.invoke(IPC_CHANNELS.JOB_RECOVER_UNKNOWN, input),
   listProjectJobs: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.JOB_LIST, projectId),
+  prepareBatchPlan: (input) => ipcRenderer.invoke(IPC_CHANNELS.BATCH_PREPARE_PLAN, input),
+  startBatchRun: (plan) => ipcRenderer.invoke(IPC_CHANNELS.BATCH_START_RUN, plan),
+  pauseBatchRun: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.BATCH_PAUSE_RUN, projectId),
+  getBatchProgress: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.BATCH_GET_PROGRESS, projectId),
   onFlushBeforeClose: (listener) => {
     const handler = () => listener();
     ipcRenderer.on(IPC_CHANNELS.APP_FLUSH_BEFORE_CLOSE, handler);
@@ -74,6 +83,13 @@ const api: AivoraDesktopApi = {
       .split("/")
       .map(encodeURIComponent)
       .join("/")}`,
+  resolveDroppedFilePath: (file: File) => {
+    try {
+      return webUtils.getPathForFile(file) || null;
+    } catch {
+      return null;
+    }
+  },
 };
 
 contextBridge.exposeInMainWorld("aivora", api);

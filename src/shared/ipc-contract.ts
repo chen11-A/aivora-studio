@@ -14,6 +14,9 @@ import type {
   UpdateShotInput,
 } from "./types/domain";
 import type {
+  BatchGenerationMode,
+  BatchGenerationPlan,
+  BatchProgressSnapshot,
   DirectorProposal,
   GenerationPlan,
   JobExecutionResult,
@@ -96,7 +99,13 @@ export type AivoraDesktopApi = {
   importAssetImage: (input: {
     projectId: string;
     assetId: string;
+    sourceFilePath?: string;
   }) => Promise<{ ok: boolean; asset?: Asset; message: string }>;
+  selectAssetCandidate: (input: {
+    projectId: string;
+    assetId: string;
+    mediaPath: string;
+  }) => Promise<Asset>;
 
   createShot: (input: {
     projectId: string;
@@ -127,11 +136,13 @@ export type AivoraDesktopApi = {
     projectId: string;
     shotId: string;
     kind: TakeKind;
+    sourceFilePath?: string;
   }) => Promise<{ ok: boolean; workspace?: ProjectWorkspace; message: string }>;
 
   // Project BGM & real FFmpeg export
   importProjectBgm: (
     projectId: string,
+    sourceFilePath?: string,
   ) => Promise<{ ok: boolean; workspace?: ProjectWorkspace; message: string }>;
   clearProjectBgm: (projectId: string) => Promise<ProjectWorkspace>;
   checkFfmpegStatus: () => Promise<FfmpegStatus>;
@@ -147,9 +158,15 @@ export type AivoraDesktopApi = {
   onExportProgress: (listener: (event: ExportProgressEvent) => void) => () => void;
   revealPathInFolder: (filePath: string) => Promise<{ ok: boolean }>;
 
-  // Archive & backup
+  // Archive, backup & maintenance
   exportProjectArchive: (projectId: string) => Promise<ArchiveResult>;
   importProjectArchive: () => Promise<{ ok: boolean; project?: ProjectWorkspace; message: string }>;
+  cleanUnreferencedAssets: (projectId: string) => Promise<{
+    ok: boolean;
+    removedFiles: number;
+    freedBytes: number;
+    message: string;
+  }>;
 
   // Model center & OAuth (global.db)
   getModelCenter: () => Promise<ModelCenterSnapshot>;
@@ -160,7 +177,7 @@ export type AivoraDesktopApi = {
   oauthStartLogin: (providerId: OAuthProviderId) => Promise<OAuthLoginResult>;
   oauthDisconnect: (providerId: OAuthProviderId) => Promise<{ ok: boolean; message: string }>;
 
-  // Director skill (proposal-only, undoable)
+  // Director skill (proposal-only, persistent undoable)
   proposeDirectorSplit: (input: {
     projectId: string;
     episodeId: string;
@@ -174,8 +191,12 @@ export type AivoraDesktopApi = {
     projectId: string;
     undoToken: string;
   }) => Promise<{ ok: boolean; workspace?: ProjectWorkspace; message: string }>;
+  getDirectorUndoState: (input: {
+    projectId: string;
+    episodeId: string;
+  }) => Promise<{ undoToken: string | null }>;
 
-  // Anti-duplicate-charge Job Queue (confirm -> lock snapshot -> run / GET-only recover)
+  // Anti-duplicate-charge Job Queue & Incremental Batch Scheduler
   prepareGenerationPlan: (input: {
     projectId: string;
     shotId: string;
@@ -189,8 +210,16 @@ export type AivoraDesktopApi = {
     remoteTaskId?: string;
   }) => Promise<JobExecutionResult>;
   listProjectJobs: (projectId: string) => Promise<Job[]>;
+  prepareBatchPlan: (input: {
+    projectId: string;
+    episodeId: string;
+    mode: BatchGenerationMode;
+  }) => Promise<BatchGenerationPlan>;
+  startBatchRun: (plan: BatchGenerationPlan) => Promise<BatchProgressSnapshot>;
+  pauseBatchRun: (projectId: string) => Promise<{ ok: boolean; message: string }>;
+  getBatchProgress: (projectId: string) => Promise<BatchProgressSnapshot | null>;
 
-  // App lifecycle & diagnostics
+  // App lifecycle, drag-and-drop & diagnostics
   onFlushBeforeClose: (listener: () => void) => () => void;
   notifyFlushComplete: (ok: boolean) => void;
   getAppInfo: () => Promise<{
@@ -200,6 +229,7 @@ export type AivoraDesktopApi = {
     platform: string;
   }>;
   mediaUrl: (projectId: string, relativePath: string) => string;
+  resolveDroppedFilePath?: (file: File) => string | null;
 };
 
 export const IPC_CHANNELS = {
@@ -215,6 +245,7 @@ export const IPC_CHANNELS = {
   UPDATE_ASSET: "aivora:assets:update",
   TOGGLE_ASSET_LOCK: "aivora:assets:toggle-lock",
   IMPORT_ASSET_IMAGE: "aivora:assets:import-image",
+  SELECT_ASSET_CANDIDATE: "aivora:assets:select-candidate",
   CREATE_SHOT: "aivora:shots:create",
   MOVE_SHOT: "aivora:shots:move",
   DELETE_SHOT: "aivora:shots:delete",
@@ -232,6 +263,7 @@ export const IPC_CHANNELS = {
   REVEAL_PATH: "aivora:shell:reveal-path",
   EXPORT_ARCHIVE: "aivora:archive:export",
   IMPORT_ARCHIVE: "aivora:archive:import",
+  CLEAN_UNREFERENCED_ASSETS: "aivora:maintenance:clean-assets",
   GET_MODEL_CENTER: "aivora:models:get",
   SAVE_PROVIDER_CONFIG: "aivora:models:save-provider",
   DELETE_PROVIDER_CONFIG: "aivora:models:delete-provider",
@@ -242,10 +274,15 @@ export const IPC_CHANNELS = {
   DIRECTOR_PROPOSE: "aivora:director:propose",
   DIRECTOR_APPLY: "aivora:director:apply",
   DIRECTOR_UNDO: "aivora:director:undo",
+  DIRECTOR_UNDO_STATE: "aivora:director:undo-state",
   JOB_PREPARE_PLAN: "aivora:jobs:prepare-plan",
   JOB_CONFIRM_RUN: "aivora:jobs:confirm-run",
   JOB_RECOVER_UNKNOWN: "aivora:jobs:recover-unknown",
   JOB_LIST: "aivora:jobs:list",
+  BATCH_PREPARE_PLAN: "aivora:batch:prepare-plan",
+  BATCH_START_RUN: "aivora:batch:start-run",
+  BATCH_PAUSE_RUN: "aivora:batch:pause-run",
+  BATCH_GET_PROGRESS: "aivora:batch:get-progress",
   APP_FLUSH_BEFORE_CLOSE: "aivora:app:flush-before-close",
   APP_FLUSH_COMPLETE: "aivora:app:flush-complete",
   GET_APP_INFO: "aivora:app:info",

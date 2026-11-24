@@ -488,4 +488,71 @@ describe("export-pipeline & ExportWriteGuard", () => {
     },
     60_000,
   );
+
+  it(
+    "exports static raster PNG with smooth zoompan cameraMove ('缓推') and smooth-ramp -8 dB BGM ducking",
+    async () => {
+      const ff = await probeFfmpegStatus();
+      expect(ff.available).toBe(true);
+      const ffmpeg = ff.ffmpegPath!;
+      const { probeFileDurationSec } = await import("./motion-filters");
+
+      const base = makeTempDir("aivora-zoompan-");
+      const fixtures = path.join(base, "fixtures");
+      mkdirSync(fixtures, { recursive: true });
+
+      const posterPng = path.join(fixtures, "poster.png");
+      const bgmWav = path.join(fixtures, "bgm.wav");
+      const speechWav = path.join(fixtures, "speech.wav");
+      await runMediaBinary(ffmpeg, [
+        "-hide_banner", "-nostdin", "-y",
+        "-f", "lavfi", "-i", "testsrc2=s=640x360:d=1",
+        "-frames:v", "1", posterPng,
+      ]);
+      await runMediaBinary(ffmpeg, [
+        "-hide_banner", "-nostdin", "-y",
+        "-f", "lavfi", "-i", "sine=frequency=330:duration=4:sample_rate=48000",
+        "-ac", "2", bgmWav,
+      ]);
+      await runMediaBinary(ffmpeg, [
+        "-hide_banner", "-nostdin", "-y",
+        "-f", "lavfi", "-i", "sine=frequency=660:duration=2:sample_rate=48000",
+        "-ac", "2", speechWav,
+      ]);
+
+      const probedSpeech = await probeFileDurationSec(speechWav, "speech");
+      expect(probedSpeech).toBeGreaterThanOrEqual(1.8);
+      expect(probedSpeech).toBeLessThanOrEqual(2.2);
+
+      const store = new ProjectStore(path.join(base, "静帧运镜 空间"));
+      const created = store.createProject({ name: "静帧动态运镜测试", aspectRatio: "16:9" });
+      const epId = created.episodes[0]!.id;
+      const shotId = created.shots[0]!.id;
+      store.updateShot({
+        projectId: created.project.id,
+        shotId,
+        cameraMove: "缓推",
+        durationSec: 2,
+        dialogue: "静帧推镜加平滑配乐闪避。",
+        subtitle: "静帧推镜加平滑配乐闪避。",
+      });
+      store.importProjectBgmFromPath(created.project.id, bgmWav);
+      store.importShotTakeFromPath({ projectId: created.project.id, shotId, kind: "image", sourceFilePath: posterPng });
+      const ws = store.importShotTakeFromPath({
+        projectId: created.project.id,
+        shotId,
+        kind: "speech",
+        sourceFilePath: speechWav,
+        durationSec: probedSpeech,
+      });
+
+      const outMp4 = path.join(ws.dirPath, "exports", "静帧推镜成片.mp4");
+      const res = await exportEpisodeToMp4({ workspace: ws, projectDir: ws.dirPath, episodeId: epId, outputPath: outMp4 });
+      expect(res.ok).toBe(true);
+      expect(res.durationSec).toBeGreaterThanOrEqual(1.8);
+      expect(res.durationSec).toBeLessThanOrEqual(2.3);
+      store.closeAll();
+    },
+    60_000,
+  );
 });

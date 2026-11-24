@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
+  ArrowUpRight,
   CheckCircle2,
   Clock,
   Loader2,
@@ -9,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { useAiGenerationStore } from "../store/useAiGenerationStore";
+import { useStudioStore } from "../store/useStudioStore";
 
 export function JobDrawer() {
   const open = useAiGenerationStore((s) => s.jobDrawerOpen);
@@ -16,8 +18,16 @@ export function JobDrawer() {
   const jobs = useAiGenerationStore((s) => s.jobs);
   const refreshJobs = useAiGenerationStore((s) => s.refreshJobs);
   const recoverJob = useAiGenerationStore((s) => s.recoverJob);
+  const jumpToShot = useStudioStore((s) => s.jumpToShot);
 
   const [manualIds, setManualIds] = useState<Record<string, string>>({});
+
+  const hasRunning = jobs.some((j) => j.status === "running");
+  useEffect(() => {
+    if (!open || !hasRunning) return;
+    const timer = setInterval(() => void refreshJobs(), 2000);
+    return () => clearInterval(timer);
+  }, [open, hasRunning, refreshJobs]);
 
   if (!open) return null;
 
@@ -92,11 +102,24 @@ export function JobDrawer() {
                     </span>
                   </div>
 
-                  {job.remoteTaskId && (
-                    <div className="text-[11px] font-mono text-[#768196] truncate">
-                      远端任务号：{job.remoteTaskId}
-                    </div>
-                  )}
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-[#768196]">
+                    <span className="font-mono truncate">
+                      {job.remoteTaskId ? `远端任务号：${job.remoteTaskId}` : `类型：${job.kind}`}
+                    </span>
+                    {job.shotId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpen(false);
+                          void jumpToShot(job.shotId!);
+                        }}
+                        className="text-[#60a5fa] hover:underline inline-flex items-center gap-0.5 shrink-0 cursor-pointer"
+                      >
+                        <span>定位镜头</span>
+                        <ArrowUpRight className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
 
                   {job.errorMessage && (
                     <div className="text-[11px] text-[#fca5a5] leading-relaxed">{job.errorMessage}</div>

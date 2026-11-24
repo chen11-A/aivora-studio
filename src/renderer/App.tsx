@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { BatchJobModal } from "./components/BatchJobModal";
 import { ConfirmJobModal } from "./components/ConfirmJobModal";
 import { JobDrawer } from "./components/JobDrawer";
 import { StudioShell } from "./components/StudioShell";
@@ -46,6 +47,7 @@ export function App() {
       </StudioShell>
       <ModelCenterModal />
       <ConfirmJobModal />
+      <BatchJobModal />
       <JobDrawer />
     </>
   );

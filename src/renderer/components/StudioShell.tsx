@@ -11,6 +11,7 @@ import {
   Scissors,
   ScrollText,
   Sparkles,
+  Trash2,
   Users,
   AlertTriangle,
   Clock,
@@ -39,8 +40,10 @@ export function StudioShell({ children }: { children: ReactNode }) {
   const setModelCenterOpen = useStudioStore((s) => s.setModelCenterOpen);
   const setExportModalOpen = useStudioStore((s) => s.setExportModalOpen);
   const exportArchive = useStudioStore((s) => s.exportArchive);
+  const cleanUnreferencedAssets = useStudioStore((s) => s.cleanUnreferencedAssets);
   const setJobDrawerOpen = useAiGenerationStore((s) => s.setJobDrawerOpen);
   const runningJob = useAiGenerationStore((s) => s.runningJob);
+  const batchRunning = useAiGenerationStore((s) => Boolean(s.batchProgress?.running));
 
   const currentEp = workspace?.episodes.find((e) => e.id === activeEpisodeId) ?? workspace?.episodes[0];
 
@@ -134,7 +137,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
                 onClick={() => setJobDrawerOpen(true)}
                 title="查看 AI 生成任务与状态未知查单找回"
               >
-                {runningJob ? (
+                {runningJob || batchRunning ? (
                   <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-[#60a5fa]" />
                 ) : (
                   <Clock className="w-3.5 h-3.5 shrink-0 text-[#a4aec0]" />
@@ -149,6 +152,14 @@ export function StudioShell({ children }: { children: ReactNode }) {
               >
                 <Archive className="w-3.5 h-3.5 shrink-0" />
                 <span className="hidden xl:inline">备份</span>
+              </button>
+              <button
+                type="button"
+                className="btn-secondary px-2"
+                onClick={() => void cleanUnreferencedAssets()}
+                title="清理未引用的孤儿缓存文件（绝不删历史版本）"
+              >
+                <Trash2 className="w-3.5 h-3.5 shrink-0 text-[#a4aec0]" />
               </button>
             </>
           )}
@@ -234,7 +245,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <span>存储引擎：{sqliteEngine}</span>
-          <span>v1.0.3</span>
+          <span>v1.2.0</span>
         </div>
       </footer>
     </div>

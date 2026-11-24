@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS assets (
   description TEXT NOT NULL DEFAULT '',
   media_path TEXT,
   media_sha256 TEXT,
+  candidate_paths_json TEXT NOT NULL DEFAULT '[]',
   locked_ref INTEGER NOT NULL DEFAULT 0,
   voice_id TEXT,
   updated_at TEXT NOT NULL
@@ -102,6 +103,14 @@ CREATE TABLE IF NOT EXISTS jobs (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS director_undo_snapshots (
+  episode_id TEXT PRIMARY KEY REFERENCES episodes(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  undo_token TEXT NOT NULL UNIQUE,
+  snapshot_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `;
 
 export const GLOBAL_SCHEMA_SQL = `
@@ -142,14 +151,20 @@ CREATE TABLE IF NOT EXISTS model_routing (
 
 export function initProjectSchema(db: SqliteDriver): void {
   db.exec(PROJECT_SCHEMA_SQL);
-  const cols = new Set(
+  const shotCols = new Set(
     db.all<{ name: string }>(`PRAGMA table_info(shots)`).map((c) => c.name),
   );
-  if (!cols.has("trim_in_sec")) {
+  if (!shotCols.has("trim_in_sec")) {
     db.exec(`ALTER TABLE shots ADD COLUMN trim_in_sec REAL NOT NULL DEFAULT 0`);
   }
-  if (!cols.has("trim_out_sec")) {
+  if (!shotCols.has("trim_out_sec")) {
     db.exec(`ALTER TABLE shots ADD COLUMN trim_out_sec REAL NOT NULL DEFAULT 0`);
+  }
+  const assetCols = new Set(
+    db.all<{ name: string }>(`PRAGMA table_info(assets)`).map((c) => c.name),
+  );
+  if (!assetCols.has("candidate_paths_json")) {
+    db.exec(`ALTER TABLE assets ADD COLUMN candidate_paths_json TEXT NOT NULL DEFAULT '[]'`);
   }
 }
 

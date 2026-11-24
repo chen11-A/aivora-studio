@@ -51,6 +51,17 @@ export function ConfirmJobModal() {
             <span>预计耗时</span>
             <span className="text-[#f3f5f9]">约 {plan.estimatedSec} 秒（提交即锁定配置快照）</span>
           </div>
+          {plan.firstFramePath && (
+            <div className="flex justify-between">
+              <span>图生视频首帧锚定</span>
+              <span className="text-[#34d399]">已锁定本镜静帧（绝不误用旧视频）</span>
+            </div>
+          )}
+          {plan.upstreamDurationNote && (
+            <div className="pt-1 text-[11px] text-[#93c5fd] border-t border-[#252b37]">
+              {plan.upstreamDurationNote}
+            </div>
+          )}
         </div>
 
         {/* Transparent Locked Reference Injection List */}

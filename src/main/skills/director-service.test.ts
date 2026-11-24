@@ -397,4 +397,66 @@ describe("DirectorService proposal, apply, and 1-click undo", () => {
     projects.closeAll();
     globalConfig.close();
   });
+
+  it("persists director undo snapshots in SQLite so undo works even after closing and reopening the app", () => {
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-director-persist-"));
+    tempDirs.push(base);
+    const wsRoot = path.join(base, "ws");
+    const appDir = path.join(base, "app");
+
+    // Session 1: open demo, apply proposal, then close everything (simulating app quit)
+    const projects1 = new ProjectStore(wsRoot);
+    const global1 = new GlobalConfigStore(appDir, mockVault);
+    const oauth1 = new OAuthManager(global1, async () => undefined);
+    const demo = projects1.openDemoProject();
+    const epId = demo.episodes[0]!.id;
+    const origShotCount = demo.shots.filter((s) => s.episodeId === epId).length;
+
+    const svc1 = new DirectorService(projects1, global1, oauth1);
+    const proposal = parseDirectorProposalJson(
+      JSON.stringify({
+        scenes: [
+          {
+            title: "重启撤销验证场",
+            summary: "单镜覆盖",
+            shots: [
+              {
+                title: "镜 01 · 全新开场",
+                scale: "远景",
+                cameraMove: "固定",
+                durationSec: 3,
+                visualPrompt: "完全不同的新开场画面",
+                dialogue: "",
+                speaker: "",
+                subtitle: "新开场",
+                characters: [],
+              },
+            ],
+          },
+        ],
+      }),
+      "DeepSeek",
+    );
+    const applied = svc1.applyProposal({ projectId: demo.project.id, episodeId: epId, proposal });
+    expect(applied.ok).toBe(true);
+    projects1.closeAll();
+    global1.close();
+
+    // Session 2: brand-new ProjectStore & DirectorService instances (app restart)
+    const projects2 = new ProjectStore(wsRoot);
+    const global2 = new GlobalConfigStore(appDir, mockVault);
+    const oauth2 = new OAuthManager(global2, async () => undefined);
+    const svc2 = new DirectorService(projects2, global2, oauth2);
+
+    const persistedToken = svc2.getLatestUndoToken(demo.project.id, epId);
+    expect(persistedToken).toBe(applied.undoToken);
+
+    const undone = svc2.undoApply({ projectId: demo.project.id, undoToken: persistedToken! });
+    expect(undone.ok).toBe(true);
+    expect(undone.workspace?.shots.filter((s) => s.episodeId === epId)).toHaveLength(origShotCount);
+    expect(svc2.getLatestUndoToken(demo.project.id, epId)).toBeNull();
+
+    projects2.closeAll();
+    global2.close();
+  });
 });
