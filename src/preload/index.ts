@@ -46,6 +46,8 @@ const api: AivoraDesktopApi = {
   generateProjectBgm: (input) => ipcRenderer.invoke(IPC_CHANNELS.GENERATE_PROJECT_BGM, input),
   applyProjectBgmCandidate: (input) =>
     ipcRenderer.invoke(IPC_CHANNELS.APPLY_PROJECT_BGM_CANDIDATE, input),
+  deleteProjectBgmCandidate: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.DELETE_PROJECT_BGM_CANDIDATE, input),
   clearProjectBgm: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.CLEAR_PROJECT_BGM, projectId),
   checkFfmpegStatus: () => ipcRenderer.invoke(IPC_CHANNELS.CHECK_FFMPEG_STATUS),
   preflightExportEpisode: (input) =>

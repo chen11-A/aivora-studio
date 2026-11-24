@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,10 +10,12 @@ import { DirectorService } from "../skills/director-service";
 import { GlobalConfigStore } from "../storage/global-store";
 import { ProjectStore } from "../storage/project-store";
 import {
+  fetchGeminiApi,
   fetchGeminiMediaBytes,
   GEMINI_CURATED_MODELS,
   GEMINI_OFFICIAL_BASE_URL,
   runGeminiMusicGeneration,
+  submitGeminiVideoTask,
 } from "./gemini-official-adapter";
 import { fetchRemoteProviderModels, testProviderConnectivity } from "./openai-compat-adapter";
 
@@ -424,5 +426,124 @@ describe("Google Gemini Official All-in-One Adapter", () => {
       ),
     ).rejects.toThrow(/未核准域名/);
     expect(seen.some((s) => s.url.includes("evil.example"))).toBe(false);
+  });
+
+  it("blocks HTTP baseUrl and cross-origin 3xx redirects on all keyed Gemini API requests (P1 security regression)", async () => {
+    const visited: string[] = [];
+    const mockFetch = (async (url: string | URL) => {
+      const s = String(url);
+      visited.push(s);
+      return new Response(null, {
+        status: 302,
+        headers: { Location: "https://evil.example/harvest-key" },
+      });
+    }) as typeof fetch;
+
+    // 1. Non-HTTPS base URL rejected before any network call
+    await expect(
+      fetchGeminiApi(
+        {
+          baseUrl: "http://generativelanguage.googleapis.com",
+          pathAndQuery: "/v1beta/models",
+          apiKey: "AIzaTopSecret",
+        },
+        mockFetch,
+      ),
+    ).rejects.toThrow(/HTTPS/);
+    expect(visited).toHaveLength(0);
+
+    // 2. Connectivity test blocks cross-origin redirect without touching evil.example
+    const testRes = await testProviderConnectivity(
+      {
+        providerId: "prv_g",
+        protocol: "gemini-official",
+        baseUrl: GEMINI_OFFICIAL_BASE_URL,
+        apiKey: "AIzaTopSecret",
+        secondaryKey: null,
+      },
+      mockFetch,
+    );
+    expect(testRes.ok).toBe(false);
+    expect(testRes.message).toContain("非同源");
+    expect(visited.some((u) => u.includes("evil.example"))).toBe(false);
+
+    // 3. Video submit also fails fast with security error instead of leaking key
+    await expect(
+      submitGeminiVideoTask(
+        {
+          baseUrl: GEMINI_OFFICIAL_BASE_URL,
+          apiKey: "AIzaTopSecret",
+          modelId: "gemini-omni-1.2-flash",
+          prompt: "test",
+          aspectRatio: "16:9",
+        },
+        mockFetch,
+      ),
+    ).rejects.toThrow(/安全拦截/);
+    expect(visited.some((u) => u.includes("evil.example"))).toBe(false);
+  });
+
+  it("persists AI BGM candidates in project.db so cleanUnreferencedAssets never deletes them and explicit apply switches BGM (P1 regression)", () => {
+    const wsDir = makeTempDir("aivora-bgm-cand-");
+    const projects = new ProjectStore(wsDir);
+    const created = projects.createProject({ name: "配乐候选测试", aspectRatio: "16:9" });
+
+    // Create a real audio candidate file inside project/assets
+    const mediaPath = "assets/cand_lyria_01.wav";
+    const absPath = join(created.dirPath, mediaPath);
+    const wavBytes = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(64, 0x05)]);
+    const mockFetch = (async () =>
+      new Response(
+        JSON.stringify({
+          id: "int_bgm_cand",
+          status: "completed",
+          outputs: [{ type: "audio", mime_type: "audio/L16;rate=24000", data: wavBytes.toString("base64") }],
+        }),
+        { status: 200 },
+      )) as typeof fetch;
+
+    return runGeminiMusicGeneration(
+      {
+        baseUrl: GEMINI_OFFICIAL_BASE_URL,
+        apiKey: "AIzaTest",
+        prompt: "soft piano",
+        projectDir: created.dirPath,
+      },
+      mockFetch,
+    ).then((generated) => {
+      const { assetId, workspace: afterReg } = projects.registerProjectBgmCandidate({
+        projectId: created.project.id,
+        name: "AI 候选配乐 · lyria-3.5",
+        mediaPath: generated.mediaPath,
+        mediaSha256: generated.mediaSha256,
+      });
+
+      // Active BGM is still untouched (null), candidate is registered as music asset
+      expect(afterReg.project.bgmAssetId).toBeNull();
+      expect(afterReg.assets.some((a) => a.id === assetId && a.kind === "music")).toBe(true);
+
+      // Running cleanUnreferencedAssets MUST preserve the auditioning candidate on disk!
+      const cleaned = projects.cleanUnreferencedAssets(created.project.id);
+      expect(cleaned.removedFiles).toBe(0);
+      expect(existsSync(join(created.dirPath, generated.mediaPath))).toBe(true);
+      expect(absPath).toBeTruthy();
+
+      // Reopen project -> candidate is still listed and can be explicitly applied
+      projects.closeAll();
+      const reopenedStore = new ProjectStore(wsDir);
+      const reopened = reopenedStore.openProject(created.project.id);
+      expect(reopened.project.bgmAssetId).toBeNull();
+      expect(reopened.assets.some((a) => a.id === assetId)).toBe(true);
+
+      const applied = reopenedStore.applyProjectBgmCandidate(created.project.id, assetId);
+      expect(applied.project.bgmAssetId).toBe(assetId);
+
+      // Active BGM cannot be deleted via deleteProjectBgmCandidate
+      expect(() =>
+        reopenedStore.deleteProjectBgmCandidate(created.project.id, assetId),
+      ).toThrow(/当前正在使用/);
+
+      reopenedStore.closeAll();
+    });
   });
 });

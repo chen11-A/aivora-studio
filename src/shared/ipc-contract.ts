@@ -185,13 +185,19 @@ export type AivoraDesktopApi = {
   }) => Promise<{
     ok: boolean;
     projectId: string;
+    candidateAssetId?: string;
     candidateMediaPath?: string;
     modelId?: string;
+    workspace?: ProjectWorkspace;
     message: string;
   }>;
   applyProjectBgmCandidate: (input: {
     projectId: string;
-    candidateMediaPath: string;
+    assetId: string;
+  }) => Promise<{ ok: boolean; projectId: string; workspace?: ProjectWorkspace; message: string }>;
+  deleteProjectBgmCandidate: (input: {
+    projectId: string;
+    assetId: string;
   }) => Promise<{ ok: boolean; projectId: string; workspace?: ProjectWorkspace; message: string }>;
   clearProjectBgm: (projectId: string) => Promise<ProjectWorkspace>;
   checkFfmpegStatus: () => Promise<FfmpegStatus>;
@@ -317,6 +323,7 @@ export const IPC_CHANNELS = {
   IMPORT_PROJECT_BGM: "aivora:bgm:import",
   GENERATE_PROJECT_BGM: "aivora:bgm:generate",
   APPLY_PROJECT_BGM_CANDIDATE: "aivora:bgm:apply-candidate",
+  DELETE_PROJECT_BGM_CANDIDATE: "aivora:bgm:delete-candidate",
   CLEAR_PROJECT_BGM: "aivora:bgm:clear",
   CHECK_FFMPEG_STATUS: "aivora:media:ffmpeg-status",
   PREFLIGHT_EXPORT_EPISODE: "aivora:media:preflight-export",

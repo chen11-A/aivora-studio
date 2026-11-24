@@ -335,3 +335,73 @@ export function importProjectBgmInDb(
     );
   });
 }
+
+export function registerProjectBgmCandidateInDb(
+  db: SqliteDriver,
+  input: {
+    projectId: string;
+    name: string;
+    mediaPath: string;
+    mediaSha256: string;
+    description?: string;
+  },
+): string {
+  const now = new Date().toISOString();
+  const assetId = `bgm_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
+  db.transaction(() => {
+    db.run(
+      `INSERT INTO assets (id, project_id, kind, name, description, media_path, media_sha256, locked_ref, voice_id, updated_at)
+       VALUES (?, ?, 'music', ?, ?, ?, ?, 0, NULL, ?)`,
+      assetId,
+      input.projectId,
+      input.name.trim() || "AI 候选配乐",
+      input.description ?? "AI 生成候选配乐（待试听）",
+      input.mediaPath,
+      input.mediaSha256,
+      now,
+    );
+    db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
+  });
+  return assetId;
+}
+
+export function applyProjectBgmAssetInDb(
+  db: SqliteDriver,
+  input: { projectId: string; assetId: string },
+): void {
+  const row = db.get<{ id: string }>(
+    `SELECT id FROM assets WHERE id = ? AND project_id = ? AND kind = 'music'`,
+    input.assetId,
+    input.projectId,
+  );
+  if (!row) throw new Error("找不到指定的配乐候选素材");
+  const now = new Date().toISOString();
+  db.run(
+    `UPDATE projects SET bgm_asset_id = ?, updated_at = ? WHERE id = ?`,
+    input.assetId,
+    now,
+    input.projectId,
+  );
+}
+
+export function deleteProjectBgmCandidateInDb(
+  db: SqliteDriver,
+  input: { projectId: string; assetId: string },
+): void {
+  const proj = db.get<{ bgm_asset_id: string | null }>(
+    `SELECT bgm_asset_id FROM projects WHERE id = ?`,
+    input.projectId,
+  );
+  if (proj?.bgm_asset_id === input.assetId) {
+    throw new Error("当前正在使用的背景配乐不可直接作为候选删除，请先移除背景音乐");
+  }
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    db.run(
+      `DELETE FROM assets WHERE id = ? AND project_id = ? AND kind = 'music'`,
+      input.assetId,
+      input.projectId,
+    );
+    db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
+  });
+}

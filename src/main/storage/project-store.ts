@@ -20,12 +20,9 @@ import {
 } from "../../shared/types/domain";
 import { DEMO_SCRIPT_EP1, populateDemoProject, writeCinematicFrameSvg } from "./demo-seed";
 import {
-  importAssetImageInDb,
-  importProjectBgmInDb,
-  importShotTakeInDb,
-  parseCandidatePaths,
-  selectAssetCandidateInDb,
-  updateAssetInDb,
+  applyProjectBgmAssetInDb, deleteProjectBgmCandidateInDb, importAssetImageInDb,
+  importProjectBgmInDb, importShotTakeInDb, parseCandidatePaths,
+  registerProjectBgmCandidateInDb, selectAssetCandidateInDb, updateAssetInDb,
 } from "./media-import";
 import { exportProjectArchive, importProjectArchive } from "./project-archive";
 import { cleanUnreferencedAssetsInProject } from "./project-maintenance";
@@ -450,6 +447,18 @@ export class ProjectStore {
     const dir = this.resolveProjectDir(projectId);
     if (!dir) throw new Error("作品不存在");
     importProjectBgmInDb(this.getDb(projectId), dir, { projectId, sourceFilePath });
+    return this.openProject(projectId);
+  }
+  registerProjectBgmCandidate(input: { projectId: string; name: string; mediaPath: string; mediaSha256: string; description?: string }): { assetId: string; workspace: ProjectWorkspace } {
+    const assetId = registerProjectBgmCandidateInDb(this.getDb(input.projectId), input);
+    return { assetId, workspace: this.openProject(input.projectId) };
+  }
+  applyProjectBgmCandidate(projectId: string, assetId: string): ProjectWorkspace {
+    applyProjectBgmAssetInDb(this.getDb(projectId), { projectId, assetId });
+    return this.openProject(projectId);
+  }
+  deleteProjectBgmCandidate(projectId: string, assetId: string): ProjectWorkspace {
+    deleteProjectBgmCandidateInDb(this.getDb(projectId), { projectId, assetId });
     return this.openProject(projectId);
   }
 

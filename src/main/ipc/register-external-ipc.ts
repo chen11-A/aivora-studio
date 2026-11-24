@@ -266,13 +266,22 @@ export function registerExternalAndModelExtraIpc(deps: ExternalIpcDeps): void {
           prompt: input.prompt.trim() || "warm cinematic background music, gentle piano and strings",
           projectDir,
         });
-        // Never overwrite the project's currently bound BGM automatically: return candidate for audition first!
+        const stamp = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+        const { assetId, workspace } = deps.projects.registerProjectBgmCandidate({
+          projectId: input.projectId,
+          name: `AI 候选配乐 · ${musicModel} (${stamp})`,
+          mediaPath: media.mediaPath,
+          mediaSha256: media.mediaSha256,
+          description: input.prompt.trim().slice(0, 120) || "Lyria AI 候选配乐（待试听）",
+        });
         return {
           ok: true,
           projectId: input.projectId,
+          candidateAssetId: assetId,
           candidateMediaPath: media.mediaPath,
           modelId: musicModel,
-          message: `已通过 ${musicModel} 生成候选配乐（未覆盖当前配乐，请试听满意后再点「采用」）`,
+          workspace,
+          message: `已通过 ${musicModel} 生成并登记候选配乐（未覆盖当前配乐，重启或清理缓存也不会丢失）`,
         };
       } catch (err) {
         return {
@@ -286,24 +295,43 @@ export function registerExternalAndModelExtraIpc(deps: ExternalIpcDeps): void {
 
   handle(
     IPC_CHANNELS.APPLY_PROJECT_BGM_CANDIDATE,
-    (input: { projectId: string; candidateMediaPath: string }) => {
-      const projectDir = deps.projects.resolveProjectDir(input.projectId);
-      if (!projectDir) {
-        return { ok: false, projectId: input.projectId, message: "作品目录不存在" };
+    (input: { projectId: string; assetId: string }) => {
+      try {
+        const workspace = deps.projects.applyProjectBgmCandidate(input.projectId, input.assetId);
+        return {
+          ok: true,
+          projectId: input.projectId,
+          workspace,
+          message: "已将试听候选设为当前作品的背景配乐",
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          projectId: input.projectId,
+          message: err instanceof Error ? err.message : "采用候选配乐失败",
+        };
       }
-      const assetsRoot = path.resolve(projectDir, "assets");
-      const resolved = path.resolve(projectDir, input.candidateMediaPath);
-      const rel = path.relative(assetsRoot, resolved);
-      if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
-        return { ok: false, projectId: input.projectId, message: "拒绝绑定作品资源目录以外的音频路径" };
+    },
+  );
+
+  handle(
+    IPC_CHANNELS.DELETE_PROJECT_BGM_CANDIDATE,
+    (input: { projectId: string; assetId: string }) => {
+      try {
+        const workspace = deps.projects.deleteProjectBgmCandidate(input.projectId, input.assetId);
+        return {
+          ok: true,
+          projectId: input.projectId,
+          workspace,
+          message: "已移除该候选配乐",
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          projectId: input.projectId,
+          message: err instanceof Error ? err.message : "删除候选配乐失败",
+        };
       }
-      const workspace = deps.projects.importProjectBgmFromPath(input.projectId, resolved);
-      return {
-        ok: true,
-        projectId: input.projectId,
-        workspace,
-        message: "已将试听候选设为当前作品的背景配乐",
-      };
     },
   );
 }

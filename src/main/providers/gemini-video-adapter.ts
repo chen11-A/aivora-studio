@@ -7,7 +7,7 @@ import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AspectRatio } from "../../shared/types/domain";
 import { probeFfmpegStatus, runMediaBinary } from "../media/ffmpeg-locator";
-import { fetchGeminiMediaBytes } from "./gemini-official-adapter";
+import { fetchGeminiApi, fetchGeminiMediaBytes } from "./gemini-official-adapter";
 import { AmbiguousRemoteError } from "./kling-adapter";
 
 type VideoContentBlock = {
@@ -34,13 +34,6 @@ export type GeminiVideoQueryResult = {
   errorMessage: string | null;
   rawStatus: string;
 };
-
-function cleanBase(baseUrl: string): string {
-  return (baseUrl || "https://generativelanguage.googleapis.com")
-    .trim()
-    .replace(/\/+$/, "")
-    .replace(/\/v1beta$/i, "");
-}
 
 function collectBlocks(payload: VideoInteractionPayload): VideoContentBlock[] {
   const blocks: VideoContentBlock[] = [];
@@ -74,22 +67,25 @@ export async function submitGeminiVideoTask(
 
   let res: Response;
   try {
-    res = await fetcher(`${cleanBase(input.baseUrl)}/v1beta/interactions`, {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": input.apiKey.trim(),
-        "Content-Type": "application/json",
+    res = await fetchGeminiApi(
+      {
+        baseUrl: input.baseUrl,
+        pathAndQuery: "/v1beta/interactions",
+        apiKey: input.apiKey,
+        method: "POST",
+        body: {
+          model: input.modelId,
+          background: true,
+          input: contentInput,
+          response_format: { type: "video", aspect_ratio: input.aspectRatio },
+          stream: false,
+        },
+        timeoutMs: 45_000,
       },
-      body: JSON.stringify({
-        model: input.modelId,
-        background: true,
-        input: contentInput,
-        response_format: { type: "video", aspect_ratio: input.aspectRatio },
-        stream: false,
-      }),
-      signal: AbortSignal.timeout(45_000),
-    });
+      fetcher,
+    );
   } catch (err) {
+    if (err instanceof Error && err.message.startsWith("安全拦截")) throw err;
     throw new AmbiguousRemoteError(
       `Gemini 视频提交请求超时或网络中断（${err instanceof Error ? err.message : String(err)}），为防重复扣费已暂停自动重试。`,
     );
@@ -106,13 +102,15 @@ export async function queryGeminiVideoTask(
   input: { baseUrl: string; apiKey: string; taskId: string },
   fetcher: typeof fetch = fetch,
 ): Promise<GeminiVideoQueryResult> {
-  const res = await fetcher(
-    `${cleanBase(input.baseUrl)}/v1beta/interactions/${encodeURIComponent(input.taskId)}`,
+  const res = await fetchGeminiApi(
     {
+      baseUrl: input.baseUrl,
+      pathAndQuery: `/v1beta/interactions/${encodeURIComponent(input.taskId)}`,
+      apiKey: input.apiKey,
       method: "GET",
-      headers: { "x-goog-api-key": input.apiKey.trim() },
-      signal: AbortSignal.timeout(20_000),
+      timeoutMs: 20_000,
     },
+    fetcher,
   );
   if (!res.ok) {
     throw new Error(`Gemini 查单失败 (HTTP ${res.status})：${(await res.text().catch(() => "")).slice(0, 160)}`);

@@ -274,6 +274,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     importProjectBgm: async () => ({ ok: false, message: "请在桌面端导入本地背景音乐" }),
     generateProjectBgm: async ({ projectId }) => ({ ok: false, projectId, message: "请在桌面端配置 Gemini API Key 后生成 Lyria 候选配乐" }),
     applyProjectBgmCandidate: async ({ projectId }) => ({ ok: false, projectId, message: "请在桌面端采用候选配乐" }),
+    deleteProjectBgmCandidate: async ({ projectId }) => ({ ok: false, projectId, message: "请在桌面端移除候选配乐" }),
     clearProjectBgm: async (projectId) => {
       const ws = workspaces.get(projectId)!;
       ws.project.bgmAssetId = null;
@@ -468,7 +469,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     cancelEpisodeExport: async () => ({ ok: false, message: "浏览器预览模式无导出任务" }),
     onFlushBeforeClose: () => () => undefined,
     notifyFlushComplete: () => undefined,
-    getAppInfo: async () => ({ version: "1.5.3", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "1.5.4", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
     resolveDroppedFilePath: () => null,
   };

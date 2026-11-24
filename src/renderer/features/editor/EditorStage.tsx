@@ -429,6 +429,9 @@ export function EditorStage() {
                 workspace.episodes.find((e) => e.id === activeEpisodeId)?.title ?? "第 1 集"
               }
               bgmAsset={bgmAsset}
+              bgmCandidates={workspace.assets.filter(
+                (a) => a.kind === "music" && a.id !== workspace.project.bgmAssetId,
+              )}
               bgmVolumeDb={workspace.project.bgmVolumeDb}
               onImportBgm={(fp) => void importProjectBgm(fp)}
               onClearBgm={() => void clearProjectBgm()}

@@ -182,6 +182,51 @@ export async function fetchGeminiMediaBytes(
   throw new Error("Gemini 媒体下载重定向次数过多（超过 5 次）");
 }
 
+/**
+ * Issues a keyed Gemini API request (`x-goog-api-key`) with strict HTTPS + same-origin
+ * enforcement and manual redirect handling — never forwards API keys across origins
+ * or downgrades to HTTP on 3xx redirects.
+ */
+export async function fetchGeminiApi(
+  input: {
+    baseUrl: string;
+    pathAndQuery: string;
+    apiKey: string;
+    method?: "GET" | "POST";
+    body?: unknown;
+    timeoutMs?: number;
+  },
+  fetcher: typeof fetch = fetch,
+): Promise<Response> {
+  const base = new URL(cleanGeminiBase(input.baseUrl));
+  if (base.protocol !== "https:") {
+    throw new Error(`安全拦截：Gemini API 地址必须使用 HTTPS（当前为 ${base.protocol}）`);
+  }
+  let current = new URL(input.pathAndQuery, base);
+  for (let hop = 0; hop <= 3; hop += 1) {
+    if (current.protocol !== "https:" || current.origin !== base.origin) {
+      throw new Error(
+        `安全拦截：拒绝将 Gemini API Key 发送或重定向至非同源地址（${current.origin}）`,
+      );
+    }
+    const res = await fetcher(current.toString(), {
+      method: input.method ?? "GET",
+      headers: geminiHeaders(input.apiKey, input.body !== undefined),
+      body: input.body !== undefined ? JSON.stringify(input.body) : undefined,
+      redirect: "manual",
+      signal: AbortSignal.timeout(input.timeoutMs ?? 60_000),
+    });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get("location");
+      if (!location) throw new Error(`Gemini 接口重定向缺少 Location (HTTP ${res.status})`);
+      current = new URL(location, current);
+      continue;
+    }
+    return res;
+  }
+  throw new Error("Gemini 接口重定向次数过多（超过 3 次）");
+}
+
 async function resolveBlockBytes(
   block: InteractionContentBlock,
   baseUrl: string,
@@ -215,11 +260,10 @@ export async function testGeminiOfficialConnection(
     return { ok: false, providerId: input.providerId, latencyMs: 0, message: "请先填写 Gemini API Key。" };
   }
   try {
-    const res = await fetcher(`${cleanGeminiBase(input.baseUrl)}/v1beta/models?pageSize=5`, {
-      method: "GET",
-      headers: geminiHeaders(input.apiKey, false),
-      signal: AbortSignal.timeout(15_000),
-    });
+    const res = await fetchGeminiApi(
+      { baseUrl: input.baseUrl, pathAndQuery: "/v1beta/models?pageSize=5", apiKey: input.apiKey, timeoutMs: 15_000 },
+      fetcher,
+    );
     const latencyMs = Date.now() - started;
     if (!res.ok) {
       return {
@@ -253,11 +297,10 @@ export async function fetchGeminiOfficialModels(
     return { ok: false, models: [], message: "请先保存 Gemini API Key 后再拉取模型列表" };
   }
   try {
-    const res = await fetcher(`${cleanGeminiBase(input.baseUrl)}/v1beta/models?pageSize=100`, {
-      method: "GET",
-      headers: geminiHeaders(input.apiKey, false),
-      signal: AbortSignal.timeout(15_000),
-    });
+    const res = await fetchGeminiApi(
+      { baseUrl: input.baseUrl, pathAndQuery: "/v1beta/models?pageSize=100", apiKey: input.apiKey, timeoutMs: 15_000 },
+      fetcher,
+    );
     if (!res.ok) {
       return {
         ok: true,
@@ -284,17 +327,17 @@ export async function runGeminiDirectorChat(
   input: { baseUrl: string; apiKey: string; modelId: string; systemPrompt: string; userPrompt: string },
   fetcher: typeof fetch = fetch,
 ): Promise<string> {
-  const res = await fetcher(`${cleanGeminiBase(input.baseUrl)}/v1beta/interactions`, {
-    method: "POST",
-    headers: geminiHeaders(input.apiKey),
-    body: JSON.stringify({
-      model: input.modelId,
-      system_instruction: input.systemPrompt,
-      input: input.userPrompt,
-      stream: false,
-    }),
-    signal: AbortSignal.timeout(90_000),
-  });
+  const res = await fetchGeminiApi(
+    {
+      baseUrl: input.baseUrl,
+      pathAndQuery: "/v1beta/interactions",
+      apiKey: input.apiKey,
+      method: "POST",
+      body: { model: input.modelId, system_instruction: input.systemPrompt, input: input.userPrompt, stream: false },
+      timeoutMs: 90_000,
+    },
+    fetcher,
+  );
   if (!res.ok) throw new Error(diagnoseGeminiHttp(res.status, await res.text().catch(() => "")));
   const payload = (await res.json()) as InteractionPayload;
   const text = collectBlocks(payload)
@@ -321,26 +364,22 @@ export async function runGeminiImageGeneration(
 ): Promise<{ mediaPath: string; mediaSha256: string }> {
   const contentInput = input.referenceImageBase64
     ? [
-        {
-          type: "image",
-          data: input.referenceImageBase64,
-          mime_type: input.referenceImageMime || "image/jpeg",
-        },
+        { type: "image", data: input.referenceImageBase64, mime_type: input.referenceImageMime || "image/jpeg" },
         { type: "text", text: input.prompt },
       ]
     : input.prompt;
 
-  const res = await fetcher(`${cleanGeminiBase(input.baseUrl)}/v1beta/interactions`, {
-    method: "POST",
-    headers: geminiHeaders(input.apiKey),
-    body: JSON.stringify({
-      model: input.modelId,
-      input: contentInput,
-      response_format: { type: "image", aspect_ratio: input.aspectRatio },
-      stream: false,
-    }),
-    signal: AbortSignal.timeout(120_000),
-  });
+  const res = await fetchGeminiApi(
+    {
+      baseUrl: input.baseUrl,
+      pathAndQuery: "/v1beta/interactions",
+      apiKey: input.apiKey,
+      method: "POST",
+      body: { model: input.modelId, input: contentInput, response_format: { type: "image", aspect_ratio: input.aspectRatio }, stream: false },
+      timeoutMs: 120_000,
+    },
+    fetcher,
+  );
   if (!res.ok) throw new Error(diagnoseGeminiHttp(res.status, await res.text().catch(() => "")));
   const payload = (await res.json()) as InteractionPayload;
   const imgBlock = collectBlocks(payload).find(
@@ -357,18 +396,23 @@ export async function runGeminiSpeechSynthesis(
   input: { baseUrl: string; apiKey: string; modelId: string; text: string; voice: string; projectDir: string },
   fetcher: typeof fetch = fetch,
 ): Promise<{ mediaPath: string; mediaSha256: string }> {
-  const res = await fetcher(`${cleanGeminiBase(input.baseUrl)}/v1beta/interactions`, {
-    method: "POST",
-    headers: geminiHeaders(input.apiKey),
-    body: JSON.stringify({
-      model: input.modelId,
-      input: input.text,
-      response_format: { type: "audio" },
-      generation_config: { speech_config: [{ voice: mapGeminiVoice(input.voice) }] },
-      stream: false,
-    }),
-    signal: AbortSignal.timeout(90_000),
-  });
+  const res = await fetchGeminiApi(
+    {
+      baseUrl: input.baseUrl,
+      pathAndQuery: "/v1beta/interactions",
+      apiKey: input.apiKey,
+      method: "POST",
+      body: {
+        model: input.modelId,
+        input: input.text,
+        response_format: { type: "audio" },
+        generation_config: { speech_config: [{ voice: mapGeminiVoice(input.voice) }] },
+        stream: false,
+      },
+      timeoutMs: 90_000,
+    },
+    fetcher,
+  );
   if (!res.ok) throw new Error(diagnoseGeminiHttp(res.status, await res.text().catch(() => "")));
   const payload = (await res.json()) as InteractionPayload;
   const audioBlock = collectBlocks(payload).find(
@@ -387,17 +431,17 @@ export async function runGeminiMusicGeneration(
   input: { baseUrl: string; apiKey: string; modelId?: string; prompt: string; projectDir: string },
   fetcher: typeof fetch = fetch,
 ): Promise<{ mediaPath: string; mediaSha256: string }> {
-  const res = await fetcher(`${cleanGeminiBase(input.baseUrl)}/v1beta/interactions`, {
-    method: "POST",
-    headers: geminiHeaders(input.apiKey),
-    body: JSON.stringify({
-      model: input.modelId?.trim() || "lyria-3.5",
-      input: input.prompt,
-      response_format: { type: "audio" },
-      stream: false,
-    }),
-    signal: AbortSignal.timeout(120_000),
-  });
+  const res = await fetchGeminiApi(
+    {
+      baseUrl: input.baseUrl,
+      pathAndQuery: "/v1beta/interactions",
+      apiKey: input.apiKey,
+      method: "POST",
+      body: { model: input.modelId?.trim() || "lyria-3.5", input: input.prompt, response_format: { type: "audio" }, stream: false },
+      timeoutMs: 120_000,
+    },
+    fetcher,
+  );
   if (!res.ok) throw new Error(diagnoseGeminiHttp(res.status, await res.text().catch(() => "")));
   const payload = (await res.json()) as InteractionPayload;
   const audioBlock = collectBlocks(payload).find(
