@@ -234,16 +234,18 @@ jobs:
       - name: Verify Linux packages and compute SHA-256
         run: |
           set -euo pipefail
-          ls -lh release/AIVORA-Studio-*-linux-x64.AppImage release/AIVORA-Studio-*-linux-x64.deb
-          (cd release && sha256sum AIVORA-Studio-*-linux-x64.AppImage AIVORA-Studio-*-linux-x64.deb > SHA256SUMS-linux.txt)
+          ls -lh release/
+          ls -lh release/AIVORA-Studio-*.AppImage release/AIVORA-Studio-*.deb
+          (cd release && sha256sum AIVORA-Studio-*.AppImage AIVORA-Studio-*.deb > SHA256SUMS-linux.txt)
           cat release/SHA256SUMS-linux.txt
 
       - name: Install .deb and run Chinese+space FFmpeg/ZIP/SQLite headless smoke
         run: |
           set -euo pipefail
-          DEB_FILE=$(ls release/AIVORA-Studio-*-linux-x64.deb | head -n 1)
+          DEB_FILE=$(ls release/AIVORA-Studio-*.deb | head -n 1)
           sudo apt-get install -y "./$DEB_FILE"
-          BIN_PATH="/opt/AIVORA Studio/aivora-studio"
+          BIN_PATH=$(command -v aivora-studio || echo "/opt/AIVORA Studio/aivora-studio")
+          echo "Resolved Linux binary: $BIN_PATH"
           test -x "$BIN_PATH"
 
           WS_DIR="$RUNNER_TEMP/测试 作品 空间"
@@ -273,8 +275,8 @@ jobs:
         with:
           name: AIVORA-Studio-linux-x64
           path: |
-            release/AIVORA-Studio-*-linux-x64.AppImage
-            release/AIVORA-Studio-*-linux-x64.deb
+            release/AIVORA-Studio-*.AppImage
+            release/AIVORA-Studio-*.deb
             release/SHA256SUMS-linux.txt
           if-no-files-found: error
           retention-days: 30
@@ -305,8 +307,8 @@ jobs:
           TAG="$GITHUB_REF_NAME"
           cat dist-release/SHA256SUMS-win.txt dist-release/SHA256SUMS-linux.txt > dist-release/SHA256SUMS.txt
           WIN_NAME=$(basename dist-release/AIVORA-Studio-Setup-*.exe)
-          APPIMAGE_NAME=$(basename dist-release/AIVORA-Studio-*-linux-x64.AppImage)
-          DEB_NAME=$(basename dist-release/AIVORA-Studio-*-linux-x64.deb)
+          APPIMAGE_NAME=$(basename dist-release/AIVORA-Studio-*.AppImage)
+          DEB_NAME=$(basename dist-release/AIVORA-Studio-*.deb)
 
           cat > dist-release/RELEASE_NOTES.md <<EOF
           ## AIVORA Studio ${TAG} — Windows + Linux 双平台正式版

@@ -34,7 +34,7 @@ linux:
   category: AudioVideo
   icon: build/icon.png
   executableName: aivora-studio
-  artifactName: AIVORA-Studio-${version}-linux-${arch}.${ext}
+  artifactName: AIVORA-Studio-${version}-linux-x64.${ext}
   desktop:
     entry:
       Name: AIVORA Studio
