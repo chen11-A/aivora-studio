@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Check, Loader2, Music, Sparkles, Trash2, Upload, X } from "lucide-react";
+import { Check, Disc3, Loader2, Music, Sparkles, Trash2, Upload, X } from "lucide-react";
+import type { BuiltinBgmTrack } from "@shared/ipc-contract";
 import type { Asset } from "@shared/types/domain";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useStudioStore } from "../../store/useStudioStore";
@@ -18,6 +19,9 @@ export function BgmTrackControls(props: {
 }) {
   const defaultPrompt = `Cinematic instrumental background music for "${props.projectName}" (${props.episodeTitle}), mood: ${props.stylePreset}, subtle warm underscore suitable behind spoken dialogue, no vocals.`;
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [builtinTracks, setBuiltinTracks] = useState<BuiltinBgmTrack[]>([]);
+  const [loadingLibrary, setLoadingLibrary] = useState(false);
   const [promptDraft, setPromptDraft] = useState(defaultPrompt);
   const [generating, setGenerating] = useState(false);
   const [busyAssetId, setBusyAssetId] = useState<string | null>(null);
@@ -25,8 +29,40 @@ export function BgmTrackControls(props: {
 
   useEffect(() => {
     setConfirmOpen(false);
+    setLibraryOpen(false);
     setPromptDraft(defaultPrompt);
   }, [props.projectId, defaultPrompt]);
+
+  async function handleToggleLibrary() {
+    const next = !libraryOpen;
+    setLibraryOpen(next);
+    if (next && builtinTracks.length === 0) {
+      setLoadingLibrary(true);
+      try {
+        setBuiltinTracks(await client.listBuiltinBgm());
+      } finally {
+        setLoadingLibrary(false);
+      }
+    }
+  }
+
+  async function handleApplyBuiltin(trackId: string) {
+    if (busyAssetId) return;
+    const targetProjectId = props.projectId;
+    setBusyAssetId(trackId);
+    try {
+      const res = await client.applyBuiltinBgm({ projectId: targetProjectId, trackId });
+      if (useStudioStore.getState().workspace?.project.id !== targetProjectId) return;
+      if (res.ok && res.workspace) {
+        useStudioStore.setState({ workspace: res.workspace, toast: res.message });
+        setLibraryOpen(false);
+      } else {
+        useStudioStore.setState({ toast: res.message });
+      }
+    } finally {
+      setBusyAssetId(null);
+    }
+  }
 
   async function handleConfirmGenerate() {
     if (generating) return;
@@ -120,9 +156,19 @@ export function BgmTrackControls(props: {
 
       <div className="flex items-center justify-between gap-2 rounded-md bg-[#0f1218] border border-[#252b37] px-2.5 py-1.5 text-[11px]">
         <span className="text-[#cbd5e1] truncate">
-          {props.bgmAsset ? props.bgmAsset.name : "未导入（支持拖入音频或 AI 生成候选）"}
+          {props.bgmAsset ? props.bgmAsset.name : "未导入（支持内置 CC0 配乐 / 拖入 / AI 配乐）"}
         </span>
         <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => void handleToggleLibrary()}
+            data-testid="toggle-builtin-bgm"
+            className="text-[#fbbf24] hover:underline flex items-center gap-0.5 cursor-pointer"
+            title="打开内置精选 CC0 无版权配乐库，直接试听并一键选用"
+          >
+            <Disc3 className="w-3 h-3" />
+            <span>内置配乐</span>
+          </button>
           <button
             type="button"
             disabled={generating}
@@ -157,6 +203,64 @@ export function BgmTrackControls(props: {
           )}
         </div>
       </div>
+
+      {libraryOpen && (
+        <div
+          data-testid="builtin-bgm-drawer"
+          className="rounded-md bg-[#12161f] border border-[#f59e0b]/35 p-2 flex flex-col gap-1.5 text-[11px] max-h-[220px] overflow-y-auto"
+        >
+          <div className="flex items-center justify-between text-[#fde68a] font-medium">
+            <span>内置精选配乐库（CC0-1.0 无版权 · 已做峰值安全限制）</span>
+            <button
+              type="button"
+              onClick={() => setLibraryOpen(false)}
+              className="text-[#94a3b8] hover:text-[#f3f5f9] cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          {loadingLibrary ? (
+            <div className="text-[#94a3b8] py-2 flex items-center gap-1.5">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              <span>正在读取内置配乐清单…</span>
+            </div>
+          ) : builtinTracks.length === 0 ? (
+            <div className="text-[#94a3b8] py-1">当前预览环境未加载本地音频包，请在桌面端试听使用。</div>
+          ) : (
+            builtinTracks.map((track) => {
+              const busy = busyAssetId === track.id;
+              return (
+                <div
+                  key={track.id}
+                  className="rounded bg-[#0f1218] border border-[#252b37] p-2 flex flex-col gap-1"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[#f3f5f9] font-medium truncate">
+                      {track.name}
+                      <span className="ml-1.5 px-1.5 py-0.5 rounded bg-[#f59e0b]/15 text-[#fbbf24] text-[10px]">
+                        {track.mood}
+                      </span>
+                      <span className="ml-1 text-[10px] text-[#768196]">
+                        {Math.round(track.durationSec)}s · {track.license}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void handleApplyBuiltin(track.id)}
+                      className="h-6 px-2 rounded bg-[#3b82f6] hover:bg-[#2563eb] text-white text-[10px] font-medium inline-flex items-center gap-1 shrink-0 cursor-pointer disabled:opacity-50"
+                    >
+                      {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                      <span>采用</span>
+                    </button>
+                  </div>
+                  <audio controls preload="none" src={track.previewUrl} className="w-full h-7" />
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
 
       {confirmOpen && (
         <div className="rounded-md bg-[#121722] border border-[#3b82f6]/40 p-2 flex flex-col gap-1.5 text-[11px]">

@@ -115,6 +115,7 @@ export async function preflightEpisodeExport(input: {
     }
 
     const speech = resolveSelectedSpeechTake(shot, input.workspace.takes);
+    let speechDur: number | null = null;
     if (speech) {
       const speechStatus = evaluateShotSpeechStatus(shot, input.workspace.takes, input.workspace.assets);
       if (speechStatus.state === "stale") {
@@ -130,10 +131,44 @@ export async function preflightEpisodeExport(input: {
           const info = await probeFile(ffprobePath, speechAbs);
           if (!info.streams?.some((s) => s.codec_type === "audio")) {
             blockingIssues.push(`镜头「${shot.title}」的配音文件不含有效音频流，可能已损坏。`);
+          } else {
+            speechDur = resolveEffectiveAudioDurationSec(info);
+            if (speechDur !== null && speechDur > win.effectiveDurationSec + 0.35) {
+              warnings.push(
+                `「${shot.title}」对白配音实测 ${speechDur.toFixed(1)}s，超出镜头时长 ${win.effectiveDurationSec}s，导出末尾可能被裁断，建议拉长该镜时长。`,
+              );
+            }
           }
         } catch {
           blockingIssues.push(`镜头「${shot.title}」的配音文件无法解码，请重新导入。`);
         }
+      }
+    } else if (shot.dialogue.trim()) {
+      const dialogueUnits = [...shot.dialogue.trim()].reduce(
+        (sum, ch) => sum + ((ch.codePointAt(0) ?? 0) < 128 ? 0.5 : 1),
+        0,
+      );
+      const estimatedSpeakSec = dialogueUnits / 4.8;
+      if (estimatedSpeakSec > win.effectiveDurationSec + 0.8) {
+        warnings.push(
+          `「${shot.title}」对白约 ${Math.ceil(dialogueUnits)} 字（预计需 ${estimatedSpeakSec.toFixed(1)}s），可能放不下当前 ${win.effectiveDurationSec}s 镜头时长，建议适当拉长或精简台词。`,
+        );
+      }
+    }
+
+    const subtitleText = shot.subtitle.trim();
+    if (subtitleText) {
+      const maxLineUnits = input.workspace.project.aspectRatio === "9:16" ? 16 : 22;
+      const lineUnits = subtitleText
+        .split(/\r?\n/)
+        .map((line) =>
+          [...line].reduce((sum, ch) => sum + ((ch.codePointAt(0) ?? 0) < 128 ? 0.5 : 1), 0),
+        );
+      const longest = Math.max(...lineUnits);
+      if (longest > maxLineUnits) {
+        warnings.push(
+          `「${shot.title}」字幕单行约 ${Math.ceil(longest)} 字（超过 ${maxLineUnits} 字建议上限），容易折行遮挡画面，建议手动换行或精简。`,
+        );
       }
     }
   }

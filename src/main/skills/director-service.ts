@@ -20,6 +20,7 @@ import {
   saveDirectorUndoSnapshot,
   type PersistedDirectorUndoSnapshot,
 } from "../storage/project-maintenance";
+import { finalizeDirectorProposal } from "./director-grounding";
 import {
   buildDirectorUserPrompt,
   buildOfflineDirectorProposal,
@@ -133,11 +134,13 @@ export class DirectorService {
         providerSummary = `${creds.view.name} · ${binding.modelId}`;
       }
 
-      const proposal = parseDirectorProposalJson(rawText, providerSummary);
+      const rawProposal = parseDirectorProposalJson(rawText, providerSummary);
+      const proposal = finalizeDirectorProposal(rawProposal, ep.scriptText);
+      const shotCount = proposal.scenes.reduce((n, s) => n + s.shots.length, 0);
       return {
         ok: true,
         proposal,
-        message: `导演拆镜提案已就绪（${proposal.scenes.length} 场 · ${proposal.scenes.reduce((n, s) => n + s.shots.length, 0)} 镜）`,
+        message: `导演拆镜提案已就绪（${proposal.scenes.length} 场 · ${shotCount} 镜 · ${proposal.grounding?.summary ?? ""}）`,
       };
     } catch (err) {
       return {

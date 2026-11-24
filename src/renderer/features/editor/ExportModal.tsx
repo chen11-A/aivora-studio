@@ -25,10 +25,13 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
   const lastExportResult = useStudioStore((s) => s.lastExportResult);
   const exportCurrentEpisode = useStudioStore((s) => s.exportCurrentEpisode);
   const revealPath = useStudioStore((s) => s.revealPath);
+  const selectShot = useStudioStore((s) => s.selectShot);
+  const setStage = useStudioStore((s) => s.setStage);
 
   const [preflight, setPreflight] = useState<ExportPreflightReport | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [canceling, setCanceling] = useState(false);
+  const [runQc, setRunQc] = useState(true);
 
   const episodeId = activeEpisodeId ?? workspace?.episodes[0]?.id ?? null;
 
@@ -65,10 +68,17 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
   const preflightBlocking = preflight && !preflight.ok ? preflight.blockingIssues : [];
   const preflightWarnings = preflight?.warnings ?? [];
   const blocked = !readiness.canExport || !ffReady || preflightBlocking.length > 0;
+  const qcReport = lastExportResult?.qcReport;
 
   async function handleCancelExport() {
     setCanceling(true);
     await getDesktopClient().cancelEpisodeExport();
+  }
+
+  function handleLocateShot(shotId: string) {
+    selectShot(shotId);
+    setOpen(false);
+    void setStage("storyboard");
   }
 
   return (
@@ -77,7 +87,7 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
         role="dialog"
         aria-label="导出 MP4 成片"
         data-testid="export-modal"
-        className="w-full max-w-[500px] rounded-xl bg-[#14171e] border border-[#343d4e] shadow-2xl p-5 flex flex-col gap-4 max-h-[86vh] overflow-y-auto"
+        className="w-full max-w-[540px] rounded-xl bg-[#14171e] border border-[#343d4e] shadow-2xl p-5 flex flex-col gap-4 max-h-[86vh] overflow-y-auto"
       >
         <div className="flex items-center justify-between">
           <h2 className="text-[15px] font-semibold text-[#f3f5f9]">导出 MP4 成片</h2>
@@ -148,9 +158,9 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
           <div className="rounded-lg bg-[#f59e0b]/10 border border-[#f59e0b]/35 p-3 text-[11px] text-[#fde68a] flex flex-col gap-1">
             <div className="font-medium flex items-center gap-1.5">
               <AlertTriangle className="w-3.5 h-3.5 text-[#fbbf24] shrink-0" />
-              <span>导出前提醒（可继续导出，软件会自动安全处理）</span>
+              <span>导出前提醒（可继续导出，建议按需回分镜页微调）</span>
             </div>
-            {preflightWarnings.slice(0, 4).map((warn, i) => (
+            {preflightWarnings.slice(0, 5).map((warn, i) => (
               <div key={i} className="pl-5 opacity-90">
                 • {warn}
               </div>
@@ -214,8 +224,57 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
                 </button>
               </div>
             )}
+
+            {qcReport && (
+              <div
+                data-testid="export-qc-report"
+                className={`mt-1 rounded-md p-2.5 border text-[11px] flex flex-col gap-1.5 ${
+                  qcReport.ok
+                    ? "bg-[#064e3b]/40 border-[#10b981]/35 text-[#a7f3d0]"
+                    : "bg-[#1c1917]/70 border-[#f59e0b]/40 text-[#fde68a]"
+                }`}
+              >
+                <div className="font-medium">{qcReport.summary}</div>
+                {qcReport.issues.slice(0, 6).map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded bg-[#0f1218]/70 border border-[#252b37] p-2 flex flex-col gap-1 text-[#e2e8f0]"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-[#fcd34d]">
+                        {item.timeLabel}
+                        {item.shotIndex ? ` · 镜 ${String(item.shotIndex).padStart(2, "0")}` : ""}
+                        {item.shotTitle ? `（${item.shotTitle}）` : ""}
+                      </span>
+                      {item.shotId && (
+                        <button
+                          type="button"
+                          onClick={() => handleLocateShot(item.shotId!)}
+                          className="text-[#60a5fa] hover:underline shrink-0 cursor-pointer"
+                        >
+                          定位该镜
+                        </button>
+                      )}
+                    </div>
+                    <div>{item.message}</div>
+                    <div className="text-[#94a3b8]">怎么修：{item.suggestion}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
+
+        <label className="flex items-center gap-2 text-[11px] text-[#cbd5e1] cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={runQc}
+            disabled={exporting}
+            onChange={(e) => setRunQc(e.target.checked)}
+            className="accent-[#3b82f6]"
+          />
+          <span>导出后自动成片质检（黑屏 / 静帧 / 无声 / -16 LUFS 破音，不阻断保存）</span>
+        </label>
 
         <div className="flex items-start gap-2 text-[11px] text-[#768196]">
           <ShieldCheck className="w-4 h-4 text-[#10b981] shrink-0 mt-0.5" />
@@ -249,7 +308,7 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
             type="button"
             disabled={blocked || exporting || preflightLoading}
             data-testid="confirm-export-mp4"
-            onClick={() => void exportCurrentEpisode()}
+            onClick={() => void exportCurrentEpisode({ runQc })}
             className="btn-primary"
           >
             <Download className="w-3.5 h-3.5" />

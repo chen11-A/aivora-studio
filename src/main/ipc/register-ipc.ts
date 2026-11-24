@@ -255,7 +255,7 @@ export function registerIpcHandlers(deps: {
 
   handle(
     IPC_CHANNELS.EXPORT_EPISODE_VIDEO,
-    async (input: { projectId: string; episodeId: string }) => {
+    async (input: { projectId: string; episodeId: string; runQc?: boolean }) => {
       const win = deps.getWindow();
       if (!win) return { ok: false, message: "窗口不可用" };
       if (deps.exportGuard.isExporting()) {
@@ -290,6 +290,7 @@ export function registerIpcHandlers(deps: {
           projectDir,
           episodeId: input.episodeId,
           outputPath: chosen.filePath!,
+          runQc: input.runQc,
           onProgress: emitProgress,
           signal,
         }),

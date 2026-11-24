@@ -84,6 +84,23 @@ export function DirectorProposalModal() {
               识别到角色/场景：{proposal.assets.map((a) => a.name).join("、")}（采纳后自动归入资产库）
             </div>
           )}
+          {proposal.grounding && (
+            <div
+              data-testid="director-grounding-summary"
+              className={`mt-1 rounded-md px-2.5 py-1.5 border flex flex-col gap-1 ${
+                proposal.grounding.ok
+                  ? "bg-[#10b981]/10 border-[#10b981]/35 text-[#6ee7b7]"
+                  : "bg-[#f59e0b]/10 border-[#f59e0b]/35 text-[#fde68a]"
+              }`}
+            >
+              <div className="font-medium">{proposal.grounding.summary}</div>
+              {proposal.grounding.warnings.slice(0, 3).map((warn, idx) => (
+                <div key={idx} className="text-[11px] opacity-90">
+                  • {warn}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="panel-scroll flex-1 p-5 flex flex-col gap-4">

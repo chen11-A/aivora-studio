@@ -43,6 +43,8 @@ const api: AivoraDesktopApi = {
   },
   importProjectBgm: (projectId, sourceFilePath) =>
     ipcRenderer.invoke(IPC_CHANNELS.IMPORT_PROJECT_BGM, projectId, sourceFilePath),
+  listBuiltinBgm: () => ipcRenderer.invoke(IPC_CHANNELS.LIST_BUILTIN_BGM),
+  applyBuiltinBgm: (input) => ipcRenderer.invoke(IPC_CHANNELS.APPLY_BUILTIN_BGM, input),
   generateProjectBgm: (input) => ipcRenderer.invoke(IPC_CHANNELS.GENERATE_PROJECT_BGM, input),
   applyProjectBgmCandidate: (input) =>
     ipcRenderer.invoke(IPC_CHANNELS.APPLY_PROJECT_BGM_CANDIDATE, input),

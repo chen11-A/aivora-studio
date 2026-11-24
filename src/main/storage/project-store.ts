@@ -443,10 +443,14 @@ export class ProjectStore {
     return this.openProject(input.projectId);
   }
 
-  importProjectBgmFromPath(projectId: string, sourceFilePath: string): ProjectWorkspace {
+  importProjectBgmFromPath(
+    projectId: string,
+    sourceFilePath: string,
+    meta?: { displayName?: string; description?: string },
+  ): ProjectWorkspace {
     const dir = this.resolveProjectDir(projectId);
     if (!dir) throw new Error("作品不存在");
-    importProjectBgmInDb(this.getDb(projectId), dir, { projectId, sourceFilePath });
+    importProjectBgmInDb(this.getDb(projectId), dir, { projectId, sourceFilePath, ...meta });
     return this.openProject(projectId);
   }
   registerProjectBgmCandidate(input: { projectId: string; name: string; mediaPath: string; mediaSha256: string; description?: string }): { assetId: string; workspace: ProjectWorkspace } {

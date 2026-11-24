@@ -311,7 +311,7 @@ export function importShotTakeInDb(
 export function importProjectBgmInDb(
   db: SqliteDriver,
   projectDir: string,
-  input: { projectId: string; sourceFilePath: string },
+  input: { projectId: string; sourceFilePath: string; displayName?: string; description?: string },
 ): void {
   const copied = copyContentAddressedAsset(projectDir, input.sourceFilePath, ALLOWED_AUDIO_EXTS);
   const now = new Date().toISOString();
@@ -319,10 +319,11 @@ export function importProjectBgmInDb(
   db.transaction(() => {
     db.run(
       `INSERT INTO assets (id, project_id, kind, name, description, media_path, media_sha256, locked_ref, voice_id, updated_at)
-       VALUES (?, ?, 'music', ?, '项目背景音乐', ?, ?, 0, NULL, ?)`,
+       VALUES (?, ?, 'music', ?, ?, ?, ?, 0, NULL, ?)`,
       assetId,
       input.projectId,
-      copied.baseName || "背景音乐",
+      input.displayName?.trim() || copied.baseName || "背景音乐",
+      input.description?.trim() || "项目背景音乐",
       copied.mediaPath,
       copied.mediaSha256,
       now,

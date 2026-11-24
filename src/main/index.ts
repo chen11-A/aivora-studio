@@ -7,6 +7,7 @@ import { createSecretVault } from "./auth/secret-vault";
 import { registerIpcHandlers } from "./ipc/register-ipc";
 import { BatchJobScheduler } from "./jobs/batch-scheduler";
 import { GenerationJobQueue } from "./jobs/job-queue";
+import { resolveConfinedBuiltinAudioPath } from "./media/builtin-audio";
 import { ExportWriteGuard } from "./media/export-guard";
 import { exportEpisodeToMp4 } from "./media/export-pipeline";
 import { probeFfmpegStatus, terminateAllMediaChildren } from "./media/ffmpeg-locator";
@@ -328,7 +329,10 @@ app.whenReady().then(() => {
 
   protocol.handle(
     "aivora-media",
-    createMediaProtocolHandler((projectId) => projects?.resolveProjectDir(projectId) ?? null),
+    createMediaProtocolHandler(
+      (projectId) => projects?.resolveProjectDir(projectId) ?? null,
+      (relPath) => resolveConfinedBuiltinAudioPath(relPath),
+    ),
   );
 
   registerIpcHandlers({

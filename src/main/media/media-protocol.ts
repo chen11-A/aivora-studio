@@ -14,6 +14,7 @@ const MIME_MAP: Record<string, string> = {
   ".wav": "audio/wav",
   ".m4a": "audio/mp4",
   ".aac": "audio/aac",
+  ".ogg": "audio/ogg",
 };
 
 export type ParsedRange = {
@@ -96,6 +97,7 @@ export function resolveConfinedMediaPath(projectDir: string, relPath: string): s
  */
 export function createMediaProtocolHandler(
   resolveProjectDir: (projectId: string) => string | null,
+  resolveBuiltinFile?: (relPath: string) => string | null,
 ): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -112,11 +114,17 @@ export function createMediaProtocolHandler(
     }
     const projectId = decodeURIComponent(url.hostname);
     const relPath = decodeURIComponent(url.pathname).replace(/^\/+/, "");
-    const projectDir = resolveProjectDir(projectId);
-    if (!projectDir) return new Response("Not Found", { status: 404 });
 
-    const filePath = resolveConfinedMediaPath(projectDir, relPath);
-    if (!filePath) return new Response("Forbidden", { status: 403 });
+    let filePath: string | null = null;
+    if (projectId === "__builtin__") {
+      filePath = resolveBuiltinFile ? resolveBuiltinFile(relPath) : null;
+      if (!filePath) return new Response("Forbidden", { status: 403 });
+    } else {
+      const projectDir = resolveProjectDir(projectId);
+      if (!projectDir) return new Response("Not Found", { status: 404 });
+      filePath = resolveConfinedMediaPath(projectDir, relPath);
+      if (!filePath) return new Response("Forbidden", { status: 403 });
+    }
 
     const stat = lstatSync(filePath);
     const mime = MIME_MAP[extname(filePath).toLowerCase()] ?? "application/octet-stream";

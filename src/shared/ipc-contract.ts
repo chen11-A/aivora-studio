@@ -72,6 +72,54 @@ export type ExportPreflightReport = {
   freeSpaceMb: number | null;
 };
 
+export type ExportQcIssueType =
+  | "black"
+  | "freeze"
+  | "silence"
+  | "no_audio"
+  | "loudness"
+  | "true_peak";
+
+export type ExportQcIssue = {
+  id: string;
+  severity: "warn" | "error";
+  type: ExportQcIssueType;
+  timeSec: number;
+  endSec: number;
+  timeLabel: string;
+  shotId: string | null;
+  shotIndex: number | null;
+  shotTitle: string | null;
+  message: string;
+  suggestion: string;
+};
+
+export type ExportQcReport = {
+  ok: boolean;
+  skipped?: boolean;
+  durationSec: number;
+  integratedLufs: number | null;
+  truePeakDbtp: number | null;
+  issues: ExportQcIssue[];
+  summary: string;
+};
+
+export type BuiltinBgmTrack = {
+  id: string;
+  name: string;
+  mood: string;
+  scene: string;
+  durationSec: number;
+  loudnessLufs: number;
+  truePeakDbtp: number;
+  license: string;
+  author: string;
+  sourceUrl: string;
+  sha256: string;
+  file: string;
+  previewUrl: string;
+};
+
 export type ExportEpisodeResult = {
   ok: boolean;
   canceled?: boolean;
@@ -80,6 +128,7 @@ export type ExportEpisodeResult = {
   width?: number;
   height?: number;
   loudnessApplied?: boolean;
+  qcReport?: ExportQcReport;
   message: string;
 };
 
@@ -179,6 +228,11 @@ export type AivoraDesktopApi = {
     projectId: string,
     sourceFilePath?: string,
   ) => Promise<{ ok: boolean; workspace?: ProjectWorkspace; message: string }>;
+  listBuiltinBgm: () => Promise<BuiltinBgmTrack[]>;
+  applyBuiltinBgm: (input: {
+    projectId: string;
+    trackId: string;
+  }) => Promise<{ ok: boolean; projectId: string; workspace?: ProjectWorkspace; message: string }>;
   generateProjectBgm: (input: {
     projectId: string;
     prompt: string;
@@ -208,6 +262,7 @@ export type AivoraDesktopApi = {
   exportEpisodeVideo: (input: {
     projectId: string;
     episodeId: string;
+    runQc?: boolean;
   }) => Promise<ExportEpisodeResult>;
   cancelEpisodeExport: () => Promise<{ ok: boolean; message: string }>;
   onExportProgress: (listener: (event: ExportProgressEvent) => void) => () => void;
@@ -321,6 +376,8 @@ export const IPC_CHANNELS = {
   CONFIGURE_DOWNLOAD_WATCH: "aivora:external:watch-configure",
   EXTERNAL_DOWNLOAD_EVENT: "aivora:external:download-detected",
   IMPORT_PROJECT_BGM: "aivora:bgm:import",
+  LIST_BUILTIN_BGM: "aivora:bgm:list-builtin",
+  APPLY_BUILTIN_BGM: "aivora:bgm:apply-builtin",
   GENERATE_PROJECT_BGM: "aivora:bgm:generate",
   APPLY_PROJECT_BGM_CANDIDATE: "aivora:bgm:apply-candidate",
   DELETE_PROJECT_BGM_CANDIDATE: "aivora:bgm:delete-candidate",

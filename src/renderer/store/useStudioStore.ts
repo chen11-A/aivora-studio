@@ -77,7 +77,7 @@ interface StudioStore {
   importShotTake: (shotId: string, kind: TakeKind, sourceFilePath?: string) => Promise<void>;
   importProjectBgm: (sourceFilePath?: string) => Promise<void>;
   clearProjectBgm: () => Promise<void>;
-  exportCurrentEpisode: () => Promise<void>;
+  exportCurrentEpisode: (options?: { runQc?: boolean }) => Promise<void>;
   revealPath: (filePath: string) => Promise<void>;
   updateProjectSettings: (patch: Omit<UpdateProjectSettingsInput, "projectId">) => Promise<void>;
   exportArchive: () => Promise<void>;
@@ -421,14 +421,14 @@ export const useStudioStore = create<StudioStore>((set, get) => {
       flashToast("已移除背景音乐");
     },
 
-    async exportCurrentEpisode() {
+    async exportCurrentEpisode(options) {
       const ws = get().workspace;
       const epId = get().activeEpisodeId ?? ws?.episodes[0]?.id;
       if (!ws || !epId || get().exporting || !(await guardFlush())) return;
       set({ exporting: true, lastExportResult: null, exportProgress: { percent: 2, stage: "准备导出", detail: "请选择 MP4 成片保存路径…" } });
       const unsub = client.onExportProgress((ev) => set({ exportProgress: ev }));
       try {
-        const res = await client.exportEpisodeVideo({ projectId: ws.project.id, episodeId: epId });
+        const res = await client.exportEpisodeVideo({ projectId: ws.project.id, episodeId: epId, runQc: options?.runQc });
         set({ lastExportResult: res, exporting: false });
         if (!res.canceled) flashToast(res.message);
       } catch (err) {

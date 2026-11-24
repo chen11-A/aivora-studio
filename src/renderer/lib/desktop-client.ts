@@ -272,6 +272,8 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     configureDownloadWatch: async (input) => ({ enabled: input.enabled, folderDir: input.folderDir ?? "Downloads", defaultDir: "Downloads" }),
     onExternalDownloadDetected: () => () => undefined,
     importProjectBgm: async () => ({ ok: false, message: "请在桌面端导入本地背景音乐" }),
+    listBuiltinBgm: async () => [],
+    applyBuiltinBgm: async ({ projectId }) => ({ ok: false, projectId, message: "请在桌面端试听并采用内置无版权配乐" }),
     generateProjectBgm: async ({ projectId }) => ({ ok: false, projectId, message: "请在桌面端配置 Gemini API Key 后生成 Lyria 候选配乐" }),
     applyProjectBgmCandidate: async ({ projectId }) => ({ ok: false, projectId, message: "请在桌面端采用候选配乐" }),
     deleteProjectBgmCandidate: async ({ projectId }) => ({ ok: false, projectId, message: "请在桌面端移除候选配乐" }),
@@ -469,7 +471,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     cancelEpisodeExport: async () => ({ ok: false, message: "浏览器预览模式无导出任务" }),
     onFlushBeforeClose: () => () => undefined,
     notifyFlushComplete: () => undefined,
-    getAppInfo: async () => ({ version: "1.5.4", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "1.6.0", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
     resolveDroppedFilePath: () => null,
   };

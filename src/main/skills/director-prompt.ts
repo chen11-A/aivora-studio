@@ -1,5 +1,6 @@
 import type { AspectRatio } from "../../shared/types/domain";
 import { DirectorProposalSchema, type DirectorProposal } from "../../shared/types/jobs";
+import { extractScriptDialogueLines, finalizeDirectorProposal } from "./director-grounding";
 
 /**
  * Trimmed & faithful port of aijian-studio/packages/aivora-prompts/roles/director.json
@@ -11,8 +12,8 @@ export const DIRECTOR_SYSTEM_PROMPT = `你是 AIVORA Studio 的导演：把剧�
 1. 每场第一镜优先使用远景或全景交代环境；人物互动用中景；情绪高点、关键道具和微表情用近景或特写。
 2. 一镜只做一件事、只用一种运镜（景别仅限：远景/全景/中景/近景/特写；运镜仅限：固定/缓推/缓拉/横摇/跟拍/微摇）。
 3. 每镜时长 durationSec 为 1 到 15 的整数，按台词每秒约 4 字留出呼吸空间，不要所有镜头都相同长度。
-4. 大约每 40–60 字拆 1 个镜头，单场不超过 16 个镜头。
-5. 一镜最多一句台词：有台词时填 dialogue、speaker、subtitle；无台词时三项留空字符串 ""。
+4. 大约每 40–60 字拆 1 个镜头，单场尽量控制在 16 个镜头以内；如情节较长请合理合并相邻动作镜头，绝不允许截掉原文结尾或漏掉最后一句台词。
+5. 一镜最多一句台词：有台词时填 dialogue、speaker、subtitle，台词必须忠实来自原文；无台词时三项留空字符串 ""；人物动作按原文挂到对应镜头。
 6. sourceExcerpt 摘录本镜对应的剧本原文短句（10~35 字），不得编造原文没有的情节。
 7. visualPrompt 写清晰具体的画面构图、动作、光线与神态，不要写统一画风词。
 
@@ -77,9 +78,14 @@ export function parseDirectorProposalJson(
   });
 }
 
+function isSceneHeading(line: string): boolean {
+  return /^第[一二三四五六七八九十百0-9]+[场幕](?:[\s\u3000·:：-].*)?$/.test(line.trim());
+}
+
 /**
  * Deterministic local heuristic proposal builder used ONLY when the user has not
  * configured an LLM yet and explicitly previews split structure offline (clearly labeled).
+ * Preserves ALL paragraphs through the ending and delegates >16-shot merging to `finalizeDirectorProposal`.
  */
 export function buildOfflineDirectorProposal(
   episodeTitle: string,
@@ -92,27 +98,56 @@ export function buildOfflineDirectorProposal(
   const chunks = paragraphs.length > 0 ? paragraphs : [`${episodeTitle} 开场画面`];
   const discoveredSpeakers = new Set<string>();
 
-  const shots = chunks.slice(0, 12).map((line, idx) => {
-    const dlgMatch = /^([^：:（(\s]{1,8})(?:（[^）]*）)?[：:]\s*(.+)$/.exec(line);
-    const speaker = dlgMatch?.[1] ?? "";
-    const dialogue = dlgMatch?.[2] ?? "";
-    if (speaker) discoveredSpeakers.add(speaker);
-    const durationSec = dialogue
-      ? Math.max(3, Math.min(10, Math.ceil(dialogue.length / 4) + 1))
-      : idx === 0
-        ? 4
-        : 3;
+  type RawSceneBucket = { title: string; lines: string[] };
+  const buckets: RawSceneBucket[] = [];
+  for (const line of chunks) {
+    if (isSceneHeading(line)) {
+      buckets.push({ title: line.replace(/[\s\u3000]+/g, " · "), lines: [] });
+    } else {
+      if (buckets.length === 0) {
+        buckets.push({ title: `第一场 · ${episodeTitle}`, lines: [] });
+      }
+      buckets[buckets.length - 1]!.lines.push(line);
+    }
+  }
+  const nonEmptyBuckets = buckets.filter((b) => b.lines.length > 0);
+  const finalBuckets =
+    nonEmptyBuckets.length > 0
+      ? nonEmptyBuckets
+      : [{ title: `第一场 · ${episodeTitle}`, lines: [`${episodeTitle} 开场画面`] }];
+
+  let globalIdx = 0;
+  const scenes = finalBuckets.map((bucket) => {
+    const shots = bucket.lines.map((line, localIdx) => {
+      globalIdx += 1;
+      const spMatch = /^([^：:（(\s]{1,8})(?:（[^）]*）)?[：:]\s*(.+)$/.exec(line);
+      const quoted = extractScriptDialogueLines(line);
+      const speaker = spMatch?.[1] ?? "";
+      const dialogue = spMatch?.[2] ?? (quoted.length > 0 ? quoted.join(" ") : "");
+      if (speaker) discoveredSpeakers.add(speaker);
+      const durationSec = dialogue
+        ? Math.max(3, Math.min(12, Math.ceil(dialogue.length / 4) + 1))
+        : localIdx === 0
+          ? 4
+          : 3;
+      return {
+        title: `镜 ${String(globalIdx).padStart(2, "0")} · ${(dialogue || line).slice(0, 10)}`,
+        scale:
+          localIdx === 0 ? ("远景" as const) : dialogue ? ("近景" as const) : ("中景" as const),
+        cameraMove: localIdx === 0 ? ("缓推" as const) : ("固定" as const),
+        durationSec,
+        visualPrompt: line,
+        dialogue,
+        speaker,
+        subtitle: dialogue || (localIdx === 0 ? line.slice(0, 28) : ""),
+        sourceExcerpt: line.slice(0, 48),
+        characters: speaker ? [speaker] : [],
+      };
+    });
     return {
-      title: `镜 ${String(idx + 1).padStart(2, "0")} · ${(dialogue || line).slice(0, 10)}`,
-      scale: idx === 0 ? ("远景" as const) : dialogue ? ("近景" as const) : ("中景" as const),
-      cameraMove: idx === 0 ? ("缓推" as const) : ("固定" as const),
-      durationSec,
-      visualPrompt: line,
-      dialogue,
-      speaker,
-      subtitle: dialogue || (idx === 0 ? line.slice(0, 28) : ""),
-      sourceExcerpt: line.slice(0, 42),
-      characters: speaker ? [speaker] : [],
+      title: bucket.title,
+      summary: `按原文 ${bucket.lines.length} 段生成 ${shots.length} 个镜头提案`,
+      shots,
     };
   });
 
@@ -122,16 +157,11 @@ export function buildOfflineDirectorProposal(
     description: `从《${episodeTitle}》提取的角色`,
   }));
 
-  return DirectorProposalSchema.parse({
+  const rawProposal = DirectorProposalSchema.parse({
     sourceMode: "offline_preview",
-    providerSummary: "本地离线结构预览（未配置剧本模型，可在模型中心接入 ChatGPT/Grok/自定义 API）",
+    providerSummary: "本地离线结构预览（未配置剧本模型，可在模型中心接入 Gemini/ChatGPT/Grok/自定义 API）",
     assets,
-    scenes: [
-      {
-        title: `第一场 · ${episodeTitle}`,
-        summary: `按原文 ${chunks.length} 段自动切分为 ${shots.length} 个镜头提案`,
-        shots,
-      },
-    ],
+    scenes,
   });
+  return finalizeDirectorProposal(rawProposal, scriptText);
 }

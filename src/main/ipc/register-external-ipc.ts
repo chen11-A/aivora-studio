@@ -3,6 +3,7 @@ import path from "node:path";
 import { IPC_CHANNELS } from "../../shared/ipc-contract";
 import type { ExternalDropCommitInput } from "../../shared/types/external-pack";
 import type { OAuthProviderId } from "../../shared/types/provider";
+import { listBuiltinBgmTracks, resolveBuiltinBgmTrackFile } from "../media/builtin-audio";
 import { DownloadFolderWatcher, getDefaultDownloadsDir } from "../media/download-watcher";
 import {
   commitExternalDropImport,
@@ -330,6 +331,40 @@ export function registerExternalAndModelExtraIpc(deps: ExternalIpcDeps): void {
           ok: false,
           projectId: input.projectId,
           message: err instanceof Error ? err.message : "删除候选配乐失败",
+        };
+      }
+    },
+  );
+
+  handle(IPC_CHANNELS.LIST_BUILTIN_BGM, () => listBuiltinBgmTracks());
+
+  handle(
+    IPC_CHANNELS.APPLY_BUILTIN_BGM,
+    (input: { projectId: string; trackId: string }) => {
+      const resolved = resolveBuiltinBgmTrackFile(input.trackId);
+      if (!resolved) {
+        return { ok: false, projectId: input.projectId, message: "找不到指定的内置精选配乐" };
+      }
+      try {
+        const workspace = deps.projects.importProjectBgmFromPath(
+          input.projectId,
+          resolved.filePath,
+          {
+            displayName: `内置配乐 · ${resolved.track.name}（${resolved.track.mood} · ${resolved.track.license}）`,
+            description: `${resolved.track.scene} 作者：${resolved.track.author}，许可：${resolved.track.license}`,
+          },
+        );
+        return {
+          ok: true,
+          projectId: input.projectId,
+          workspace,
+          message: `已采用内置无版权配乐「${resolved.track.name}」并拷贝至当前作品目录`,
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          projectId: input.projectId,
+          message: err instanceof Error ? err.message : "采用内置配乐失败",
         };
       }
     },

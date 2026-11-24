@@ -17,6 +17,7 @@ import {
   measureAudioLoudness,
 } from "./audio-normalize";
 import { EXPORT_TEMP_PREFIX } from "./export-guard";
+import { runPostExportQc, type ShotTimelineWindow } from "./export-qc";
 import {
   MediaProcessAbortedError,
   probeFfmpegStatus,
@@ -226,6 +227,7 @@ export async function exportEpisodeToMp4(params: {
   projectDir: string;
   episodeId: string;
   outputPath: string;
+  runQc?: boolean;
   onProgress?: (event: ExportProgressEvent) => void;
   signal?: AbortSignal;
 }): Promise<ExportEpisodeResult> {
@@ -275,6 +277,7 @@ export async function exportEpisodeToMp4(params: {
     const cues: Array<{ shotId: string; start: number; end: number; speaker: string; text: string }> =
       [];
     const dialogueIntervals: Array<{ start: number; end: number }> = [];
+    const shotWindows: ShotTimelineWindow[] = [];
 
     for (let i = 0; i < resolvedShots.length; i++) {
       assertNotAborted();
@@ -294,6 +297,7 @@ export async function exportEpisodeToMp4(params: {
         signal,
       });
       segmentFiles.push(seg);
+      shotWindows.push({ shotId: item.shot.id, shotIndex: i + 1, shotTitle: item.shot.title, startSec: cursorSec, endSec: cursorSec + effDur });
       if (item.shot.subtitle.trim()) {
         cues.push({
           shotId: item.shot.id,
@@ -440,6 +444,25 @@ export async function exportEpisodeToMp4(params: {
     assertNotAborted();
     // Atomic publish intentionally runs un-aborted so target MP4 is never half-written
     const published = await atomicPublishFile(masterAbs, params.outputPath);
+
+    let qcReport: ExportEpisodeResult["qcReport"];
+    if (params.runQc !== false) {
+      emit(97, "成片质检", "正在扫描黑屏、静帧、无声与 -16 LUFS 峰值…");
+      try {
+        qcReport = await runPostExportQc({
+          mp4Path: published,
+          ffmpegPath,
+          durationSec: actualDuration,
+          hasAudioStream: Boolean(aStream),
+          shotWindows,
+          dialogueIntervals,
+          loudnessNormalized: loudnessApplied,
+          signal,
+        });
+      } catch {
+        // Non-blocking: MP4 is already safely published on disk
+      }
+    }
     emit(100, "导出完成", `已保存成片：${published}`);
 
     return {
@@ -449,7 +472,8 @@ export async function exportEpisodeToMp4(params: {
       width: vStream.width,
       height: vStream.height,
       loudnessApplied,
-      message: "MP4 成片已导出并通过质检",
+      qcReport,
+      message: qcReport && !qcReport.ok ? "MP4 成片已保存（质检发现提醒，请查看下方清单）" : "MP4 成片已导出并通过质检",
     };
   } catch (err) {
     if (err instanceof MediaProcessAbortedError || signal?.aborted) {

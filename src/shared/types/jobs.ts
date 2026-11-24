@@ -26,15 +26,32 @@ export type DirectorProposedShot = z.infer<typeof DirectorProposedShotSchema>;
 export const DirectorProposedSceneSchema = z.object({
   title: z.string().trim().min(1).max(120),
   summary: z.string().default(""),
-  shots: z.array(DirectorProposedShotSchema).min(1).max(20),
+  shots: z.array(DirectorProposedShotSchema).min(1).max(40),
 });
 export type DirectorProposedScene = z.infer<typeof DirectorProposedSceneSchema>;
+
+export const DirectorGroundingReportSchema = z.object({
+  ok: z.boolean(),
+  totalShots: z.number().int().min(0),
+  mergedFromCount: z.number().int().min(0).default(0),
+  scriptDialogueCount: z.number().int().min(0),
+  matchedDialogueCount: z.number().int().min(0),
+  dialogueCoveragePct: z.number().min(0).max(100),
+  missingDialogues: z.array(z.string()).default([]),
+  ungroundedDialogues: z.array(z.string()).default([]),
+  endingCovered: z.boolean(),
+  endingSnippet: z.string().default(""),
+  warnings: z.array(z.string()).default([]),
+  summary: z.string().default(""),
+});
+export type DirectorGroundingReport = z.infer<typeof DirectorGroundingReportSchema>;
 
 export const DirectorProposalSchema = z.object({
   sourceMode: z.enum(["ai", "offline_preview"]).default("ai"),
   providerSummary: z.string().default(""),
   assets: z.array(DirectorProposedAssetSchema).default([]),
   scenes: z.array(DirectorProposedSceneSchema).min(1),
+  grounding: DirectorGroundingReportSchema.optional(),
 });
 export type DirectorProposal = z.infer<typeof DirectorProposalSchema>;
 
