@@ -1,18 +1,23 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { buildSpeechSnapshot, resolveConfirmedFirstFrameTake, resolveShotSpeechVoiceId } from "../../shared/media-selection";
+import { resolveConfirmedFirstFrameTake, resolveShotSpeechVoiceId } from "../../shared/media-selection";
 import type { Job } from "../../shared/types/domain";
 import type { GenerationPlan, JobExecutionResult } from "../../shared/types/jobs";
 import type { CapabilityKey } from "../../shared/types/provider";
 import type { OAuthManager } from "../auth/auth-manager";
 import { GROK_API } from "../auth/grok-oauth";
 import { probeFileDurationSec } from "../media/motion-filters";
-import { pollAndDownloadGrokVideo, queryGrokVideoTask, submitGrokVideoTask } from "../providers/grok-video-adapter";
-import { AmbiguousRemoteError, downloadVerifiedKlingMp4, pollAndDownloadKlingVideo, queryKlingVideoTask, submitKlingVideoTask } from "../providers/kling-adapter";
-import { runOpenAiImageGeneration, runOpenAiSpeechSynthesis } from "../providers/openai-compat-adapter";
+import { AmbiguousRemoteError } from "../providers/kling-adapter";
 import { buildAssetPortraitPrompt, injectLockedReferences } from "../providers/ref-image-injector";
+import { clampSeedanceDurationSec } from "../providers/seedance-adapter";
 import type { GlobalConfigStore } from "../storage/global-store";
 import type { ProjectStore } from "../storage/project-store";
+import {
+  dispatchGenerationJob,
+  downloadRecoveredVideo,
+  queryRecoverableVideoTask,
+  supportsAsyncRecovery,
+} from "./job-dispatcher";
 import {
   getJobRow,
   insertRunningJobRow,
@@ -41,8 +46,8 @@ export class GenerationJobQueue {
     private readonly globalConfig: GlobalConfigStore,
     private readonly oauth: OAuthManager,
     private readonly fetcher: typeof fetch = fetch,
-    private readonly pollIntervalMs = 3000,
-    private readonly maxPollRounds = 60,
+    private readonly pollIntervalMs = 5000,
+    private readonly maxPollRounds = 120,
   ) {}
 
   hasActiveJobs(): boolean {
@@ -65,52 +70,61 @@ export class GenerationJobQueue {
     kind: "image" | "video" | "speech";
   }): GenerationPlan {
     const ws = this.projects.openProject(input.projectId);
-    const isAssetPortrait = Boolean(input.assetId && input.kind === "image");
-    const shot = isAssetPortrait ? null : ws.shots.find((s) => s.id === input.shotId);
-    if (!isAssetPortrait && !shot) throw new Error("镜头不存在");
+    const isPortrait = Boolean(input.assetId && input.kind === "image");
+    const shot = isPortrait ? null : ws.shots.find((s) => s.id === input.shotId);
+    if (!isPortrait && !shot) throw new Error("镜头不存在");
+
+    const portraitInfo = isPortrait ? buildAssetPortraitPrompt(ws, input.assetId!) : null;
+    const confirmedFirstFrame =
+      shot && input.kind === "video" ? resolveConfirmedFirstFrameTake(shot, ws.takes) : null;
+    const prepared = shot
+      ? injectLockedReferences(
+          ws,
+          ws.dirPath,
+          shot,
+          input.kind === "video" ? (confirmedFirstFrame?.mediaPath ?? null) : null,
+        )
+      : {
+          finalPrompt: portraitInfo!.prompt,
+          injectedRefs: [],
+          primaryReferenceImageBase64: null,
+          primaryReferenceImagePath: null,
+        };
 
     const capability: CapabilityKey =
-      input.kind === "image" ? "image" : input.kind === "video" ? "video" : "tts";
-    const snap = this.globalConfig.getSnapshot();
-    const binding = snap.routing[capability];
+      input.kind === "speech" ? "tts" : input.kind === "video" ? "video" : "image";
+    const snapshot = this.globalConfig.getSnapshot();
+    const binding = snapshot.routing[capability];
 
-    const portraitInfo = isAssetPortrait ? buildAssetPortraitPrompt(ws, input.assetId!) : null;
-    const confirmedFirstFrame = shot && input.kind === "video" ? resolveConfirmedFirstFrameTake(shot, ws.takes) : null;
-    const prepared = shot
-      ? injectLockedReferences(ws, ws.dirPath, shot, confirmedFirstFrame?.mediaPath ?? null)
-      : { finalPrompt: portraitInfo!.prompt, injectedRefs: [], primaryReferenceImageBase64: null };
-
-    let blockingReason: string | null = null;
     let providerLabel = "未配置模型";
     let protocol = "none";
     let modelId = "";
     let lockedSnap: LockedProviderSnapshot | null = null;
+    let blockingReason: string | null = null;
 
     if (!binding) {
-      blockingReason = `请先在「模型中心」为「${capability === "image" ? "生图定妆" : capability === "video" ? "生成视频" : "人物配音"}」指定模型路由。`;
+      blockingReason = `请先在「模型中心」为「${capability === "image" ? "生图定妆" : capability === "video" ? "生成视频" : "人物配音"}」指定默认模型。`;
     } else if (binding.source === "oauth") {
-      const acc = snap.oauthAccounts.find((a) => a.providerId === binding.sourceId);
-      providerLabel = acc?.displayName ?? binding.sourceId;
-      protocol = binding.sourceId === "grok-web" ? "oauth-grok" : "oauth-chatgpt";
-      modelId = binding.modelId;
-      if (acc?.status !== "connected") {
-        blockingReason = `${providerLabel} 尚未登录或会话已过期，请在模型中心重新授权或切换自定义 API。`;
+      const acc = snapshot.oauthAccounts.find((a) => a.providerId === binding.sourceId);
+      if (!acc || acc.status !== "connected") {
+        blockingReason = "所选官方账号尚未登录或登录已过期，请前往「模型中心」重新授权。";
       } else {
+        providerLabel = acc.displayName;
+        protocol = acc.providerId === "grok-web" ? "oauth-grok" : "oauth-chatgpt";
+        modelId = binding.modelId;
         lockedSnap = {
           source: "oauth",
-          sourceId: binding.sourceId,
-          providerLabel,
-          protocol: protocol as "oauth-grok" | "oauth-chatgpt",
-          baseUrl: binding.sourceId === "grok-web" ? GROK_API : "https://api.openai.com/v1",
+          sourceId: acc.providerId,
+          providerLabel: acc.displayName,
+          protocol: acc.providerId === "grok-web" ? "oauth-grok" : "oauth-chatgpt",
+          baseUrl: acc.providerId === "grok-web" ? GROK_API : "https://api.openai.com/v1",
           modelId,
         };
       }
     } else {
-      const provider = snap.providers.find((p) => p.id === binding.sourceId);
-      if (!provider) {
-        blockingReason = "所选模型厂家已删除，请在模型中心重新指定路由。";
-      } else if (!provider.hasSecret) {
-        blockingReason = `厂家「${provider.name}」尚未保存 API Key。`;
+      const provider = snapshot.providers.find((p) => p.id === binding.sourceId);
+      if (!provider || !provider.enabled || !provider.hasSecret) {
+        blockingReason = "所选自定义厂家未启用或尚未保存 API 密钥/令牌，请前往「模型中心」检查。";
       } else {
         providerLabel = provider.name;
         protocol = provider.protocol;
@@ -146,10 +160,15 @@ export class GenerationJobQueue {
       blockingReason = "相同参数的生成任务正在运行中，为防重复扣费已拦截重复提交。";
     }
 
-    const upstreamDurationNote =
-      shot && input.kind === "video" && protocol === "kling-video"
-        ? `可灵接口按 ${shot.durationSec >= 7 ? "10" : "5"}s 档计费生成，成片将按本镜 ${shot.durationSec}s 区间裁切采用`
-        : null;
+    let upstreamDurationNote: string | null = null;
+    if (shot && input.kind === "video" && protocol === "kling-video") {
+      upstreamDurationNote = `可灵接口按 ${shot.durationSec >= 7 ? "10" : "5"}s 档计费生成，成片将按本镜 ${shot.durationSec}s 区间裁切采用`;
+    } else if (shot && input.kind === "video" && protocol === "seedance-video") {
+      const sec = clampSeedanceDurationSec(modelId, shot.durationSec);
+      upstreamDurationNote = `即梦 Seedance 按 ${sec}s 整数档生成，成片将按本镜 ${shot.durationSec}s 区间裁切采用`;
+    } else if (shot && input.kind === "video" && protocol === "comfy-worker") {
+      upstreamDurationNote = `将发送至已配置的 ComfyUI 算力 Worker（按 ${shot.durationSec}s 渲染）`;
+    }
 
     return {
       planId: `pln_${randomUUID().replaceAll("-", "").slice(0, 10)}`,
@@ -197,164 +216,60 @@ export class GenerationJobQueue {
     });
 
     const ws = this.projects.openProject(plan.projectId);
-    const shot = plan.assetId ? null : ws.shots.find((s) => s.id === plan.shotId);
+    const shot = plan.assetId ? null : (ws.shots.find((s) => s.id === plan.shotId) ?? null);
     if (!plan.assetId && !shot) throw new Error("镜头不存在");
 
     this.activeJobIds.add(jobId);
     this.activeInputHashes.add(plan.inputSha256);
     try {
-      const { apiKey, secondaryKey, trustedBaseUrl } = await this.resolveLockedSecrets(snapshot);
+      const creds = await resolveTrustedLockedSecrets(snapshot, this.globalConfig, this.oauth);
+      const outcome = await dispatchGenerationJob({
+        plan,
+        ws,
+        shot,
+        snapshot,
+        creds,
+        fetcher: this.fetcher,
+        pollIntervalMs: this.pollIntervalMs,
+        maxPollRounds: this.maxPollRounds,
+        onUpdateJob: (patch) => updateJobRow(this.projects, plan.projectId, jobId, patch),
+      });
 
-      if (plan.assetId && plan.kind === "image") {
-        const media = await runOpenAiImageGeneration(
-          {
-            baseUrl: trustedBaseUrl,
-            apiKey,
-            modelId: snapshot.modelId,
-            prompt: plan.promptPreview,
-            aspectRatio: ws.project.aspectRatio,
-            projectDir: ws.dirPath,
-          },
-          this.fetcher,
-        );
+      if (outcome.target === "asset-portrait" && plan.assetId) {
         recordAssetPortraitCandidateInDb(this.projects, {
           projectId: plan.projectId,
           assetId: plan.assetId,
-          media,
+          media: outcome.media,
         });
         const done = updateJobRow(this.projects, plan.projectId, jobId, {
           status: "succeeded",
           progress: 100,
         });
-        return {
-          ok: true,
-          job: done,
-          message: "定妆候选图已生成（尚未自动锁定，确认满意后请点击「设为已确认参考」）",
-        };
+        return { ok: true, job: done, message: outcome.message };
       }
 
-      if (plan.kind === "video" && snapshot.protocol === "kling-video" && shot) {
-        const firstFrame = resolveConfirmedFirstFrameTake(shot, ws.takes);
-        const prepared = injectLockedReferences(ws, ws.dirPath, shot, firstFrame?.mediaPath ?? null);
-        const submitted = await submitKlingVideoTask(
-          {
-            baseUrl: trustedBaseUrl,
-            accessKey: apiKey,
-            secretKey: secondaryKey ?? "",
-            modelId: snapshot.modelId,
-            prompt: prepared.finalPrompt,
-            negativePrompt: shot.negativePrompt,
-            durationSec: shot.durationSec,
-            aspectRatio: ws.project.aspectRatio,
-            imageBase64: prepared.primaryReferenceImageBase64,
-          },
-          this.fetcher,
-        );
-        const updatedSnap: LockedProviderSnapshot = {
-          ...snapshot,
-          baseUrl: trustedBaseUrl,
-          klingMode: submitted.mode,
-        };
-        updateJobRow(this.projects, plan.projectId, jobId, {
-          remoteTaskId: submitted.taskId,
-          providerSnapshot: JSON.stringify(updatedSnap),
-          progress: 35,
+      if (outcome.target === "shot-take") {
+        const durationSec =
+          outcome.kind === "video" || outcome.kind === "speech"
+            ? await probeFileDurationSec(path.join(ws.dirPath, outcome.media.mediaPath), outcome.kind)
+            : null;
+        recordSuccessfulTakeInDb(this.projects, {
+          projectId: plan.projectId,
+          shotId: plan.shotId,
+          kind: outcome.kind,
+          media: outcome.media,
+          promptSnapshot: outcome.promptSnapshotOverride ?? plan.promptPreview,
+          providerInfo: `${snapshot.providerLabel} · ${snapshot.modelId}`,
+          durationSec,
         });
-
-        const media = await pollAndDownloadKlingVideo(
-          {
-            baseUrl: trustedBaseUrl,
-            accessKey: apiKey,
-            secretKey: secondaryKey ?? "",
-            taskId: submitted.taskId,
-            mode: submitted.mode,
-            projectDir: ws.dirPath,
-            pollIntervalMs: this.pollIntervalMs,
-            maxPollRounds: this.maxPollRounds,
-            onProgress: (progress) => updateJobRow(this.projects, plan.projectId, jobId, { progress }),
-          },
-          this.fetcher,
-        );
-        return await this.completeTakeJob(plan, ws.dirPath, jobId, snapshot, "video", media, "视频生成成功并已自动拉回本地保存");
-      }
-
-      if (plan.kind === "video" && snapshot.protocol === "oauth-grok" && shot) {
-        const firstFrame = resolveConfirmedFirstFrameTake(shot, ws.takes);
-        const prepared = injectLockedReferences(ws, ws.dirPath, shot, firstFrame?.mediaPath ?? null);
-        const submitted = await submitGrokVideoTask(
-          {
-            baseUrl: trustedBaseUrl,
-            accessToken: apiKey,
-            modelId: snapshot.modelId,
-            prompt: prepared.finalPrompt,
-            durationSec: shot.durationSec,
-            aspectRatio: ws.project.aspectRatio,
-            imageBase64: prepared.primaryReferenceImageBase64,
-          },
-          this.fetcher,
-        );
-        updateJobRow(this.projects, plan.projectId, jobId, {
-          remoteTaskId: submitted.taskId,
-          progress: 35,
+        const done = updateJobRow(this.projects, plan.projectId, jobId, {
+          status: "succeeded",
+          progress: 100,
         });
-        const media = await pollAndDownloadGrokVideo(
-          {
-            baseUrl: trustedBaseUrl,
-            accessToken: apiKey,
-            taskId: submitted.taskId,
-            projectDir: ws.dirPath,
-            pollIntervalMs: this.pollIntervalMs,
-            maxPollRounds: this.maxPollRounds,
-            onProgress: (progress) => updateJobRow(this.projects, plan.projectId, jobId, { progress }),
-          },
-          this.fetcher,
-        );
-        return await this.completeTakeJob(plan, ws.dirPath, jobId, snapshot, "video", media, "Grok 视频生成成功并已自动拉回本地保存");
+        return { ok: true, job: done, message: outcome.message };
       }
 
-      if (plan.kind === "image" && shot) {
-        const prepared = injectLockedReferences(ws, ws.dirPath, shot, null);
-        const media = await runOpenAiImageGeneration(
-          {
-            baseUrl: trustedBaseUrl,
-            apiKey,
-            modelId: snapshot.modelId,
-            prompt: plan.promptPreview,
-            aspectRatio: ws.project.aspectRatio,
-            projectDir: ws.dirPath,
-            referenceImageBase64: prepared.primaryReferenceImageBase64,
-          },
-          this.fetcher,
-        );
-        return await this.completeTakeJob(plan, ws.dirPath, jobId, snapshot, "image", media, "首帧图生成成功，已新增版本并选中");
-      }
-
-      if (plan.kind === "speech" && shot) {
-        const voice = resolveShotSpeechVoiceId(shot, ws.assets);
-        const media = await runOpenAiSpeechSynthesis(
-          {
-            baseUrl: trustedBaseUrl,
-            apiKey,
-            modelId: snapshot.modelId,
-            text: plan.promptPreview,
-            voice,
-            projectDir: ws.dirPath,
-          },
-          this.fetcher,
-        );
-        return await this.completeTakeJob(
-          plan,
-          ws.dirPath,
-          jobId,
-          snapshot,
-          "speech",
-          media,
-          "对白配音生成成功，已绑定至当前镜头",
-          buildSpeechSnapshot(plan.promptPreview, voice),
-        );
-      }
-
-      throw new Error(`当前协议（${snapshot.protocol}）暂不支持此生成类型，请在模型中心切换协议。`);
+      throw new Error("未知的生成结果类型");
     } catch (err) {
       const isAmbiguous = err instanceof AmbiguousRemoteError;
       const msg = err instanceof Error ? err.message : String(err);
@@ -368,36 +283,6 @@ export class GenerationJobQueue {
       this.activeJobIds.delete(jobId);
       this.activeInputHashes.delete(plan.inputSha256);
     }
-  }
-
-  private async completeTakeJob(
-    plan: GenerationPlan,
-    projectDir: string,
-    jobId: string,
-    snapshot: LockedProviderSnapshot,
-    kind: "image" | "video" | "speech",
-    media: { mediaPath: string; mediaSha256: string },
-    message: string,
-    promptSnapshotOverride?: string,
-  ): Promise<JobExecutionResult> {
-    const durationSec =
-      kind === "video" || kind === "speech"
-        ? await probeFileDurationSec(path.join(projectDir, media.mediaPath), kind)
-        : null;
-    recordSuccessfulTakeInDb(this.projects, {
-      projectId: plan.projectId,
-      shotId: plan.shotId,
-      kind,
-      media,
-      promptSnapshot: promptSnapshotOverride ?? plan.promptPreview,
-      providerInfo: `${snapshot.providerLabel} · ${snapshot.modelId}`,
-      durationSec,
-    });
-    const done = updateJobRow(this.projects, plan.projectId, jobId, {
-      status: "succeeded",
-      progress: 100,
-    });
-    return { ok: true, job: done, message };
   }
 
   async recoverUnknownJob(input: {
@@ -416,40 +301,25 @@ export class GenerationJobQueue {
     }
 
     const snapshot = JSON.parse(job.providerSnapshot) as LockedProviderSnapshot;
-    if (snapshot.protocol !== "kling-video" && snapshot.protocol !== "oauth-grok") {
-      return { ok: false, job, message: "当前仅可灵 Kling 与 Grok 异步视频任务支持凭任务号查单找回。" };
+    if (!supportsAsyncRecovery(snapshot.protocol)) {
+      return { ok: false, job, message: "当前仅可灵、即梦 Seedance、Grok 与 ComfyUI 异步视频任务支持凭任务号查单找回。" };
     }
 
     let creds: { apiKey: string; secondaryKey: string | null; trustedBaseUrl: string };
     try {
-      creds = await this.resolveLockedSecrets(snapshot);
+      creds = await resolveTrustedLockedSecrets(snapshot, this.globalConfig, this.oauth);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false, job, message: msg };
     }
 
-    const res =
-      snapshot.protocol === "kling-video"
-        ? await queryKlingVideoTask(
-            {
-              baseUrl: creds.trustedBaseUrl,
-              accessKey: creds.apiKey,
-              secretKey: creds.secondaryKey ?? "",
-              taskId,
-              mode: snapshot.klingMode ?? "text2video",
-            },
-            this.fetcher,
-          )
-        : await queryGrokVideoTask(
-            { baseUrl: creds.trustedBaseUrl, accessToken: creds.apiKey, taskId },
-            this.fetcher,
-          );
+    const res = await queryRecoverableVideoTask(snapshot, creds, taskId, this.fetcher);
 
-    if (res.status === "succeed" && res.videoUrl && job.shotId) {
+    if (res.status === "succeed" && res.downloadUrl && job.shotId) {
       const dir = this.projects.resolveProjectDir(input.projectId)!;
       let media: { mediaPath: string; mediaSha256: string };
       try {
-        media = await downloadVerifiedKlingMp4({ videoUrl: res.videoUrl, projectDir: dir }, this.fetcher);
+        media = await downloadRecoveredVideo(res, creds, dir, this.fetcher);
       } catch (err) {
         const dlErr = err instanceof Error ? err.message : String(err);
         const keepRecoverable = updateJobRow(this.projects, input.projectId, job.id, {
@@ -488,12 +358,8 @@ export class GenerationJobQueue {
     const pending = updateJobRow(this.projects, input.projectId, job.id, {
       status: "unknown",
       remoteTaskId: taskId,
-      errorMessage: `远端仍在处理中（${res.status}），请稍后再次点击查单，切勿重发。`,
+      errorMessage: `远端仍在处理中（${res.rawStatusLabel}），请稍后再次点击查单，切勿重发。`,
     });
     return { ok: false, job: pending, message: pending.errorMessage! };
-  }
-
-  private resolveLockedSecrets(snapshot: LockedProviderSnapshot) {
-    return resolveTrustedLockedSecrets(snapshot, this.globalConfig, this.oauth);
   }
 }

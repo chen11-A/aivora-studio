@@ -187,6 +187,7 @@ export function importShotTakeInDb(
     kind: TakeKind;
     sourceFilePath: string;
     durationSec?: number | null;
+    preserveExistingSelection?: boolean;
   },
 ): void {
   const shot = db.get<{ visual_prompt: string; dialogue: string; subtitle: string; speaker: string }>(
@@ -252,6 +253,21 @@ export function importShotTakeInDb(
         takeId,
         now,
         input.shotId,
+      );
+    } else if (input.preserveExistingSelection) {
+      db.run(
+        `INSERT INTO takes (id, shot_id, kind, version_number, media_path, media_sha256, prompt_snapshot, provider_info, is_selected, duration_sec, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+        takeId,
+        input.shotId,
+        input.kind,
+        nextVer,
+        copied.mediaPath,
+        copied.mediaSha256,
+        shot.visual_prompt,
+        `外采回流 · ${copied.baseName}`,
+        dur,
+        now,
       );
     } else {
       db.run(

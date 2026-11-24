@@ -28,6 +28,9 @@ const api: AivoraDesktopApi = {
   selectTake: (input) => ipcRenderer.invoke(IPC_CHANNELS.SELECT_TAKE, input),
   addSyntheticTake: (input) => ipcRenderer.invoke(IPC_CHANNELS.ADD_SYNTHETIC_TAKE, input),
   importShotTake: (input) => ipcRenderer.invoke(IPC_CHANNELS.IMPORT_SHOT_TAKE, input),
+  exportExternalShotPack: (input) => ipcRenderer.invoke(IPC_CHANNELS.EXPORT_EXTERNAL_PACK, input),
+  scanExternalDropFolder: (input) => ipcRenderer.invoke(IPC_CHANNELS.SCAN_EXTERNAL_DROP, input),
+  commitExternalDropImport: (input) => ipcRenderer.invoke(IPC_CHANNELS.COMMIT_EXTERNAL_DROP, input),
   importProjectBgm: (projectId, sourceFilePath) =>
     ipcRenderer.invoke(IPC_CHANNELS.IMPORT_PROJECT_BGM, projectId, sourceFilePath),
   clearProjectBgm: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.CLEAR_PROJECT_BGM, projectId),
@@ -54,6 +57,9 @@ const api: AivoraDesktopApi = {
     ipcRenderer.invoke(IPC_CHANNELS.DELETE_PROVIDER_CONFIG, providerId),
   updateModelRouting: (routing) => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_MODEL_ROUTING, routing),
   testProviderConnection: (providerId) => ipcRenderer.invoke(IPC_CHANNELS.TEST_PROVIDER, providerId),
+  fetchProviderModels: (providerId) =>
+    ipcRenderer.invoke(IPC_CHANNELS.FETCH_PROVIDER_MODELS, providerId),
+  updateOAuthModels: (input) => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_OAUTH_MODELS, input),
   oauthStartLogin: (providerId) => ipcRenderer.invoke(IPC_CHANNELS.OAUTH_START_LOGIN, providerId),
   oauthDisconnect: (providerId) => ipcRenderer.invoke(IPC_CHANNELS.OAUTH_DISCONNECT, providerId),
   proposeDirectorSplit: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_PROPOSE, input),

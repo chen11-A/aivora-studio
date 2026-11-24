@@ -21,6 +21,7 @@ interface AiGenerationStore {
   lastUndoToken: string | null;
   oauthBusyId: OAuthProviderId | null;
   testingProviderId: string | null;
+  fetchingProviderId: string | null;
   batchModalOpen: boolean;
   batchMode: BatchGenerationMode;
   pendingBatchPlan: BatchGenerationPlan | null;
@@ -34,7 +35,9 @@ interface AiGenerationStore {
 
   startOAuthLogin: (providerId: OAuthProviderId) => Promise<void>;
   disconnectOAuth: (providerId: OAuthProviderId) => Promise<void>;
+  updateOAuthModels: (providerId: OAuthProviderId, models: string[]) => Promise<void>;
   testProvider: (providerId: string) => Promise<void>;
+  fetchProviderModels: (providerId: string) => Promise<void>;
 
   proposeDirector: () => Promise<void>;
   applyDirector: () => Promise<void>;
@@ -80,6 +83,7 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
     lastUndoToken: null,
     oauthBusyId: null,
     testingProviderId: null,
+    fetchingProviderId: null,
     batchModalOpen: false,
     batchMode: "image",
     pendingBatchPlan: null,
@@ -131,6 +135,12 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
       showToast(res.message);
     },
 
+    async updateOAuthModels(providerId, models) {
+      const mc = await client.updateOAuthModels({ providerId, models });
+      useStudioStore.setState({ modelCenter: mc });
+      showToast("已更新会员账号自定义模型列表");
+    },
+
     async testProvider(providerId) {
       set({ testingProviderId: providerId });
       try {
@@ -139,6 +149,17 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
         showToast(res.message);
       } finally {
         set({ testingProviderId: null });
+      }
+    },
+
+    async fetchProviderModels(providerId) {
+      set({ fetchingProviderId: providerId });
+      try {
+        const res = await client.fetchProviderModels(providerId);
+        await syncModelCenter();
+        showToast(res.message);
+      } finally {
+        set({ fetchingProviderId: null });
       }
     },
 

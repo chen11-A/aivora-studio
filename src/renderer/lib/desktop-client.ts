@@ -265,6 +265,9 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       return structuredClone(ws);
     },
     importShotTake: async () => ({ ok: false, message: "请在桌面端导入本地视频/图片/音频素材" }),
+    exportExternalShotPack: async () => ({ ok: false, message: "请在桌面端导出网页外采包" }),
+    scanExternalDropFolder: async () => ({ ok: false, items: [], matchedCount: 0, unmatchedCount: 0, duplicateCount: 0, ignoredTempCount: 0, message: "请在桌面端扫描回流目录" }),
+    commitExternalDropImport: async () => ({ ok: false, importedCount: 0, skippedCount: 0, message: "请在桌面端批量导入回流文件" }),
     importProjectBgm: async () => ({ ok: false, message: "请在桌面端导入本地背景音乐" }),
     clearProjectBgm: async (projectId) => {
       const ws = workspaces.get(projectId)!;
@@ -289,17 +292,18 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     cleanUnreferencedAssets: async () => ({ ok: true, removedFiles: 0, freedBytes: 0, message: "当前作品目录干净，没有未引用的孤儿缓存文件" }),
     getModelCenter: async () => structuredClone(modelCenter),
     saveProviderConfig: async (input) => {
+      const prev = input.id ? modelCenter.providers.find((p) => p.id === input.id) : undefined;
       const saved: ProviderConfigView = {
         id: input.id || `prv_${Date.now()}`,
         name: input.name,
         protocol: input.protocol,
         baseUrl: input.baseUrl,
         models: input.models,
-        hasSecret: Boolean(input.apiKey),
-        keyHint: input.apiKey ? `••••${input.apiKey.slice(-4)}` : null,
+        hasSecret: Boolean(input.apiKey) || Boolean(prev?.hasSecret),
+        keyHint: input.apiKey ? `••••${input.apiKey.slice(-4)}` : (prev?.keyHint ?? null),
         enabled: input.enabled,
-        lastTestOk: null,
-        lastTestMessage: null,
+        lastTestOk: prev?.lastTestOk ?? null,
+        lastTestMessage: prev?.lastTestMessage ?? null,
         updatedAt: new Date().toISOString(),
       };
       modelCenter.providers = [saved, ...modelCenter.providers.filter((p) => p.id !== saved.id)];
@@ -319,6 +323,15 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       latencyMs: 42,
       message: "浏览器预览模式：接口连通模拟通过（42ms）",
     }),
+    fetchProviderModels: async (providerId) => {
+      const p = modelCenter.providers.find((x) => x.id === providerId);
+      return { ok: true, models: p?.models ?? ["gpt-4.1"], message: "浏览器预览模式：已返回当前模型列表" };
+    },
+    updateOAuthModels: async ({ providerId, models }) => {
+      const acc = modelCenter.oauthAccounts.find((a) => a.providerId === providerId);
+      if (acc) acc.models = [...models];
+      return structuredClone(modelCenter);
+    },
     oauthStartLogin: async (providerId) => ({
       ok: false,
       providerId,
@@ -446,7 +459,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     cancelEpisodeExport: async () => ({ ok: false, message: "浏览器预览模式无导出任务" }),
     onFlushBeforeClose: () => () => undefined,
     notifyFlushComplete: () => undefined,
-    getAppInfo: async () => ({ version: "1.2.1", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "1.3.0", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
     resolveDroppedFilePath: () => null,
   };

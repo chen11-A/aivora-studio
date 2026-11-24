@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  Check,
   CheckCircle2,
   Cpu,
   Globe,
@@ -7,8 +8,9 @@ import {
   Loader2,
   LogIn,
   LogOut,
+  Pencil,
   PlugZap,
-  Plus,
+  RefreshCw,
   ShieldCheck,
   Trash2,
   X,
@@ -17,48 +19,13 @@ import type {
   CapabilityKey,
   CustomProviderProtocol,
   ModelRouting,
+  OAuthProviderId,
+  ProviderConfigView,
   RouteBinding,
 } from "@shared/types/provider";
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
-
-const PROTOCOLS: Array<{
-  id: CustomProviderProtocol;
-  label: string;
-  defaultUrl: string;
-  defaultModels: string;
-}> = [
-  {
-    id: "kling-video",
-    label: "可灵 Kling 官方视频 API",
-    defaultUrl: "https://api-beijing.klingai.com",
-    defaultModels: "kling-v2-master, kling-v1-6",
-  },
-  {
-    id: "openai-chat",
-    label: "OpenAI 兼容文本对话（剧本/拆镜）",
-    defaultUrl: "https://api.openai.com/v1",
-    defaultModels: "gpt-4.1, deepseek-chat",
-  },
-  {
-    id: "openai-image",
-    label: "OpenAI 兼容生图（定妆/首帧）",
-    defaultUrl: "https://api.openai.com/v1",
-    defaultModels: "gpt-image-1, flux-pro",
-  },
-  {
-    id: "openai-tts",
-    label: "OpenAI 兼容配音 TTS",
-    defaultUrl: "https://api.openai.com/v1",
-    defaultModels: "gpt-4o-mini-tts, tts-1",
-  },
-  {
-    id: "video-async-experimental",
-    label: "自定义异步视频（实验）",
-    defaultUrl: "https://api.example.com/v1",
-    defaultModels: "custom-video-v1",
-  },
-];
+import { ProviderEditorForm } from "./ProviderEditorForm";
 
 const CAPABILITIES: Array<{ key: CapabilityKey; label: string }> = [
   { key: "script", label: "剧本拆镜" },
@@ -77,50 +44,18 @@ export function ModelCenterModal() {
 
   const oauthBusyId = useAiGenerationStore((s) => s.oauthBusyId);
   const testingProviderId = useAiGenerationStore((s) => s.testingProviderId);
+  const fetchingProviderId = useAiGenerationStore((s) => s.fetchingProviderId);
   const startOAuthLogin = useAiGenerationStore((s) => s.startOAuthLogin);
   const disconnectOAuth = useAiGenerationStore((s) => s.disconnectOAuth);
+  const updateOAuthModels = useAiGenerationStore((s) => s.updateOAuthModels);
   const testProvider = useAiGenerationStore((s) => s.testProvider);
+  const fetchProviderModels = useAiGenerationStore((s) => s.fetchProviderModels);
 
-  const [name, setName] = useState("");
-  const [protocol, setProtocol] = useState<CustomProviderProtocol>("openai-chat");
-  const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
-  const [apiKey, setApiKey] = useState("");
-  const [secondaryKey, setSecondaryKey] = useState("");
-  const [modelsText, setModelsText] = useState("gpt-4.1");
+  const [editingProvider, setEditingProvider] = useState<ProviderConfigView | null>(null);
+  const [editingOAuthId, setEditingOAuthId] = useState<OAuthProviderId | null>(null);
+  const [oauthModelsDraft, setOauthModelsDraft] = useState("");
 
   if (!open || !snapshot) return null;
-
-  const isKling = protocol === "kling-video";
-
-  function handleProtocolChange(next: CustomProviderProtocol) {
-    setProtocol(next);
-    const preset = PROTOCOLS.find((p) => p.id === next);
-    if (preset) {
-      setBaseUrl(preset.defaultUrl);
-      setModelsText(preset.defaultModels);
-    }
-  }
-
-  async function handleSaveProvider() {
-    if (!name.trim() || !baseUrl.trim()) return;
-    const models = modelsText
-      .split(/[,，\n]/)
-      .map((m) => m.trim())
-      .filter(Boolean);
-    if (models.length === 0) return;
-    await saveProvider({
-      name: name.trim(),
-      protocol,
-      baseUrl: baseUrl.trim(),
-      models,
-      apiKey: apiKey.trim() || undefined,
-      secondaryKey: isKling ? secondaryKey.trim() || undefined : undefined,
-      enabled: true,
-    });
-    setName("");
-    setApiKey("");
-    setSecondaryKey("");
-  }
 
   function supportsOAuthModel(cap: CapabilityKey, providerId: string, modelId: string): boolean {
     const lower = modelId.toLowerCase();
@@ -134,8 +69,10 @@ export function ModelCenterModal() {
 
   function supportsProviderProtocol(cap: CapabilityKey, proto: CustomProviderProtocol): boolean {
     if (cap === "script") return proto === "openai-chat";
-    if (cap === "image") return proto === "openai-image";
-    if (cap === "video") return proto === "kling-video" || proto === "video-async-experimental";
+    if (cap === "image") return proto === "openai-image" || proto === "comfy-worker";
+    if (cap === "video") {
+      return proto === "kling-video" || proto === "seedance-video" || proto === "comfy-worker";
+    }
     return proto === "openai-tts";
   }
 
@@ -154,10 +91,9 @@ export function ModelCenterModal() {
     for (const p of snapshot.providers) {
       if (!supportsProviderProtocol(cap, p.protocol)) continue;
       for (const m of p.models) {
-        const expTag = p.protocol === "video-async-experimental" ? " [实验]" : "";
         opts.push({
           value: `provider:${p.id}:${m}`,
-          label: `${p.name} · ${m}${expTag}`,
+          label: `${p.name} · ${m}`,
           binding: { source: "provider", sourceId: p.id, modelId: m },
         });
       }
@@ -172,13 +108,22 @@ export function ModelCenterModal() {
     void updateRouting(next);
   }
 
+  async function handleSaveOAuthModels(providerId: OAuthProviderId) {
+    const models = oauthModelsDraft
+      .split(/[,，\n]/)
+      .map((m) => m.trim())
+      .filter(Boolean);
+    await updateOAuthModels(providerId, models);
+    setEditingOAuthId(null);
+  }
+
   return (
     <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-5">
       <div
         role="dialog"
         aria-label="模型与账号中心"
         data-testid="model-center-modal"
-        className="w-full max-w-[840px] max-h-[86vh] rounded-xl bg-[#14171e] border border-[#343d4e] shadow-2xl flex flex-col overflow-hidden"
+        className="w-full max-w-[860px] max-h-[86vh] rounded-xl bg-[#14171e] border border-[#343d4e] shadow-2xl flex flex-col overflow-hidden"
       >
         <div className="h-12 px-5 border-b border-[#252b37] flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
@@ -210,61 +155,96 @@ export function ModelCenterModal() {
           <section className="flex flex-col gap-2.5">
             <div className="text-[12px] font-semibold text-[#a4aec0] flex items-center gap-1.5">
               <Globe className="w-3.5 h-3.5 text-[#60a5fa]" />
-              <span>网页会员账号授权（系统浏览器 PKCE · 凭据加密落盘）</span>
+              <span>网页会员账号授权（系统浏览器 PKCE · 支持自定义补充模型名）</span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {snapshot.oauthAccounts.map((acc) => {
                 const connected = acc.status === "connected";
                 const busy = oauthBusyId === acc.providerId;
+                const isEditingModels = editingOAuthId === acc.providerId;
                 return (
                   <div
                     key={acc.providerId}
-                    className="rounded-lg bg-[#0f1218] border border-[#252b37] p-3.5 flex items-center justify-between gap-3"
+                    className="rounded-lg bg-[#0f1218] border border-[#252b37] p-3.5 flex flex-col gap-2"
                   >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[13px] font-semibold text-[#f3f5f9]">
-                          {acc.displayName}
-                        </span>
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[10px] ${
-                            connected
-                              ? "bg-[#10b981]/15 text-[#34d399]"
-                              : acc.status === "expired"
-                                ? "bg-[#f59e0b]/20 text-[#fbbf24]"
-                                : "bg-[#1b2029] text-[#768196]"
-                          }`}
-                        >
-                          {connected ? "已授权" : acc.status === "expired" ? "已过期" : "未登录"}
-                        </span>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[13px] font-semibold text-[#f3f5f9]">
+                            {acc.displayName}
+                          </span>
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] ${
+                              connected
+                                ? "bg-[#10b981]/15 text-[#34d399]"
+                                : acc.status === "expired"
+                                  ? "bg-[#f59e0b]/20 text-[#fbbf24]"
+                                  : "bg-[#1b2029] text-[#768196]"
+                            }`}
+                          >
+                            {connected ? "已授权" : acc.status === "expired" ? "已过期" : "未登录"}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-[#768196] mt-0.5 truncate">
+                          {acc.accountLabel || acc.note}
+                        </div>
                       </div>
-                      <div className="text-[11px] text-[#768196] mt-0.5 truncate">
-                        {acc.accountLabel || acc.note}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingOAuthId(isEditingModels ? null : acc.providerId);
+                            setOauthModelsDraft(acc.models.join(", "));
+                          }}
+                          className="btn-secondary h-8 px-2 text-[11px]"
+                          title="自定义该账号可用模型名"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>模型</span>
+                        </button>
+                        {connected ? (
+                          <button
+                            type="button"
+                            onClick={() => void disconnectOAuth(acc.providerId)}
+                            className="btn-secondary h-8 px-2.5 text-[11px]"
+                          >
+                            <LogOut className="w-3 h-3" />
+                            <span>断开</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void startOAuthLogin(acc.providerId)}
+                            className="btn-primary h-8 px-2.5 text-[11px]"
+                          >
+                            {busy ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <LogIn className="w-3 h-3" />
+                            )}
+                            <span>{busy ? "等待授权…" : "网页登录"}</span>
+                          </button>
+                        )}
                       </div>
                     </div>
-                    {connected ? (
-                      <button
-                        type="button"
-                        onClick={() => void disconnectOAuth(acc.providerId)}
-                        className="btn-secondary h-8 px-2.5 text-[11px] shrink-0"
-                      >
-                        <LogOut className="w-3 h-3" />
-                        <span>断开</span>
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void startOAuthLogin(acc.providerId)}
-                        className="btn-primary h-8 px-2.5 text-[11px] shrink-0"
-                      >
-                        {busy ? (
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                        ) : (
-                          <LogIn className="w-3 h-3" />
-                        )}
-                        <span>{busy ? "等待授权…" : "网页登录"}</span>
-                      </button>
+                    {isEditingModels && (
+                      <div className="flex items-center gap-1.5 pt-1 border-t border-[#252b37]">
+                        <input
+                          className="input-field h-7 px-2 text-[11px] flex-1"
+                          placeholder="逗号分隔，如：gpt-4.1, gpt-image-1"
+                          value={oauthModelsDraft}
+                          onChange={(e) => setOauthModelsDraft(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void handleSaveOAuthModels(acc.providerId)}
+                          className="h-7 px-2 rounded bg-[#3b82f6] text-white text-[11px] flex items-center gap-1 cursor-pointer"
+                        >
+                          <Check className="w-3 h-3" />
+                          <span>保存</span>
+                        </button>
+                      </div>
                     )}
                   </div>
                 );
@@ -272,78 +252,26 @@ export function ModelCenterModal() {
             </div>
           </section>
 
-          {/* Official & Custom API Providers */}
+          {/* Official, Colab/ComfyUI & Custom API Providers */}
           <section className="flex flex-col gap-3">
             <div className="text-[12px] font-semibold text-[#a4aec0] flex items-center gap-1.5">
               <KeyRound className="w-3.5 h-3.5 text-[#f59e0b]" />
-              <span>官方与自定义 API 厂家（可灵 Kling / DeepSeek / 中转站 / TTS）</span>
+              <span>官方 API、Colab / ComfyUI 算力与自定义厂家（支持编辑与一键拉取模型）</span>
             </div>
 
-            <div className="rounded-lg bg-[#0f1218] border border-[#252b37] p-3.5 flex flex-col gap-2.5">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                <input
-                  className="input-field text-[12px]"
-                  placeholder="厂家名称，如：可灵官方 / DeepSeek"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-                <select
-                  className="input-field h-9 text-[12px]"
-                  value={protocol}
-                  onChange={(e) => handleProtocolChange(e.target.value as CustomProviderProtocol)}
-                >
-                  {PROTOCOLS.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  className="input-field text-[12px]"
-                  placeholder="Base URL，如：https://api.openai.com/v1"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                />
-                <input
-                  className="input-field text-[12px]"
-                  type="password"
-                  placeholder={isKling ? "可灵 Access Key（主密钥）" : "API Key（加密写入系统安全库）"}
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                />
-                {isKling && (
-                  <input
-                    className="input-field text-[12px] md:col-span-2"
-                    type="password"
-                    placeholder="可灵 Secret Key（副密钥，用于本地签发 HS256 JWT）"
-                    value={secondaryKey}
-                    onChange={(e) => setSecondaryKey(e.target.value)}
-                  />
-                )}
-              </div>
-              <div className="flex items-center gap-2.5">
-                <input
-                  className="input-field text-[12px] flex-1"
-                  placeholder="模型列表（逗号分隔），如：kling-v2-master, gpt-4.1"
-                  value={modelsText}
-                  onChange={(e) => setModelsText(e.target.value)}
-                />
-                <button
-                  type="button"
-                  disabled={!name.trim() || !baseUrl.trim()}
-                  onClick={() => void handleSaveProvider()}
-                  className="btn-primary shrink-0"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>保存厂家配置</span>
-                </button>
-              </div>
-            </div>
+            <ProviderEditorForm
+              editingProvider={editingProvider}
+              onCancelEdit={() => setEditingProvider(null)}
+              onSave={async (input) => {
+                await saveProvider(input);
+              }}
+            />
 
             {snapshot.providers.length > 0 && (
               <div className="flex flex-col gap-2">
                 {snapshot.providers.map((p) => {
                   const testing = testingProviderId === p.id;
+                  const fetching = fetchingProviderId === p.id;
                   return (
                     <div
                       key={p.id}
@@ -374,6 +302,25 @@ export function ModelCenterModal() {
                       <div className="flex items-center gap-1.5 shrink-0">
                         <button
                           type="button"
+                          onClick={() => setEditingProvider(p)}
+                          className="btn-secondary h-8 px-2 text-[11px]"
+                          title="编辑厂家地址、模型或密钥"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>编辑</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={fetching}
+                          onClick={() => void fetchProviderModels(p.id)}
+                          className="btn-secondary h-8 px-2 text-[11px]"
+                          title="从远端接口一键拉取可用模型列表"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${fetching ? "animate-spin" : ""}`} />
+                          <span>{fetching ? "拉取中" : "拉取模型"}</span>
+                        </button>
+                        <button
+                          type="button"
                           disabled={testing}
                           onClick={() => void testProvider(p.id)}
                           className="btn-secondary h-8 px-2.5 text-[11px]"
@@ -387,7 +334,10 @@ export function ModelCenterModal() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => void deleteProvider(p.id)}
+                          onClick={() => {
+                            if (editingProvider?.id === p.id) setEditingProvider(null);
+                            void deleteProvider(p.id);
+                          }}
                           className="p-1.5 rounded text-[#768196] hover:text-[#f87171] hover:bg-[#ef4444]/10 cursor-pointer"
                           title="删除厂家"
                         >

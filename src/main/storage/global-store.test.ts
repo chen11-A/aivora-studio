@@ -74,4 +74,52 @@ describe("GlobalConfigStore", () => {
     expect(afterDelete.routing.script?.sourceId).toBe("chatgpt-web");
     store2.close();
   });
+
+  it("edits existing provider while preserving encrypted API keys when key fields are omitted, and persists custom OAuth models", () => {
+    const dir = makeTempDir();
+    const store1 = new GlobalConfigStore(dir, mockVault);
+
+    const created = store1.saveProvider({
+      name: "Colab L4",
+      protocol: "comfy-worker",
+      baseUrl: "https://old-tunnel.trycloudflare.com",
+      models: ["flux-schnell"],
+      apiKey: "SECRET_TOKEN_1122",
+      enabled: true,
+    });
+
+    // Update URL and models WITHOUT re-entering apiKey -> must keep original encrypted key!
+    const edited = store1.saveProvider({
+      id: created.id,
+      name: "Colab L4 (新隧道)",
+      protocol: "comfy-worker",
+      baseUrl: "https://new-tunnel.trycloudflare.com",
+      models: ["flux-schnell", "wan2.2-i2v-5b"],
+      enabled: true,
+    });
+    expect(edited.id).toBe(created.id);
+    expect(edited.baseUrl).toBe("https://new-tunnel.trycloudflare.com");
+    expect(edited.hasSecret).toBe(true);
+    expect(edited.keyHint).toBe("••••1122");
+
+    const creds = store1.getProviderCredentials(created.id);
+    expect(creds?.apiKey).toBe("SECRET_TOKEN_1122");
+
+    // Customize OAuth account models and verify persistence across reopen
+    const afterOAuth = store1.updateOAuthModels("chatgpt-web", [
+      "gpt-4.1",
+      "gpt-image-1",
+      "gpt-image-1",
+    ]);
+    expect(
+      afterOAuth.oauthAccounts.find((a) => a.providerId === "chatgpt-web")?.models,
+    ).toEqual(["gpt-4.1", "gpt-image-1"]);
+    store1.close();
+
+    const store2 = new GlobalConfigStore(dir, mockVault);
+    expect(
+      store2.getSnapshot().oauthAccounts.find((a) => a.providerId === "chatgpt-web")?.models,
+    ).toEqual(["gpt-4.1", "gpt-image-1"]);
+    store2.close();
+  });
 });

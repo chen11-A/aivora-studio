@@ -2,9 +2,12 @@ import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AspectRatio } from "../../shared/types/domain";
+import type { FetchModelsResult } from "../../shared/ipc-contract";
 import type { ProviderTestResult } from "../../shared/types/jobs";
 import type { CustomProviderProtocol } from "../../shared/types/provider";
+import { probeComfyWorkerHealth, testComfyWorkerConnectivity } from "./comfy-worker-adapter";
 import { signKlingJwt } from "./kling-adapter";
+import { normalizeSeedanceBaseUrl, testSeedanceConnectivity } from "./seedance-adapter";
 
 function cleanBase(url: string): string {
   return url.trim().replace(/\/+$/, "");
@@ -30,6 +33,20 @@ export async function testProviderConnectivity(
 ): Promise<ProviderTestResult> {
   const started = Date.now();
   try {
+    if (input.protocol === "comfy-worker") {
+      return await testComfyWorkerConnectivity(
+        { providerId: input.providerId, baseUrl: input.baseUrl, apiKey: input.apiKey },
+        fetcher,
+      );
+    }
+
+    if (input.protocol === "seedance-video") {
+      return await testSeedanceConnectivity(
+        { providerId: input.providerId, baseUrl: input.baseUrl, apiKey: input.apiKey },
+        fetcher,
+      );
+    }
+
     if (!input.apiKey.trim()) {
       return {
         ok: false,
@@ -97,6 +114,89 @@ export async function testProviderConnectivity(
       providerId: input.providerId,
       latencyMs: Date.now() - started,
       message: `网络连接失败：${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+export async function fetchRemoteProviderModels(
+  input: {
+    protocol: CustomProviderProtocol;
+    baseUrl: string;
+    apiKey: string;
+  },
+  fetcher: typeof fetch = fetch,
+): Promise<FetchModelsResult> {
+  try {
+    if (input.protocol === "comfy-worker") {
+      const health = await probeComfyWorkerHealth(
+        { baseUrl: input.baseUrl, apiKey: input.apiKey },
+        fetcher,
+      );
+      if (!health.ok) return { ok: false, models: [], message: health.message };
+      return {
+        ok: true,
+        models: health.models,
+        message: `已从 ${health.gpuName ?? "Worker"} 拉取 ${health.models.length} 个预设模型`,
+      };
+    }
+
+    if (input.protocol === "kling-video") {
+      const models = ["kling-v2-master", "kling-v2-1", "kling-v1-6"];
+      return { ok: true, models, message: "已填充可灵官方常用视频模型列表" };
+    }
+
+    if (!input.apiKey.trim()) {
+      return { ok: false, models: [], message: "请先保存 API Key 后再拉取模型列表" };
+    }
+
+    const modelsUrl =
+      input.protocol === "seedance-video"
+        ? `${normalizeSeedanceBaseUrl(input.baseUrl)}/models`
+        : `${cleanBase(input.baseUrl)}/models`;
+    const res = await fetcher(modelsUrl, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${input.apiKey.trim()}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+      if (input.protocol === "seedance-video") {
+        const curated = [
+          "doubao-seedance-2-0-260128",
+          "doubao-seedance-2-0-fast-260128",
+          "doubao-seedance-2-5-260628",
+        ];
+        return {
+          ok: true,
+          models: curated,
+          message: "方舟未返回公共模型目录，已填充 Seedance 2.0/2.5 常用官方 Model ID（也可手填 ep-...）",
+        };
+      }
+      return {
+        ok: false,
+        models: [],
+        message: diagnoseHttpError(res.status, await res.text().catch(() => "")),
+      };
+    }
+    const json = (await res.json().catch(() => ({}))) as {
+      data?: Array<{ id?: string }>;
+      models?: Array<{ id?: string } | string>;
+    };
+    const rawList = [
+      ...(json.data?.map((m) => m.id).filter((id): id is string => Boolean(id)) ?? []),
+      ...(json.models
+        ?.map((m) => (typeof m === "string" ? m : m.id))
+        .filter((id): id is string => Boolean(id)) ?? []),
+    ];
+    const unique = [...new Set(rawList.map((s) => s.trim()).filter(Boolean))].slice(0, 60);
+    if (unique.length === 0) {
+      return { ok: false, models: [], message: "远端返回的模型列表为空，请手动填写模型名" };
+    }
+    return { ok: true, models: unique, message: `已成功拉取 ${unique.length} 个可用模型` };
+  } catch (err) {
+    return {
+      ok: false,
+      models: [],
+      message: `拉取模型列表失败：${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }

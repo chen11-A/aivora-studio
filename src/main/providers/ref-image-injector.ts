@@ -1,16 +1,84 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import type { Asset, ProjectWorkspace, Shot } from "../../shared/types/domain";
 import type { InjectedRefSummary } from "../../shared/types/jobs";
+import { probeFfmpegStatus, runMediaBinary } from "../media/ffmpeg-locator";
 import { resolveConfinedMediaPath } from "../media/media-protocol";
 
 export type PreparedPromptWithRefs = {
   finalPrompt: string;
   injectedRefs: InjectedRefSummary[];
   primaryReferenceImageBase64: string | null;
+  primaryReferenceImagePath: string | null;
 };
 
 const RASTER_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
+const MAX_DIRECT_REF_BYTES = 4 * 1024 * 1024;
+
+function mimeFromExt(absPath: string): string {
+  const ext = path.extname(absPath).toLowerCase();
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".webp") return "image/webp";
+  return "image/png";
+}
+
+/**
+ * Ensures reference images sent to Kling / Seedance / OpenAI / ComfyUI stay under `maxBytes` (default 4MB).
+ * When larger, uses bundled FFmpeg to scale down to <= 2048px longest edge as high-quality JPEG.
+ */
+export async function prepareReferenceImageForUpload(
+  absPath: string | null | undefined,
+  maxBytes = MAX_DIRECT_REF_BYTES,
+): Promise<{ base64: string; mime: string; compressed: boolean } | null> {
+  if (!absPath || !existsSync(absPath)) return null;
+  const size = statSync(absPath).size;
+  if (size <= maxBytes) {
+    return {
+      base64: readFileSync(absPath).toString("base64"),
+      mime: mimeFromExt(absPath),
+      compressed: false,
+    };
+  }
+  const ff = await probeFfmpegStatus();
+  if (ff.available && ff.ffmpegPath) {
+    const tmpOut = path.join(tmpdir(), `aivora-ref-${randomUUID().slice(0, 8)}.jpg`);
+    try {
+      await runMediaBinary(
+        ff.ffmpegPath,
+        [
+          "-hide_banner", "-nostdin", "-y",
+          "-i", absPath,
+          "-vf", "scale='min(2048,iw)':'min(2048,ih)':force_original_aspect_ratio=decrease",
+          "-q:v", "3",
+          tmpOut,
+        ],
+        { timeoutMs: 25_000 },
+      );
+      if (existsSync(tmpOut)) {
+        const compressedBuf = readFileSync(tmpOut);
+        unlinkSync(tmpOut);
+        return {
+          base64: compressedBuf.toString("base64"),
+          mime: "image/jpeg",
+          compressed: true,
+        };
+      }
+    } catch {
+      try {
+        if (existsSync(tmpOut)) unlinkSync(tmpOut);
+      } catch {
+        // ignore temp cleanup failure
+      }
+    }
+  }
+  return {
+    base64: readFileSync(absPath).toString("base64"),
+    mime: mimeFromExt(absPath),
+    compressed: false,
+  };
+}
 
 function selectLockedAssetsForShot(workspace: ProjectWorkspace, shot: Shot): Asset[] {
   const locked = workspace.assets.filter(
@@ -67,6 +135,7 @@ export function injectLockedReferences(
 
   // Extract primary raster reference image (prefer shot's own first-frame take for i2v, else first locked raster asset)
   let primaryReferenceImageBase64: string | null = null;
+  let primaryReferenceImagePath: string | null = null;
   const candidateRelPaths = [
     primaryTakeMediaPath ?? null,
     ...lockedAssets.map((a) => a.mediaPath),
@@ -76,6 +145,7 @@ export function injectLockedReferences(
     const abs = resolveConfinedMediaPath(projectDir, rel);
     if (!abs || !existsSync(abs)) continue;
     if (!RASTER_EXTS.has(path.extname(abs).toLowerCase())) continue;
+    primaryReferenceImagePath = abs;
     primaryReferenceImageBase64 = readFileSync(abs).toString("base64");
     break;
   }
@@ -84,6 +154,7 @@ export function injectLockedReferences(
     finalPrompt: parts.join("\n"),
     injectedRefs,
     primaryReferenceImageBase64,
+    primaryReferenceImagePath,
   };
 }
 

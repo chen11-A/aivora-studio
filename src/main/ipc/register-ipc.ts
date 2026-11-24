@@ -29,6 +29,7 @@ import { testProviderConnectivity } from "../providers/openai-compat-adapter";
 import type { DirectorService } from "../skills/director-service";
 import type { GlobalConfigStore } from "../storage/global-store";
 import { safeFolderSegment, type ProjectStore } from "../storage/project-store";
+import { registerExternalAndModelExtraIpc } from "./register-external-ipc";
 
 export function registerIpcHandlers(deps: {
   getWindow: () => BrowserWindow | null;
@@ -438,4 +439,11 @@ export function registerIpcHandlers(deps: {
     sqliteEngine: "node:sqlite",
     platform: process.platform,
   }));
+
+  registerExternalAndModelExtraIpc({
+    projects: deps.projects,
+    globalConfig: deps.globalConfig,
+    getWindow: deps.getWindow,
+    allowedRevealPaths,
+  });
 }

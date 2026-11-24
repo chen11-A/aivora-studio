@@ -438,6 +438,7 @@ export class ProjectStore {
     kind: TakeKind;
     sourceFilePath: string;
     durationSec?: number | null;
+    preserveExistingSelection?: boolean;
   }): ProjectWorkspace {
     const dir = this.resolveProjectDir(input.projectId);
     if (!dir) throw new Error("作品不存在");

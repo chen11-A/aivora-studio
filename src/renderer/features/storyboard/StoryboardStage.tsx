@@ -1,5 +1,5 @@
-import { useRef } from "react";
-import { Check, ChevronLeft, ChevronRight, Film, Image as ImageIcon, Layers, Plus, Upload } from "lucide-react";
+import { useRef, useState } from "react";
+import { Check, ChevronLeft, ChevronRight, Film, Image as ImageIcon, Layers, Package, Plus, Upload } from "lucide-react";
 import {
   evaluateShotVisualStatus,
   isAudioMediaPath,
@@ -12,10 +12,12 @@ import {
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
+import { ExternalWorkflowModal } from "./ExternalWorkflowModal";
 import { ShotInspector } from "./ShotInspector";
 import { useStoryboardHotkeys } from "./useStoryboardHotkeys";
 
 export function StoryboardStage() {
+  const [externalModalOpen, setExternalModalOpen] = useState(false);
   const workspace = useStudioStore((s) => s.workspace);
   const activeEpisodeId = useStudioStore((s) => s.activeEpisodeId);
   const activeShotId = useStudioStore((s) => s.activeShotId);
@@ -252,6 +254,16 @@ export function StoryboardStage() {
             </span>
             {currentShot && (
               <div className="flex items-center gap-3 shrink-0">
+                <button
+                  type="button"
+                  data-testid="open-external-pack-btn"
+                  onClick={() => setExternalModalOpen(true)}
+                  className="text-[11px] text-[#93c5fd] hover:text-[#bfdbfe] flex items-center gap-1 cursor-pointer"
+                  title="导出外采镜头包（Google Flow / 即梦 / 可灵网页版）或扫描回流目录批量入镜"
+                >
+                  <Package className="w-3 h-3" />
+                  <span>网页外采</span>
+                </button>
                 <button type="button" onClick={() => void importShotTake(currentShot.id, "video")} className="text-[11px] text-[#a4aec0] hover:text-[#f3f5f9] flex items-center gap-1 cursor-pointer">
                   <Upload className="w-3 h-3" />
                   <span>导入视频</span>
@@ -316,6 +328,16 @@ export function StoryboardStage() {
         speechTake={speechTake}
         speechSrc={speechSrc}
       />
+
+      {activeEpisodeId && (
+        <ExternalWorkflowModal
+          open={externalModalOpen}
+          onClose={() => setExternalModalOpen(false)}
+          projectId={workspace.project.id}
+          episodeId={activeEpisodeId}
+          epShots={epShots}
+        />
+      )}
     </div>
   );
 }

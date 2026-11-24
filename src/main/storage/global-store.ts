@@ -267,6 +267,21 @@ export class GlobalConfigStore {
     return { status: row.status, payload: JSON.parse(plain) as T };
   }
 
+  updateOAuthModels(
+    providerId: OAuthAccountView["providerId"],
+    models: string[],
+  ): ModelCenterSnapshot {
+    const cleaned = [...new Set(models.map((m) => m.trim()).filter(Boolean))];
+    const now = new Date().toISOString();
+    this.db.run(
+      `UPDATE oauth_accounts SET models_json = ?, updated_at = ? WHERE provider_id = ?`,
+      JSON.stringify(cleaned),
+      now,
+      providerId,
+    );
+    return this.getSnapshot();
+  }
+
   clearOAuthSession(providerId: OAuthAccountView["providerId"]): void {
     const now = new Date().toISOString();
     this.db.transaction(() => {
@@ -285,10 +300,15 @@ export class GlobalConfigStore {
   }
 
   private toProviderView(row: ProviderRow): ProviderConfigView {
+    const rawProto = String(row.protocol);
+    const protocol: ProviderConfigView["protocol"] =
+      rawProto === "video-async-experimental"
+        ? "comfy-worker"
+        : (rawProto as ProviderConfigView["protocol"]);
     return {
       id: row.id,
       name: row.name,
-      protocol: row.protocol,
+      protocol,
       baseUrl: row.base_url,
       models: JSON.parse(row.models_json) as string[],
       hasSecret: Boolean(row.secret_cipher_b64),

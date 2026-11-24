@@ -28,7 +28,8 @@ export const CustomProviderProtocolSchema = z.enum([
   "openai-image",
   "openai-tts",
   "kling-video",
-  "video-async-experimental",
+  "seedance-video",
+  "comfy-worker",
 ]);
 export type CustomProviderProtocol = z.infer<typeof CustomProviderProtocolSchema>;
 

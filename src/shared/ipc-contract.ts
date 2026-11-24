@@ -24,6 +24,12 @@ import type {
   ProviderTestResult,
 } from "./types/jobs";
 import type {
+  ExternalDropCommitInput,
+  ExternalDropCommitResult,
+  ExternalDropScanResult,
+  ExternalPackExportResult,
+} from "./types/external-pack";
+import type {
   ModelCenterSnapshot,
   ModelRouting,
   OAuthProviderId,
@@ -72,6 +78,12 @@ export type ExportEpisodeResult = {
   width?: number;
   height?: number;
   loudnessApplied?: boolean;
+  message: string;
+};
+
+export type FetchModelsResult = {
+  ok: boolean;
+  models: string[];
   message: string;
 };
 
@@ -139,6 +151,19 @@ export type AivoraDesktopApi = {
     sourceFilePath?: string;
   }) => Promise<{ ok: boolean; workspace?: ProjectWorkspace; message: string }>;
 
+  // External web workflow pack export & drop-folder batch import
+  exportExternalShotPack: (input: {
+    projectId: string;
+    episodeId: string;
+    targetDir?: string;
+  }) => Promise<ExternalPackExportResult>;
+  scanExternalDropFolder: (input: {
+    projectId: string;
+    episodeId: string;
+    folderDir?: string;
+  }) => Promise<ExternalDropScanResult>;
+  commitExternalDropImport: (input: ExternalDropCommitInput) => Promise<ExternalDropCommitResult>;
+
   // Project BGM & real FFmpeg export
   importProjectBgm: (
     projectId: string,
@@ -174,6 +199,11 @@ export type AivoraDesktopApi = {
   deleteProviderConfig: (providerId: string) => Promise<{ ok: boolean }>;
   updateModelRouting: (routing: ModelRouting) => Promise<ModelRouting>;
   testProviderConnection: (providerId: string) => Promise<ProviderTestResult>;
+  fetchProviderModels: (providerId: string) => Promise<FetchModelsResult>;
+  updateOAuthModels: (input: {
+    providerId: OAuthProviderId;
+    models: string[];
+  }) => Promise<ModelCenterSnapshot>;
   oauthStartLogin: (providerId: OAuthProviderId) => Promise<OAuthLoginResult>;
   oauthDisconnect: (providerId: OAuthProviderId) => Promise<{ ok: boolean; message: string }>;
 
@@ -253,6 +283,9 @@ export const IPC_CHANNELS = {
   SELECT_TAKE: "aivora:takes:select",
   ADD_SYNTHETIC_TAKE: "aivora:takes:add-synthetic",
   IMPORT_SHOT_TAKE: "aivora:takes:import-file",
+  EXPORT_EXTERNAL_PACK: "aivora:external:export-pack",
+  SCAN_EXTERNAL_DROP: "aivora:external:scan-drop",
+  COMMIT_EXTERNAL_DROP: "aivora:external:commit-drop",
   IMPORT_PROJECT_BGM: "aivora:bgm:import",
   CLEAR_PROJECT_BGM: "aivora:bgm:clear",
   CHECK_FFMPEG_STATUS: "aivora:media:ffmpeg-status",
@@ -269,6 +302,8 @@ export const IPC_CHANNELS = {
   DELETE_PROVIDER_CONFIG: "aivora:models:delete-provider",
   UPDATE_MODEL_ROUTING: "aivora:models:update-routing",
   TEST_PROVIDER: "aivora:models:test-provider",
+  FETCH_PROVIDER_MODELS: "aivora:models:fetch-models",
+  UPDATE_OAUTH_MODELS: "aivora:oauth:update-models",
   OAUTH_START_LOGIN: "aivora:oauth:start",
   OAUTH_DISCONNECT: "aivora:oauth:disconnect",
   DIRECTOR_PROPOSE: "aivora:director:propose",
