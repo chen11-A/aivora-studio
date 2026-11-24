@@ -330,6 +330,7 @@ jobs:
           EOF
 
           gh release create "$TAG" \
+            -R "$GITHUB_REPOSITORY" \
             "dist-release/$WIN_NAME" \
             "dist-release/$APPIMAGE_NAME" \
             "dist-release/$DEB_NAME" \
