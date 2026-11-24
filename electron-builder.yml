@@ -23,6 +23,23 @@ nsis:
   shortcutName: AIVORA Studio
   deleteAppDataOnUninstall: false
   unicode: true
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  category: AudioVideo
+  icon: build/icon.png
+  executableName: aivora-studio
+  artifactName: AIVORA-Studio-${version}-linux-${arch}.${ext}
+  desktop:
+    entry:
+      Name: AIVORA Studio
+      Comment: AI-native motion comic & short-drama workbench
+      Categories: AudioVideo;Video;
 extraResources:
   - from: resources
     to: .

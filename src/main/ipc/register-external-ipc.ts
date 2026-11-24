@@ -1,7 +1,6 @@
 import { app, dialog, ipcMain, shell, type BrowserWindow } from "electron";
 import path from "node:path";
 import { IPC_CHANNELS } from "../../shared/ipc-contract";
-import type { ColabManagedConfig } from "../../shared/types/colab";
 import type { ExternalDropCommitInput } from "../../shared/types/external-pack";
 import type { OAuthProviderId } from "../../shared/types/provider";
 import { DownloadFolderWatcher, getDefaultDownloadsDir } from "../media/download-watcher";
@@ -10,7 +9,7 @@ import {
   exportExternalShotPack,
   scanExternalDropFolder,
 } from "../media/external-pack";
-import type { ColabManagedRuntimeManager } from "../providers/colab-runtime-manager";
+import { runGeminiMusicGeneration } from "../providers/gemini-official-adapter";
 import { fetchRemoteProviderModels } from "../providers/openai-compat-adapter";
 import type { GlobalConfigStore } from "../storage/global-store";
 import type { ProjectStore } from "../storage/project-store";
@@ -25,7 +24,6 @@ const ALLOWED_EXTERNAL_HOSTS = new Set([
 export type ExternalIpcDeps = {
   projects: ProjectStore;
   globalConfig: GlobalConfigStore;
-  colabManager: ColabManagedRuntimeManager;
   getWindow: () => BrowserWindow | null;
   allowedRevealPaths: Set<string>;
 };
@@ -233,14 +231,49 @@ export function registerExternalAndModelExtraIpc(deps: ExternalIpcDeps): void {
     commitExternalDropImport(deps.projects, input),
   );
 
-  handle(IPC_CHANNELS.GET_COLAB_MANAGED_STATE, () => ({
-    config: deps.colabManager.getConfig(),
-    status: deps.colabManager.getStatus(),
-  }));
-
-  handle(IPC_CHANNELS.UPDATE_COLAB_MANAGED_CONFIG, (patch: Partial<ColabManagedConfig>) =>
-    deps.colabManager.updateConfig(patch),
+  handle(
+    IPC_CHANNELS.GENERATE_PROJECT_BGM,
+    async (input: { projectId: string; prompt: string }) => {
+      const snap = deps.globalConfig.getSnapshot();
+      const gemini = snap.providers.find(
+        (p) => p.protocol === "gemini-official" && p.enabled && p.hasSecret,
+      );
+      if (!gemini) {
+        return {
+          ok: false,
+          message: "请先在「模型中心」保存一个 Google Gemini 官方全家桶 API Key，即可一键生成 Lyria 背景配乐。",
+        };
+      }
+      const creds = deps.globalConfig.getProviderCredentials(gemini.id);
+      if (!creds?.apiKey) {
+        return { ok: false, message: "Gemini API Key 不可用，请在模型中心重新保存。" };
+      }
+      const projectDir = deps.projects.resolveProjectDir(input.projectId);
+      if (!projectDir) return { ok: false, message: "作品目录不存在" };
+      const musicModel = gemini.models.find((m) => /lyria/i.test(m)) ?? "lyria-3.5";
+      try {
+        const media = await runGeminiMusicGeneration({
+          baseUrl: creds.view.baseUrl,
+          apiKey: creds.apiKey,
+          modelId: musicModel,
+          prompt: input.prompt.trim() || "warm cinematic background music, gentle piano and strings",
+          projectDir,
+        });
+        const workspace = deps.projects.importProjectBgmFromPath(
+          input.projectId,
+          path.join(projectDir, media.mediaPath),
+        );
+        return {
+          ok: true,
+          workspace,
+          message: `已通过 ${musicModel} 生成专属配乐并自动绑定至背景配乐轨`,
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          message: err instanceof Error ? err.message : "AI 生成配乐失败",
+        };
+      }
+    },
   );
-
-  handle(IPC_CHANNELS.STOP_COLAB_RUNTIME, () => deps.colabManager.stopRuntime());
 }

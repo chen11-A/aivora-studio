@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef } from "react";
-import { AlertTriangle, CheckCircle2, Monitor, Music, Pause, Play, RotateCcw, Scissors, Smartphone, Subtitles, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Monitor, Pause, Play, RotateCcw, Scissors, Smartphone, Subtitles } from "lucide-react";
 import { evaluateEpisodeExportReadiness, isVideoMediaPath, resolveActiveVisualTake, resolveSelectedSpeechTake, resolveShotTrimWindow } from "@shared/media-selection";
 import type { SubtitleStyle } from "@shared/types/domain";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useStudioStore } from "../../store/useStudioStore";
+import { BgmTrackControls } from "./BgmTrackControls";
 import { EditorTimeline } from "./EditorTimeline";
 import { ExportModal } from "./ExportModal";
 import { useTimelinePlayback } from "./useTimelinePlayback";
@@ -420,39 +421,19 @@ export function EditorStage() {
               </div>
             </div>
 
-            <div
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                e.preventDefault();
-                const file = e.dataTransfer.files?.[0];
-                const filePath = file ? client.resolveDroppedFilePath?.(file) : null;
-                if (filePath) void importProjectBgm(filePath);
-              }}
-              className="flex flex-col gap-1.5"
-            >
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="text-[#a4aec0] flex items-center gap-1.5">
-                  <Music className="w-3.5 h-3.5 text-[#38bdf8]" />
-                  <span>背景配乐（对白平滑压低 8 dB）</span>
-                </span>
-                <span className="font-mono text-[#f3f5f9]">{workspace.project.bgmVolumeDb} dB</span>
-              </div>
-              <div className="flex items-center justify-between gap-2 rounded-md bg-[#0f1218] border border-[#252b37] px-2.5 py-1.5 text-[11px]">
-                <span className="text-[#cbd5e1] truncate">{bgmAsset ? bgmAsset.name : "未导入（支持拖入音频）"}</span>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button type="button" onClick={() => void importProjectBgm()} className="text-[#60a5fa] hover:underline flex items-center gap-0.5 cursor-pointer">
-                    <Upload className="w-3 h-3" />
-                    <span>{bgmAsset ? "更换" : "导入"}</span>
-                  </button>
-                  {bgmAsset && (
-                    <button type="button" onClick={() => void clearProjectBgm()} className="text-[#f87171] hover:underline cursor-pointer" title="移除背景音乐">
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-              </div>
-              <input type="range" min={-30} max={0} step={1} value={workspace.project.bgmVolumeDb} onChange={(e) => void updateProjectSettings({ bgmVolumeDb: Number(e.target.value) })} className="w-full accent-[#3b82f6]" />
-            </div>
+            <BgmTrackControls
+              projectId={workspace.project.id}
+              projectName={workspace.project.name}
+              stylePreset={workspace.project.stylePreset}
+              episodeTitle={
+                workspace.episodes.find((e) => e.id === activeEpisodeId)?.title ?? "第 1 集"
+              }
+              bgmAsset={bgmAsset}
+              bgmVolumeDb={workspace.project.bgmVolumeDb}
+              onImportBgm={(fp) => void importProjectBgm(fp)}
+              onClearBgm={() => void clearProjectBgm()}
+              onVolumeChange={(db) => void updateProjectSettings({ bgmVolumeDb: db })}
+            />
 
             <label className="flex items-start gap-2.5 p-2.5 rounded-lg bg-[#0f1218] border border-[#252b37] cursor-pointer">
               <input

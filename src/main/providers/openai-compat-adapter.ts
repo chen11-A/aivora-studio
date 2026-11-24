@@ -6,6 +6,10 @@ import type { FetchModelsResult } from "../../shared/ipc-contract";
 import type { ProviderTestResult } from "../../shared/types/jobs";
 import type { CustomProviderProtocol } from "../../shared/types/provider";
 import { probeComfyWorkerHealth, testComfyWorkerConnectivity } from "./comfy-worker-adapter";
+import {
+  fetchGeminiOfficialModels,
+  testGeminiOfficialConnection,
+} from "./gemini-official-adapter";
 import { signKlingJwt } from "./kling-adapter";
 import { normalizeSeedanceBaseUrl, testSeedanceConnectivity } from "./seedance-adapter";
 
@@ -33,6 +37,13 @@ export async function testProviderConnectivity(
 ): Promise<ProviderTestResult> {
   const started = Date.now();
   try {
+    if (input.protocol === "gemini-official") {
+      return await testGeminiOfficialConnection(
+        { providerId: input.providerId, baseUrl: input.baseUrl, apiKey: input.apiKey },
+        fetcher,
+      );
+    }
+
     if (input.protocol === "comfy-worker") {
       return await testComfyWorkerConnectivity(
         { providerId: input.providerId, baseUrl: input.baseUrl, apiKey: input.apiKey },
@@ -127,6 +138,13 @@ export async function fetchRemoteProviderModels(
   fetcher: typeof fetch = fetch,
 ): Promise<FetchModelsResult> {
   try {
+    if (input.protocol === "gemini-official") {
+      return await fetchGeminiOfficialModels(
+        { baseUrl: input.baseUrl, apiKey: input.apiKey },
+        fetcher,
+      );
+    }
+
     if (input.protocol === "comfy-worker") {
       const health = await probeComfyWorkerHealth(
         { baseUrl: input.baseUrl, apiKey: input.apiKey },

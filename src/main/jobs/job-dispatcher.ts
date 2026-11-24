@@ -5,7 +5,6 @@ import {
 } from "../../shared/media-selection";
 import type { ProjectWorkspace, Shot } from "../../shared/types/domain";
 import type { GenerationPlan } from "../../shared/types/jobs";
-import type { ColabManagedRuntimeManager } from "../providers/colab-runtime-manager";
 import {
   downloadVerifiedComfyVideo,
   pollAndDownloadComfyWorkerVideo,
@@ -13,6 +12,14 @@ import {
   runComfyWorkerImage,
   submitComfyWorkerVideo,
 } from "../providers/comfy-worker-adapter";
+import {
+  downloadVerifiedGeminiVideo,
+  pollAndDownloadGeminiVideo,
+  queryGeminiVideoTask,
+  runGeminiImageGeneration,
+  runGeminiSpeechSynthesis,
+  submitGeminiVideoTask,
+} from "../providers/gemini-official-adapter";
 import {
   pollAndDownloadGrokVideo,
   queryGrokVideoTask,
@@ -46,11 +53,7 @@ export type ResolvedCredentials = {
 };
 
 export type DispatchedJobOutcome =
-  | {
-      target: "asset-portrait";
-      media: { mediaPath: string; mediaSha256: string };
-      message: string;
-    }
+  | { target: "asset-portrait"; media: { mediaPath: string; mediaSha256: string }; message: string }
   | {
       target: "shot-take";
       kind: "image" | "video" | "speech";
@@ -68,59 +71,30 @@ export async function dispatchGenerationJob(ctx: {
   fetcher: typeof fetch;
   pollIntervalMs: number;
   maxPollRounds: number;
-  colabManager?: ColabManagedRuntimeManager;
   onUpdateJob: (patch: {
     remoteTaskId?: string;
     providerSnapshot?: string;
     progress?: number;
   }) => void;
 }): Promise<DispatchedJobOutcome> {
-  const {
-    plan,
-    ws,
-    shot,
-    snapshot,
-    creds,
-    fetcher,
-    pollIntervalMs,
-    maxPollRounds,
-    colabManager,
-    onUpdateJob,
-  } = ctx;
+  const { plan, ws, shot, snapshot, creds, fetcher, pollIntervalMs, maxPollRounds, onUpdateJob } = ctx;
 
   // 1. Asset portrait candidate generation
   if (plan.assetId && plan.kind === "image") {
+    const baseInput = {
+      baseUrl: creds.trustedBaseUrl,
+      apiKey: creds.apiKey,
+      modelId: snapshot.modelId,
+      prompt: plan.promptPreview,
+      aspectRatio: ws.project.aspectRatio,
+      projectDir: ws.dirPath,
+    };
     const media =
-      snapshot.protocol === "oauth-colab" && colabManager
-        ? await colabManager.generateImage({
-            modelId: snapshot.modelId,
-            prompt: plan.promptPreview,
-            aspectRatio: ws.project.aspectRatio,
-            projectDir: ws.dirPath,
-          })
+      snapshot.protocol === "gemini-official"
+        ? await runGeminiImageGeneration(baseInput, fetcher)
         : snapshot.protocol === "comfy-worker"
-          ? await runComfyWorkerImage(
-              {
-                baseUrl: creds.trustedBaseUrl,
-                apiKey: creds.apiKey,
-                modelId: snapshot.modelId,
-                prompt: plan.promptPreview,
-                aspectRatio: ws.project.aspectRatio,
-                projectDir: ws.dirPath,
-              },
-              fetcher,
-            )
-          : await runOpenAiImageGeneration(
-              {
-                baseUrl: creds.trustedBaseUrl,
-                apiKey: creds.apiKey,
-                modelId: snapshot.modelId,
-                prompt: plan.promptPreview,
-                aspectRatio: ws.project.aspectRatio,
-                projectDir: ws.dirPath,
-              },
-              fetcher,
-            );
+          ? await runComfyWorkerImage(baseInput, fetcher)
+          : await runOpenAiImageGeneration(baseInput, fetcher);
     return {
       target: "asset-portrait",
       media,
@@ -149,16 +123,8 @@ export async function dispatchGenerationJob(ctx: {
       },
       fetcher,
     );
-    const updatedSnap: LockedProviderSnapshot = {
-      ...snapshot,
-      baseUrl: creds.trustedBaseUrl,
-      klingMode: submitted.mode,
-    };
-    onUpdateJob({
-      remoteTaskId: submitted.taskId,
-      providerSnapshot: JSON.stringify(updatedSnap),
-      progress: 35,
-    });
+    const updatedSnap: LockedProviderSnapshot = { ...snapshot, baseUrl: creds.trustedBaseUrl, klingMode: submitted.mode };
+    onUpdateJob({ remoteTaskId: submitted.taskId, providerSnapshot: JSON.stringify(updatedSnap), progress: 35 });
     const media = await pollAndDownloadKlingVideo(
       {
         baseUrl: creds.trustedBaseUrl,
@@ -207,15 +173,43 @@ export async function dispatchGenerationJob(ctx: {
       },
       fetcher,
     );
-    return {
-      target: "shot-take",
-      kind: "video",
-      media,
-      message: "即梦 Seedance 视频生成成功并已自动拉回本地保存",
-    };
+    return { target: "shot-take", kind: "video", media, message: "即梦 Seedance 视频生成成功并已自动拉回本地保存" };
   }
 
-  // 4. Google Colab / Local ComfyUI Worker async video
+  // 4. Google Gemini Official async video (Interactions API)
+  if (plan.kind === "video" && snapshot.protocol === "gemini-official") {
+    const firstFrame = resolveConfirmedFirstFrameTake(shot, ws.takes);
+    const prepared = injectLockedReferences(ws, ws.dirPath, shot, firstFrame?.mediaPath ?? null);
+    const refImg = await prepareReferenceImageForUpload(prepared.primaryReferenceImagePath);
+    const submitted = await submitGeminiVideoTask(
+      {
+        baseUrl: creds.trustedBaseUrl,
+        apiKey: creds.apiKey,
+        modelId: snapshot.modelId,
+        prompt: prepared.finalPrompt,
+        aspectRatio: ws.project.aspectRatio,
+        imageBase64: refImg?.base64 ?? null,
+        imageMime: refImg?.mime ?? "image/jpeg",
+      },
+      fetcher,
+    );
+    onUpdateJob({ remoteTaskId: submitted.taskId, progress: 35 });
+    const media = await pollAndDownloadGeminiVideo(
+      {
+        baseUrl: creds.trustedBaseUrl,
+        apiKey: creds.apiKey,
+        taskId: submitted.taskId,
+        projectDir: ws.dirPath,
+        pollIntervalMs,
+        maxPollRounds,
+        onProgress: (progress) => onUpdateJob({ progress }),
+      },
+      fetcher,
+    );
+    return { target: "shot-take", kind: "video", media, message: "Google Gemini 视频生成成功并已自动拉回本地保存" };
+  }
+
+  // 5. Google Colab / Local ComfyUI Worker async video
   if (plan.kind === "video" && snapshot.protocol === "comfy-worker") {
     const firstFrame = resolveConfirmedFirstFrameTake(shot, ws.takes);
     const prepared = injectLockedReferences(ws, ws.dirPath, shot, firstFrame?.mediaPath ?? null);
@@ -246,15 +240,10 @@ export async function dispatchGenerationJob(ctx: {
       },
       fetcher,
     );
-    return {
-      target: "shot-take",
-      kind: "video",
-      media,
-      message: "ComfyUI 算力视频生成成功并已自动拉回本地保存",
-    };
+    return { target: "shot-take", kind: "video", media, message: "ComfyUI 算力视频生成成功并已自动拉回本地保存" };
   }
 
-  // 5. Grok OAuth async video
+  // 6. Grok OAuth async video
   if (plan.kind === "video" && snapshot.protocol === "oauth-grok") {
     const firstFrame = resolveConfirmedFirstFrameTake(shot, ws.takes);
     const prepared = injectLockedReferences(ws, ws.dirPath, shot, firstFrame?.mediaPath ?? null);
@@ -284,51 +273,28 @@ export async function dispatchGenerationJob(ctx: {
       },
       fetcher,
     );
-    return {
-      target: "shot-take",
-      kind: "video",
-      media,
-      message: "Grok 视频生成成功并已自动拉回本地保存",
-    };
+    return { target: "shot-take", kind: "video", media, message: "Grok 视频生成成功并已自动拉回本地保存" };
   }
 
-  // 5b. Google Colab official managed GPU video (pure TS OAuth + Jupyter WebSocket)
-  if (plan.kind === "video" && snapshot.protocol === "oauth-colab") {
-    if (!colabManager) throw new Error("Colab 托管运行时未初始化");
-    const firstFrame = resolveConfirmedFirstFrameTake(shot, ws.takes);
-    const prepared = injectLockedReferences(ws, ws.dirPath, shot, firstFrame?.mediaPath ?? null);
-    const refImg = await prepareReferenceImageForUpload(prepared.primaryReferenceImagePath);
-    const media = await colabManager.generateVideo({
-      modelId: snapshot.modelId,
-      prompt: prepared.finalPrompt,
-      negativePrompt: shot.negativePrompt,
-      durationSec: shot.durationSec,
-      aspectRatio: ws.project.aspectRatio,
-      imageBase64: refImg?.base64 ?? null,
-      projectDir: ws.dirPath,
-      onSubmitted: (taskId) => onUpdateJob({ remoteTaskId: taskId, progress: 30 }),
-      onProgress: (progress) => onUpdateJob({ progress }),
-    });
-    return {
-      target: "shot-take",
-      kind: "video",
-      media,
-      message: "Google Colab 托管 GPU 视频生成成功并已自动拉回本地保存",
-    };
-  }
-
-  // 6. Shot first-frame image generation (OpenAI-compat, ComfyUI Worker, or Colab Managed GPU)
+  // 7. Shot first-frame image generation (Gemini Official, ComfyUI Worker, or OpenAI-compat)
   if (plan.kind === "image") {
     const prepared = injectLockedReferences(ws, ws.dirPath, shot, null);
     const refImg = await prepareReferenceImageForUpload(prepared.primaryReferenceImagePath);
     const media =
-      snapshot.protocol === "oauth-colab" && colabManager
-        ? await colabManager.generateImage({
-            modelId: snapshot.modelId,
-            prompt: plan.promptPreview,
-            aspectRatio: ws.project.aspectRatio,
-            projectDir: ws.dirPath,
-          })
+      snapshot.protocol === "gemini-official"
+        ? await runGeminiImageGeneration(
+            {
+              baseUrl: creds.trustedBaseUrl,
+              apiKey: creds.apiKey,
+              modelId: snapshot.modelId,
+              prompt: plan.promptPreview,
+              aspectRatio: ws.project.aspectRatio,
+              projectDir: ws.dirPath,
+              referenceImageBase64: refImg?.base64 ?? null,
+              referenceImageMime: refImg?.mime ?? "image/jpeg",
+            },
+            fetcher,
+          )
         : snapshot.protocol === "comfy-worker"
           ? await runComfyWorkerImage(
               {
@@ -358,20 +324,21 @@ export async function dispatchGenerationJob(ctx: {
     return { target: "shot-take", kind: "image", media, message: "首帧图生成成功，已新增版本并选中" };
   }
 
-  // 7. Speech TTS synthesis
+  // 8. Speech TTS synthesis (Gemini Official or OpenAI-compat)
   if (plan.kind === "speech") {
     const voice = resolveShotSpeechVoiceId(shot, ws.assets);
-    const media = await runOpenAiSpeechSynthesis(
-      {
-        baseUrl: creds.trustedBaseUrl,
-        apiKey: creds.apiKey,
-        modelId: snapshot.modelId,
-        text: plan.promptPreview,
-        voice,
-        projectDir: ws.dirPath,
-      },
-      fetcher,
-    );
+    const ttsInput = {
+      baseUrl: creds.trustedBaseUrl,
+      apiKey: creds.apiKey,
+      modelId: snapshot.modelId,
+      text: plan.promptPreview,
+      voice,
+      projectDir: ws.dirPath,
+    };
+    const media =
+      snapshot.protocol === "gemini-official"
+        ? await runGeminiSpeechSynthesis(ttsInput, fetcher)
+        : await runOpenAiSpeechSynthesis(ttsInput, fetcher);
     return {
       target: "shot-take",
       kind: "speech",
@@ -387,7 +354,8 @@ export async function dispatchGenerationJob(ctx: {
 export type RecoveredVideoQuery = {
   status: "succeed" | "failed" | "pending";
   downloadUrl: string | null;
-  requiresBearerDownload: boolean;
+  inlineBase64?: string | null;
+  downloadAuth: "none" | "bearer" | "gemini";
   errorMessage: string | null;
   rawStatusLabel: string;
 };
@@ -396,9 +364,9 @@ export function supportsAsyncRecovery(protocol: LockedProviderSnapshot["protocol
   return (
     protocol === "kling-video" ||
     protocol === "seedance-video" ||
+    protocol === "gemini-official" ||
     protocol === "comfy-worker" ||
-    protocol === "oauth-grok" ||
-    protocol === "oauth-colab"
+    protocol === "oauth-grok"
   );
 }
 
@@ -410,60 +378,25 @@ export async function queryRecoverableVideoTask(
 ): Promise<RecoveredVideoQuery> {
   if (snapshot.protocol === "kling-video") {
     const res = await queryKlingVideoTask(
-      {
-        baseUrl: creds.trustedBaseUrl,
-        accessKey: creds.apiKey,
-        secretKey: creds.secondaryKey ?? "",
-        taskId,
-        mode: snapshot.klingMode ?? "text2video",
-      },
+      { baseUrl: creds.trustedBaseUrl, accessKey: creds.apiKey, secretKey: creds.secondaryKey ?? "", taskId, mode: snapshot.klingMode ?? "text2video" },
       fetcher,
     );
-    return {
-      status: res.status === "succeed" ? "succeed" : res.status === "failed" ? "failed" : "pending",
-      downloadUrl: res.videoUrl,
-      requiresBearerDownload: false,
-      errorMessage: res.errorMessage,
-      rawStatusLabel: res.status,
-    };
+    return { status: res.status === "succeed" ? "succeed" : res.status === "failed" ? "failed" : "pending", downloadUrl: res.videoUrl, downloadAuth: "none", errorMessage: res.errorMessage, rawStatusLabel: res.status };
   }
   if (snapshot.protocol === "seedance-video") {
-    const res = await querySeedanceVideoTask(
-      { baseUrl: creds.trustedBaseUrl, apiKey: creds.apiKey, taskId },
-      fetcher,
-    );
-    return {
-      status: res.status === "succeeded" ? "succeed" : res.status === "failed" ? "failed" : "pending",
-      downloadUrl: res.videoUrl,
-      requiresBearerDownload: false,
-      errorMessage: res.errorMessage,
-      rawStatusLabel: res.status,
-    };
+    const res = await querySeedanceVideoTask({ baseUrl: creds.trustedBaseUrl, apiKey: creds.apiKey, taskId }, fetcher);
+    return { status: res.status === "succeeded" ? "succeed" : res.status === "failed" ? "failed" : "pending", downloadUrl: res.videoUrl, downloadAuth: "none", errorMessage: res.errorMessage, rawStatusLabel: res.status };
+  }
+  if (snapshot.protocol === "gemini-official") {
+    const res = await queryGeminiVideoTask({ baseUrl: creds.trustedBaseUrl, apiKey: creds.apiKey, taskId }, fetcher);
+    return { status: res.status === "succeeded" ? "succeed" : res.status === "failed" ? "failed" : "pending", downloadUrl: res.videoUri, inlineBase64: res.videoBase64, downloadAuth: "gemini", errorMessage: res.errorMessage, rawStatusLabel: res.rawStatus };
   }
   if (snapshot.protocol === "comfy-worker") {
-    const res = await queryComfyWorkerVideo(
-      { baseUrl: creds.trustedBaseUrl, apiKey: creds.apiKey, taskId },
-      fetcher,
-    );
-    return {
-      status: res.status === "succeeded" ? "succeed" : res.status === "failed" ? "failed" : "pending",
-      downloadUrl: res.downloadUrl,
-      requiresBearerDownload: true,
-      errorMessage: res.errorMessage,
-      rawStatusLabel: res.status,
-    };
+    const res = await queryComfyWorkerVideo({ baseUrl: creds.trustedBaseUrl, apiKey: creds.apiKey, taskId }, fetcher);
+    return { status: res.status === "succeeded" ? "succeed" : res.status === "failed" ? "failed" : "pending", downloadUrl: res.downloadUrl, downloadAuth: "bearer", errorMessage: res.errorMessage, rawStatusLabel: res.status };
   }
-  const res = await queryGrokVideoTask(
-    { baseUrl: creds.trustedBaseUrl, accessToken: creds.apiKey, taskId },
-    fetcher,
-  );
-  return {
-    status: res.status === "succeed" ? "succeed" : res.status === "failed" ? "failed" : "pending",
-    downloadUrl: res.videoUrl,
-    requiresBearerDownload: false,
-    errorMessage: res.errorMessage,
-    rawStatusLabel: res.status,
-  };
+  const res = await queryGrokVideoTask({ baseUrl: creds.trustedBaseUrl, accessToken: creds.apiKey, taskId }, fetcher);
+  return { status: res.status === "succeed" ? "succeed" : res.status === "failed" ? "failed" : "pending", downloadUrl: res.videoUrl, downloadAuth: "none", errorMessage: res.errorMessage, rawStatusLabel: res.status };
 }
 
 export async function downloadRecoveredVideo(
@@ -472,12 +405,15 @@ export async function downloadRecoveredVideo(
   projectDir: string,
   fetcher: typeof fetch,
 ): Promise<{ mediaPath: string; mediaSha256: string }> {
-  if (!query.downloadUrl) throw new Error("远端未提供可下载的视频地址");
-  if (query.requiresBearerDownload) {
-    return downloadVerifiedComfyVideo(
-      { downloadUrl: query.downloadUrl, apiKey: creds.apiKey, projectDir },
+  if (query.downloadAuth === "gemini") {
+    return downloadVerifiedGeminiVideo(
+      { apiKey: creds.apiKey, videoUri: query.downloadUrl, videoBase64: query.inlineBase64 ?? null, projectDir },
       fetcher,
     );
+  }
+  if (!query.downloadUrl) throw new Error("远端未提供可下载的视频地址");
+  if (query.downloadAuth === "bearer") {
+    return downloadVerifiedComfyVideo({ downloadUrl: query.downloadUrl, apiKey: creds.apiKey, projectDir }, fetcher);
   }
   return downloadVerifiedKlingMp4({ videoUrl: query.downloadUrl, projectDir }, fetcher);
 }

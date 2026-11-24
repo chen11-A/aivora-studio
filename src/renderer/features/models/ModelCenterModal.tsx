@@ -13,6 +13,7 @@ import {
   RefreshCw,
   ShieldCheck,
   Trash2,
+  Wand2,
   X,
 } from "lucide-react";
 import type {
@@ -25,7 +26,6 @@ import type {
 } from "@shared/types/provider";
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
-import { ColabManagedPanel } from "./ColabManagedPanel";
 import { ProviderEditorForm } from "./ProviderEditorForm";
 
 const CAPABILITIES: Array<{ key: CapabilityKey; label: string }> = [
@@ -34,6 +34,18 @@ const CAPABILITIES: Array<{ key: CapabilityKey; label: string }> = [
   { key: "video", label: "生成视频" },
   { key: "tts", label: "人物配音" },
 ];
+
+function matchesGeminiCapability(cap: CapabilityKey, modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  if (/lyria|music|transcribe|embed/.test(lower)) return false;
+  const isImage = /image|banana|imagen/.test(lower);
+  const isVideo = /omni|veo|video/.test(lower);
+  const isTts = /tts/.test(lower);
+  if (cap === "image") return isImage;
+  if (cap === "video") return isVideo;
+  if (cap === "tts") return isTts;
+  return !isImage && !isVideo && !isTts;
+}
 
 export function ModelCenterModal() {
   const open = useStudioStore((s) => s.modelCenterOpen);
@@ -60,11 +72,6 @@ export function ModelCenterModal() {
 
   function supportsOAuthModel(cap: CapabilityKey, providerId: string, modelId: string): boolean {
     const lower = modelId.toLowerCase();
-    if (providerId === "colab-google") {
-      if (cap === "image") return /flux|image|sd/.test(lower);
-      if (cap === "video") return /wan|ltx|video|i2v|t2v/.test(lower);
-      return false;
-    }
     const isVideo = /video|sora/.test(lower);
     const isImage = /image|dall|flux/.test(lower);
     if (cap === "script") return !isVideo && !isImage;
@@ -73,7 +80,12 @@ export function ModelCenterModal() {
     return false;
   }
 
-  function supportsProviderProtocol(cap: CapabilityKey, proto: CustomProviderProtocol): boolean {
+  function supportsProviderModel(
+    cap: CapabilityKey,
+    proto: CustomProviderProtocol,
+    modelId: string,
+  ): boolean {
+    if (proto === "gemini-official") return matchesGeminiCapability(cap, modelId);
     if (cap === "script") return proto === "openai-chat";
     if (cap === "image") return proto === "openai-image" || proto === "comfy-worker";
     if (cap === "video") {
@@ -95,8 +107,8 @@ export function ModelCenterModal() {
       }
     }
     for (const p of snapshot.providers) {
-      if (!supportsProviderProtocol(cap, p.protocol)) continue;
       for (const m of p.models) {
+        if (!supportsProviderModel(cap, p.protocol, m)) continue;
         opts.push({
           value: `provider:${p.id}:${m}`,
           label: `${p.name} · ${m}`,
@@ -112,6 +124,19 @@ export function ModelCenterModal() {
     const matched = routeOptionsFor(cap).find((o) => o.value === value);
     next[cap] = matched ? matched.binding : null;
     void updateRouting(next);
+  }
+
+  function applyGeminiAllStages(provider: ProviderConfigView) {
+    const pick = (cap: CapabilityKey): RouteBinding | null => {
+      const m = provider.models.find((id) => matchesGeminiCapability(cap, id));
+      return m ? { source: "provider", sourceId: provider.id, modelId: m } : snapshot!.routing[cap];
+    };
+    void updateRouting({
+      script: pick("script"),
+      image: pick("image"),
+      video: pick("video"),
+      tts: pick("tts"),
+    });
   }
 
   async function handleSaveOAuthModels(providerId: OAuthProviderId) {
@@ -143,7 +168,7 @@ export function ModelCenterModal() {
               }`}
             >
               <ShieldCheck className="w-3 h-3" />
-              {snapshot.vaultAvailable ? "系统加密库可用（DPAPI）" : "加密库不可用（拒绝明文）"}
+              {snapshot.vaultAvailable ? "系统加密库可用（DPAPI / Keyring）" : "加密库不可用（拒绝明文）"}
             </span>
           </div>
           <button
@@ -168,13 +193,10 @@ export function ModelCenterModal() {
                 const connected = acc.status === "connected";
                 const busy = oauthBusyId === acc.providerId;
                 const isEditingModels = editingOAuthId === acc.providerId;
-                const isColab = acc.providerId === "colab-google";
                 return (
                   <div
                     key={acc.providerId}
-                    className={`rounded-lg bg-[#0f1218] border border-[#252b37] p-3.5 flex flex-col gap-2 ${
-                      isColab ? "md:col-span-2" : ""
-                    }`}
+                    className="rounded-lg bg-[#0f1218] border border-[#252b37] p-3.5 flex flex-col gap-2"
                   >
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -255,18 +277,17 @@ export function ModelCenterModal() {
                         </button>
                       </div>
                     )}
-                    {isColab && <ColabManagedPanel connected={connected} />}
                   </div>
                 );
               })}
             </div>
           </section>
 
-          {/* Official, Colab/ComfyUI & Custom API Providers */}
+          {/* Official, ComfyUI & Custom API Providers */}
           <section className="flex flex-col gap-3">
             <div className="text-[12px] font-semibold text-[#a4aec0] flex items-center gap-1.5">
               <KeyRound className="w-3.5 h-3.5 text-[#f59e0b]" />
-              <span>官方 API、Colab / ComfyUI 算力与自定义厂家（支持编辑与一键拉取模型）</span>
+              <span>官方 API、ComfyUI 算力与自定义厂家（推荐 Google Gemini 全家桶 1 个 Key 全搞定）</span>
             </div>
 
             <ProviderEditorForm
@@ -310,6 +331,17 @@ export function ModelCenterModal() {
                         )}
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
+                        {p.protocol === "gemini-official" && (
+                          <button
+                            type="button"
+                            onClick={() => applyGeminiAllStages(p)}
+                            className="h-8 px-2.5 rounded bg-[#3b82f6]/15 hover:bg-[#3b82f6]/25 border border-[#3b82f6]/40 text-[#93c5fd] text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                            title="一键将剧本/生图/视频/配音四个环节全部套用此 Gemini 全家桶"
+                          >
+                            <Wand2 className="w-3 h-3" />
+                            <span>一键套用</span>
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => setEditingProvider(p)}

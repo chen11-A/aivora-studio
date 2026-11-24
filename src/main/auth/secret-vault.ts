@@ -41,7 +41,7 @@ export function createSecretVault(storage: SafeStorageLike): SecretVault {
       if (!isAvailable()) {
         throw new SecretVaultError(
           "VAULT_UNAVAILABLE",
-          "系统安全凭据库（DPAPI/Keychain）不可用，已拒绝明文保存密钥。",
+          "系统安全凭据库（DPAPI / Keychain / Linux Secret Service）不可用，已拒绝明文保存密钥。",
         );
       }
       return storage.encryptString(plainText).toString("base64");

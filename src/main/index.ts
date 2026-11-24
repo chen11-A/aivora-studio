@@ -11,7 +11,6 @@ import { ExportWriteGuard } from "./media/export-guard";
 import { exportEpisodeToMp4 } from "./media/export-pipeline";
 import { probeFfmpegStatus, terminateAllMediaChildren } from "./media/ffmpeg-locator";
 import { createMediaProtocolHandler } from "./media/media-protocol";
-import { ColabManagedRuntimeManager } from "./providers/colab-runtime-manager";
 import { DirectorService } from "./skills/director-service";
 import { GlobalConfigStore } from "./storage/global-store";
 import { ProjectStore } from "./storage/project-store";
@@ -32,7 +31,6 @@ let mainWindow: BrowserWindow | null = null;
 let projects: ProjectStore | null = null;
 let globalConfig: GlobalConfigStore | null = null;
 let jobQueue: GenerationJobQueue | null = null;
-let colabManager: ColabManagedRuntimeManager | null = null;
 const exportGuard = new ExportWriteGuard();
 
 function flushRendererSavesWithTimeout(
@@ -324,9 +322,8 @@ app.whenReady().then(() => {
   const vault = createSecretVault(safeStorage);
   globalConfig = new GlobalConfigStore(join(app.getPath("userData"), "app-data"), vault);
   const oauth = new OAuthManager(globalConfig, (url) => shell.openExternal(url));
-  colabManager = new ColabManagedRuntimeManager(globalConfig, oauth);
   const director = new DirectorService(projects, globalConfig, oauth);
-  jobQueue = new GenerationJobQueue(projects, globalConfig, oauth, fetch, 5000, 120, colabManager);
+  jobQueue = new GenerationJobQueue(projects, globalConfig, oauth);
   const batchScheduler = new BatchJobScheduler(projects, jobQueue);
 
   protocol.handle(
@@ -339,7 +336,6 @@ app.whenReady().then(() => {
     projects,
     globalConfig,
     oauth,
-    colabManager,
     director,
     jobQueue,
     batchScheduler,
@@ -355,7 +351,6 @@ app.whenReady().then(() => {
 });
 
 app.on("before-quit", () => {
-  void colabManager?.stopRuntime("应用退出，自动释放 Colab GPU 算力");
   exportGuard.cancelActiveExport();
   terminateAllMediaChildren();
 });

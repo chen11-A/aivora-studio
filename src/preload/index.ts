@@ -43,6 +43,7 @@ const api: AivoraDesktopApi = {
   },
   importProjectBgm: (projectId, sourceFilePath) =>
     ipcRenderer.invoke(IPC_CHANNELS.IMPORT_PROJECT_BGM, projectId, sourceFilePath),
+  generateProjectBgm: (input) => ipcRenderer.invoke(IPC_CHANNELS.GENERATE_PROJECT_BGM, input),
   clearProjectBgm: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.CLEAR_PROJECT_BGM, projectId),
   checkFfmpegStatus: () => ipcRenderer.invoke(IPC_CHANNELS.CHECK_FFMPEG_STATUS),
   preflightExportEpisode: (input) =>
@@ -73,10 +74,6 @@ const api: AivoraDesktopApi = {
   updateOAuthModels: (input) => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_OAUTH_MODELS, input),
   oauthStartLogin: (providerId) => ipcRenderer.invoke(IPC_CHANNELS.OAUTH_START_LOGIN, providerId),
   oauthDisconnect: (providerId) => ipcRenderer.invoke(IPC_CHANNELS.OAUTH_DISCONNECT, providerId),
-  getColabManagedState: () => ipcRenderer.invoke(IPC_CHANNELS.GET_COLAB_MANAGED_STATE),
-  updateColabManagedConfig: (patch) =>
-    ipcRenderer.invoke(IPC_CHANNELS.UPDATE_COLAB_MANAGED_CONFIG, patch),
-  stopColabRuntime: () => ipcRenderer.invoke(IPC_CHANNELS.STOP_COLAB_RUNTIME),
   proposeDirectorSplit: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_PROPOSE, input),
   applyDirectorProposal: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_APPLY, input),
   undoDirectorApply: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_UNDO, input),

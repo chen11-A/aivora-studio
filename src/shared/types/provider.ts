@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const OAuthProviderIdSchema = z.enum(["chatgpt-web", "grok-web", "colab-google"]);
+export const OAuthProviderIdSchema = z.enum(["chatgpt-web", "grok-web"]);
 export type OAuthProviderId = z.infer<typeof OAuthProviderIdSchema>;
 
 export const OAuthAccountStatusSchema = z.enum([
@@ -24,6 +24,7 @@ export const OAuthAccountViewSchema = z.object({
 export type OAuthAccountView = z.infer<typeof OAuthAccountViewSchema>;
 
 export const CustomProviderProtocolSchema = z.enum([
+  "gemini-official",
   "openai-chat",
   "openai-image",
   "openai-tts",

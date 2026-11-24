@@ -24,11 +24,6 @@ import type {
   ProviderTestResult,
 } from "./types/jobs";
 import type {
-  ColabManagedConfig,
-  ColabManagedStateResponse,
-  ColabRuntimeStatusView,
-} from "./types/colab";
-import type {
   DownloadWatchState,
   ExternalDownloadEvent,
   ExternalDropCommitInput,
@@ -184,6 +179,10 @@ export type AivoraDesktopApi = {
     projectId: string,
     sourceFilePath?: string,
   ) => Promise<{ ok: boolean; workspace?: ProjectWorkspace; message: string }>;
+  generateProjectBgm: (input: {
+    projectId: string;
+    prompt: string;
+  }) => Promise<{ ok: boolean; workspace?: ProjectWorkspace; message: string }>;
   clearProjectBgm: (projectId: string) => Promise<ProjectWorkspace>;
   checkFfmpegStatus: () => Promise<FfmpegStatus>;
   preflightExportEpisode: (input: {
@@ -222,9 +221,6 @@ export type AivoraDesktopApi = {
   }) => Promise<ModelCenterSnapshot>;
   oauthStartLogin: (providerId: OAuthProviderId) => Promise<OAuthLoginResult>;
   oauthDisconnect: (providerId: OAuthProviderId) => Promise<{ ok: boolean; message: string }>;
-  getColabManagedState: () => Promise<ColabManagedStateResponse>;
-  updateColabManagedConfig: (patch: Partial<ColabManagedConfig>) => Promise<ColabManagedStateResponse>;
-  stopColabRuntime: () => Promise<{ ok: boolean; status: ColabRuntimeStatusView; message: string }>;
 
   // Director skill (proposal-only, persistent undoable)
   proposeDirectorSplit: (input: {
@@ -309,6 +305,7 @@ export const IPC_CHANNELS = {
   CONFIGURE_DOWNLOAD_WATCH: "aivora:external:watch-configure",
   EXTERNAL_DOWNLOAD_EVENT: "aivora:external:download-detected",
   IMPORT_PROJECT_BGM: "aivora:bgm:import",
+  GENERATE_PROJECT_BGM: "aivora:bgm:generate",
   CLEAR_PROJECT_BGM: "aivora:bgm:clear",
   CHECK_FFMPEG_STATUS: "aivora:media:ffmpeg-status",
   PREFLIGHT_EXPORT_EPISODE: "aivora:media:preflight-export",
@@ -329,9 +326,6 @@ export const IPC_CHANNELS = {
   UPDATE_OAUTH_MODELS: "aivora:oauth:update-models",
   OAUTH_START_LOGIN: "aivora:oauth:start",
   OAUTH_DISCONNECT: "aivora:oauth:disconnect",
-  GET_COLAB_MANAGED_STATE: "aivora:colab:state",
-  UPDATE_COLAB_MANAGED_CONFIG: "aivora:colab:update-config",
-  STOP_COLAB_RUNTIME: "aivora:colab:stop",
   DIRECTOR_PROPOSE: "aivora:director:propose",
   DIRECTOR_APPLY: "aivora:director:apply",
   DIRECTOR_UNDO: "aivora:director:undo",

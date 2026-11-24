@@ -17,6 +17,15 @@ export const PROVIDER_PROTOCOLS: Array<{
   hint: string;
 }> = [
   {
+    id: "gemini-official",
+    label: "Google Gemini 官方全家桶（推荐 · 1 个 Key 全搞定）",
+    defaultUrl: "https://generativelanguage.googleapis.com",
+    defaultModels:
+      "gemini-4-hydrogen, gemini-nano-banana-2.1, gemini-omni-1.2-flash, gemini-3.8-flash-tts, lyria-3.5",
+    keyPlaceholder: "Google AI Studio API Key（AIza...）",
+    hint: "1 个 Key 通吃：剧本拆镜 + 垫图生图 + 异步视频 + 人物配音 + Lyria 一键配乐，保存后可「一键套用全流程」",
+  },
+  {
     id: "seedance-video",
     label: "即梦 Seedance 2.0 / 2.5（火山方舟官方 API）",
     defaultUrl: "https://ark.cn-beijing.volces.com",
@@ -34,11 +43,11 @@ export const PROVIDER_PROTOCOLS: Array<{
   },
   {
     id: "comfy-worker",
-    label: "Google Colab / 本地 ComfyUI 算力直连",
+    label: "ComfyUI 算力直连（本地显卡 / AutoDL / Colab）",
     defaultUrl: "https://your-tunnel.trycloudflare.com",
     defaultModels: "flux-schnell, wan2.2-i2v-5b, wan2.2-i2v-14b-gguf, ltx-2.5-distilled",
     keyPlaceholder: "32 位 Bearer Token（Colab / Worker 启动时打印）",
-    hint: "同时支持「生图定妆」与「生成视频」；Colab 重开后点「编辑」粘贴新连接码即可秒换地址",
+    hint: "同时支持「生图定妆」与「生成视频」；重开后点「编辑」粘贴新连接码即可秒换地址",
   },
   {
     id: "openai-chat",
@@ -73,12 +82,12 @@ export function ProviderEditorForm(props: {
 }) {
   const { editingProvider, onCancelEdit, onSave } = props;
   const [name, setName] = useState("");
-  const [protocol, setProtocol] = useState<CustomProviderProtocol>("seedance-video");
-  const [baseUrl, setBaseUrl] = useState("https://ark.cn-beijing.volces.com");
+  const [protocol, setProtocol] = useState<CustomProviderProtocol>("gemini-official");
+  const [baseUrl, setBaseUrl] = useState("https://generativelanguage.googleapis.com");
   const [apiKey, setApiKey] = useState("");
   const [secondaryKey, setSecondaryKey] = useState("");
   const [modelsText, setModelsText] = useState(
-    "doubao-seedance-2-0-260128, doubao-seedance-2-0-fast-260128",
+    "gemini-4-hydrogen, gemini-nano-banana-2.1, gemini-omni-1.2-flash, gemini-3.8-flash-tts, lyria-3.5",
   );
   const [connectCodeInput, setConnectCodeInput] = useState("");
   const [connectNotice, setConnectNotice] = useState<string | null>(null);

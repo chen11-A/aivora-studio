@@ -1,4 +1,4 @@
-name: Windows CI & NSIS Installer Smoke
+name: Dual-Platform CI & Release (Windows + Linux)
 
 on:
   push:
@@ -80,7 +80,7 @@ jobs:
           Write-Host "Installer: $($exe.Name)"
           Write-Host "Size: $([Math]::Round($exe.Length / 1MB, 2)) MB"
           Write-Host "SHA-256: $hash"
-          "$hash  $($exe.Name)" | Out-File -FilePath "release/SHA256SUMS.txt" -Encoding ascii
+          "$hash  $($exe.Name)" | Out-File -FilePath "release/SHA256SUMS-win.txt" -Encoding ascii
           "path=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "name=$($exe.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -112,14 +112,11 @@ jobs:
             }
           }
 
-          # 1. Fresh non-admin HKCU install
           Invoke-NonAdminInstall "AivoraNonAdminInstall1"
           if (-not (Test-Path $installedExe)) {
             throw "非管理员静默安装失败：未在 $installedExe 找到主程序"
           }
-          Write-Host "Installed successfully at: $installedExe"
 
-          # Ensure zero HKLM uninstall entries were created (strictly per-user HKCU)
           $hklmPaths = @(
             "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
             "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
@@ -129,7 +126,6 @@ jobs:
             throw "检测到 HKLM 注册表写入，违反普通用户 HKCU 安装规范"
           }
 
-          # 2. Full smoke: Chinese+space SQLite persistence + ZIP VACUUM INTO roundtrip + bundled FFmpeg MP4 export
           $workspaceDir = Join-Path $env:RUNNER_TEMP "测试 作品 空间"
           $smokeReport = Join-Path $env:RUNNER_TEMP "aivora-smoke-report.json"
           New-Item -ItemType Directory -Path $workspaceDir -Force | Out-Null
@@ -148,9 +144,7 @@ jobs:
           if (-not (Test-Path $report.exportedPath)) {
             throw "未找到导出的中文名 MP4 成片：$($report.exportedPath)"
           }
-          Write-Host "Verified real exported MP4: $($report.exportedPath) ($([Math]::Round((Get-Item $report.exportedPath).Length / 1KB, 1)) KB)"
 
-          # 3. Overwrite / upgrade reinstall on top of existing installation & verify zero data loss
           Invoke-NonAdminInstall "AivoraNonAdminUpgrade2"
           $upgradeReport = Join-Path $env:RUNNER_TEMP "aivora-upgrade-report.json"
           $env:AIVORA_SMOKE_REPORT = $upgradeReport
@@ -158,18 +152,14 @@ jobs:
           $proc2 = Start-Process -FilePath $installedExe -PassThru -Wait
           if ($proc2.ExitCode -ne 0) { throw "覆盖安装后启动校验失败，退出码：$($proc2.ExitCode)" }
           $up = Get-Content -Path $upgradeReport -Raw -Encoding UTF8 | ConvertFrom-Json
-          Write-Host ($up | ConvertTo-Json -Depth 4)
           if (-not $up.ok) { throw "覆盖安装后历史作品读回失败" }
-          Write-Host "Overwrite upgrade preserved user projects cleanly."
 
-          # 4. Silent uninstall and confirm user project workspace is preserved
           if (Test-Path $uninstallExe) {
             Start-Process -FilePath $uninstallExe -ArgumentList "/S" -Wait
           }
           if (-not (Test-Path $report.projectDir)) {
             throw "卸载后用户作品目录被意外删除：$($report.projectDir)"
           }
-          Write-Host "Uninstall preserved user project directory: $($report.projectDir)"
 
       - name: Upload Windows NSIS installer artifact
         uses: actions/upload-artifact@v4
@@ -177,29 +167,170 @@ jobs:
           name: AIVORA-Studio-Setup-win-x64
           path: |
             release/AIVORA-Studio-Setup-*.exe
-            release/SHA256SUMS.txt
+            release/SHA256SUMS-win.txt
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish GitHub Release on version tag
-        if: startsWith(github.ref, 'refs/tags/v')
+  linux-build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "12.21.0"
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: "pnpm"
+
+      - name: Install system packages for Linux Electron smoke
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Fetch and SHA-256 verify pinned Linux static FFmpeg 8.1.3 into resources/media
+        run: |
+          set -euo pipefail
+          URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-23-12-43/ffmpeg-n8.1.3-39-g660b5aa7db-linux64-gpl-8.1.tar.xz"
+          EXPECTED_SHA="255b73431adc3c14f91533b6cf08090c0b1314f6789761140a196f820f6347a2"
+          ARCHIVE="$RUNNER_TEMP/ffmpeg-linux64.tar.xz"
+          EXTRACT_DIR="$RUNNER_TEMP/ffmpeg-linux-extract"
+
+          curl -fL "$URL" -o "$ARCHIVE"
+          ACTUAL_SHA=$(sha256sum "$ARCHIVE" | awk '{print $1}')
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "Linux FFmpeg SHA-256 mismatch: $ACTUAL_SHA != $EXPECTED_SHA"
+            exit 1
+          fi
+
+          mkdir -p "$EXTRACT_DIR" resources/media
+          tar -xf "$ARCHIVE" -C "$EXTRACT_DIR"
+          cp "$EXTRACT_DIR"/*/bin/ffmpeg resources/media/ffmpeg
+          cp "$EXTRACT_DIR"/*/bin/ffprobe resources/media/ffprobe
+          chmod +x resources/media/ffmpeg resources/media/ffprobe
+          ./resources/media/ffmpeg -version | head -n 2
+
+      - name: Typecheck, lint, and unit tests (with real Linux FFmpeg)
+        run: |
+          pnpm typecheck
+          pnpm lint
+          pnpm test
+
+      - name: Build Linux x64 AppImage & deb packages (with bundled FFmpeg)
+        run: pnpm build:linux
+
+      - name: Verify Linux packages and compute SHA-256
+        run: |
+          set -euo pipefail
+          ls -lh release/AIVORA-Studio-*-linux-x64.AppImage release/AIVORA-Studio-*-linux-x64.deb
+          (cd release && sha256sum AIVORA-Studio-*-linux-x64.AppImage AIVORA-Studio-*-linux-x64.deb > SHA256SUMS-linux.txt)
+          cat release/SHA256SUMS-linux.txt
+
+      - name: Install .deb and run Chinese+space FFmpeg/ZIP/SQLite headless smoke
+        run: |
+          set -euo pipefail
+          DEB_FILE=$(ls release/AIVORA-Studio-*-linux-x64.deb | head -n 1)
+          sudo apt-get install -y "./$DEB_FILE"
+          BIN_PATH="/opt/AIVORA Studio/aivora-studio"
+          test -x "$BIN_PATH"
+
+          WS_DIR="$RUNNER_TEMP/测试 作品 空间"
+          REPORT="$RUNNER_TEMP/aivora-linux-smoke.json"
+          mkdir -p "$WS_DIR"
+          AIVORA_WORKSPACE_DIR="$WS_DIR" \
+          AIVORA_SMOKE_REPORT="$REPORT" \
+          xvfb-run -a "$BIN_PATH" --no-sandbox
+
+          cat "$REPORT"
+          node -e '
+            const fs = require("node:fs");
+            const r = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (!r.ok || r.sqliteEngine !== "node:sqlite" || !r.archiveRoundtripOk || !r.ffmpegAvailable || !r.exportOk) {
+              console.error("Linux smoke check failed:", r);
+              process.exit(1);
+            }
+            if (!fs.existsSync(r.exportedPath)) {
+              console.error("Missing exported MP4:", r.exportedPath);
+              process.exit(1);
+            }
+            console.log("Verified Linux exported MP4:", r.exportedPath, fs.statSync(r.exportedPath).size, "bytes");
+          ' "$REPORT"
+
+      - name: Upload Linux AppImage & deb artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AIVORA-Studio-linux-x64
+          path: |
+            release/AIVORA-Studio-*-linux-x64.AppImage
+            release/AIVORA-Studio-*-linux-x64.deb
+            release/SHA256SUMS-linux.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows-build-and-smoke, linux-build-and-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: AIVORA-Studio-Setup-win-x64
+          path: dist-release
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: AIVORA-Studio-linux-x64
+          path: dist-release
+
+      - name: Publish dual-platform GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: pwsh
         run: |
-          $tag = $env:GITHUB_REF_NAME
-          $exe = "${{ steps.installer.outputs.path }}"
-          $name = "${{ steps.installer.outputs.name }}"
-          $sha = "${{ steps.installer.outputs.sha256 }}"
-          $bt = [char]96
-          $lines = @(
-            "## AIVORA Studio $tag — Windows 正式安装包",
-            "",
-            "- **直接下载安装包**：点击下方 Assets 中的 $bt$name$bt（已内置经 SHA-256 校验的 FFmpeg 8.1.2，无需安装 Python 或 FFmpeg）。",
-            "- **SHA-256**：$bt$sha$bt",
-            "- **普通用户安装**：默认装入 $bt%LOCALAPPDATA%\Programs\AIVORA Studio$bt（无需管理员权限，卸载与覆盖升级均无损保留作品）。",
-            "- **上手指南**：见仓库内 [docs/用户上手指南.md](https://github.com/chen11-A/aivora-studio/blob/main/docs/%E7%94%A8%E6%88%B7%E4%B8%8A%E6%89%8B%E6%8C%87%E5%8D%97.md)。"
-          )
-          $notesFile = "release/RELEASE_NOTES.md"
-          Set-Content -Path $notesFile -Value $lines -Encoding UTF8
-          gh release create $tag $exe "release/SHA256SUMS.txt" --title "AIVORA Studio $tag" --notes-file $notesFile
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          cat dist-release/SHA256SUMS-win.txt dist-release/SHA256SUMS-linux.txt > dist-release/SHA256SUMS.txt
+          WIN_NAME=$(basename dist-release/AIVORA-Studio-Setup-*.exe)
+          APPIMAGE_NAME=$(basename dist-release/AIVORA-Studio-*-linux-x64.AppImage)
+          DEB_NAME=$(basename dist-release/AIVORA-Studio-*-linux-x64.deb)
+
+          cat > dist-release/RELEASE_NOTES.md <<EOF
+          ## AIVORA Studio ${TAG} — Windows + Linux 双平台正式版
+
+          ### 下载安装包（均已内置经 SHA-256 校验的 FFmpeg，零 Python / 零额外依赖）
+          - **Windows 10/11 (x64)**：\`${WIN_NAME}\`（普通用户 HKCU 安装，无需管理员权限）
+          - **Linux 通用免安装 (x64)**：\`${APPIMAGE_NAME}\`（\`chmod +x\` 后双击或终端运行；Ubuntu 24.04 如遇 AppArmor 沙箱提示请附加 \`--no-sandbox\`）
+          - **Ubuntu / Debian (x64)**：\`${DEB_NAME}\`（执行 \`sudo apt install ./${DEB_NAME}\`）
+
+          ### SHA-256 校验值
+          \`\`\`
+          $(cat dist-release/SHA256SUMS.txt)
+          \`\`\`
+
+          ### 本版亮点
+          - **Google Gemini 官方全家桶（1 个 API Key 全搞定）**：原生接入 Interactions API，支持剧本拆镜、垫图生图、异步视频（含 \`UNKNOWN\` 仅 GET 查单找回）、人物配音 TTS 与 **Lyria 3.5 AI 一键生成背景配乐**，并提供「一键套用全流程」快捷按钮；
+          - **精简轻量化模型中心**：移除偏重的远程 Colab Jupyter 托管，聚焦商业 API + Flow 网页外采/下载目录自动监听 + ComfyUI Worker 算力直连；
+          - **上手指南**：见 [docs/用户上手指南.md](https://github.com/chen11-A/aivora-studio/blob/main/docs/%E7%94%A8%E6%88%B7%E4%B8%8A%E6%89%8B%E6%8C%87%E5%8D%97.md)。
+          EOF
+
+          gh release create "$TAG" \
+            "dist-release/$WIN_NAME" \
+            "dist-release/$APPIMAGE_NAME" \
+            "dist-release/$DEB_NAME" \
+            "dist-release/SHA256SUMS.txt" \
+            --title "AIVORA Studio $TAG (Windows + Linux)" \
+            --notes-file dist-release/RELEASE_NOTES.md

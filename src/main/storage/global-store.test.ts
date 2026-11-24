@@ -33,22 +33,7 @@ describe("GlobalConfigStore", () => {
 
     const initial = store1.getSnapshot();
     expect(initial.vaultAvailable).toBe(true);
-    expect(initial.oauthAccounts.map((a) => a.providerId)).toEqual([
-      "chatgpt-web",
-      "colab-google",
-      "grok-web",
-    ]);
-
-    const colabUpdated = store1.updateColabManagedConfig({
-      gpu: "A100",
-      mountDriveCache: false,
-      idleShutdownMinutes: 30,
-    });
-    expect(colabUpdated).toEqual({
-      gpu: "A100",
-      mountDriveCache: false,
-      idleShutdownMinutes: 30,
-    });
+    expect(initial.oauthAccounts.map((a) => a.providerId)).toEqual(["chatgpt-web", "grok-web"]);
 
     const provider = store1.saveProvider({
       name: "可灵官方",
@@ -76,13 +61,8 @@ describe("GlobalConfigStore", () => {
     expect(rawDb.includes(Buffer.from("AK_SUPER_SECRET_9988"))).toBe(false);
     expect(rawDb.includes(Buffer.from("SK_SUPER_SECRET_7766"))).toBe(false);
 
-    // Reopen and verify routing + Colab managed config + cleanup on delete
+    // Reopen and verify routing + cleanup on delete
     const store2 = new GlobalConfigStore(dir, mockVault);
-    expect(store2.getColabManagedConfig()).toEqual({
-      gpu: "A100",
-      mountDriveCache: false,
-      idleShutdownMinutes: 30,
-    });
     const snap = store2.getSnapshot();
     expect(snap.routing.video?.sourceId).toBe(provider.id);
     expect(snap.routing.script?.sourceId).toBe("chatgpt-web");

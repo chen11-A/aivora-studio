@@ -2,10 +2,6 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { SecretVault } from "../auth/secret-vault";
 import {
-  DEFAULT_COLAB_MANAGED_CONFIG,
-  type ColabManagedConfig,
-} from "../../shared/types/colab";
-import {
   SaveProviderConfigInputSchema,
   type CapabilityKey,
   type ModelCenterSnapshot,
@@ -69,9 +65,8 @@ export class GlobalConfigStore {
 
   private seedDefaultOAuthRows(): void {
     const defaults: Array<[OAuthAccountView["providerId"], string, string]> = [
-      ["chatgpt-web", "ChatGPT 官方账号", "使用系统浏览器 PKCE 授权，凭据经 Windows DPAPI 加密"],
+      ["chatgpt-web", "ChatGPT 官方账号", "使用系统浏览器 PKCE 授权，凭据经系统加密库加密"],
       ["grok-web", "Grok (xAI) 账号", "支持浏览器 OAuth 与 Device Code 登录，可用于剧本/生图/视频"],
-      ["colab-google", "Google Colab 官方会员算力（免浏览器托管）", "纯 TS 官方协议直连远程 T4/L4/A100，免手动开网页，闲置自动停机释放算力"],
     ];
     for (const [id, name, note] of defaults) {
       this.db.run(
@@ -87,7 +82,9 @@ export class GlobalConfigStore {
   getSnapshot(): ModelCenterSnapshot {
     const oauthRows = this.db.all<OAuthRow>(
       `SELECT provider_id, display_name, status, account_label, models_json, note, updated_at
-       FROM oauth_accounts ORDER BY provider_id ASC`,
+       FROM oauth_accounts
+       WHERE provider_id IN ('chatgpt-web', 'grok-web')
+       ORDER BY provider_id ASC`,
     );
     const providerRows = this.db.all<ProviderRow>(
       `SELECT * FROM provider_configs ORDER BY updated_at DESC`,
@@ -298,49 +295,6 @@ export class GlobalConfigStore {
       );
       this.db.run(`DELETE FROM model_routing WHERE source = 'oauth' AND source_id = ?`, providerId);
     });
-  }
-
-  getColabManagedConfig(): ColabManagedConfig {
-    const row = this.db.get<{ value: string }>(
-      `SELECT value FROM app_kv WHERE key = 'colab_managed_config'`,
-    );
-    if (!row?.value) return { ...DEFAULT_COLAB_MANAGED_CONFIG };
-    try {
-      const parsed = JSON.parse(row.value) as Partial<ColabManagedConfig>;
-      return {
-        gpu: parsed.gpu === "T4" || parsed.gpu === "A100" ? parsed.gpu : "L4",
-        mountDriveCache:
-          typeof parsed.mountDriveCache === "boolean"
-            ? parsed.mountDriveCache
-            : DEFAULT_COLAB_MANAGED_CONFIG.mountDriveCache,
-        idleShutdownMinutes:
-          typeof parsed.idleShutdownMinutes === "number" &&
-          parsed.idleShutdownMinutes >= 1 &&
-          parsed.idleShutdownMinutes <= 180
-            ? Math.round(parsed.idleShutdownMinutes)
-            : DEFAULT_COLAB_MANAGED_CONFIG.idleShutdownMinutes,
-      };
-    } catch {
-      return { ...DEFAULT_COLAB_MANAGED_CONFIG };
-    }
-  }
-
-  updateColabManagedConfig(patch: Partial<ColabManagedConfig>): ColabManagedConfig {
-    const current = this.getColabManagedConfig();
-    const next: ColabManagedConfig = {
-      gpu: patch.gpu ?? current.gpu,
-      mountDriveCache: patch.mountDriveCache ?? current.mountDriveCache,
-      idleShutdownMinutes:
-        patch.idleShutdownMinutes !== undefined
-          ? Math.max(1, Math.min(180, Math.round(patch.idleShutdownMinutes)))
-          : current.idleShutdownMinutes,
-    };
-    this.db.run(
-      `INSERT INTO app_kv (key, value) VALUES ('colab_managed_config', ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      JSON.stringify(next),
-    );
-    return next;
   }
 
   close(): void {

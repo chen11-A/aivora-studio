@@ -1,8 +1,10 @@
 {
   "name": "aivora-studio",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "description": "AIVORA Studio — AI-native motion comic & short-drama desktop workbench",
+  "author": "AIVORA Studio <aivora@users.noreply.github.com>",
+  "homepage": "https://github.com/chen11-A/aivora-studio",
   "license": "Apache-2.0",
   "main": "./out/main/index.js",
   "scripts": {
@@ -15,7 +17,9 @@
     "test:watch": "vitest",
     "audit:layout": "node scripts/layout-audit.mjs",
     "build:win": "pnpm build && electron-builder --win nsis --x64 --publish never",
-    "build:win:dir": "pnpm build && electron-builder --win --dir --x64 --publish never"
+    "build:win:dir": "pnpm build && electron-builder --win --dir --x64 --publish never",
+    "build:linux": "pnpm build && electron-builder --linux AppImage deb --x64 --publish never",
+    "build:linux:dir": "pnpm build && electron-builder --linux dir --x64 --publish never"
   },
   "dependencies": {
     "lucide-react": "^0.511.0",

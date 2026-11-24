@@ -4,6 +4,7 @@ import { DirectorProposalSchema, type DirectorProposal } from "../../shared/type
 import type { OAuthManager } from "../auth/auth-manager";
 import { completeChatGptResponsesText } from "../auth/chatgpt-oauth";
 import { GROK_API } from "../auth/grok-oauth";
+import { runGeminiDirectorChat } from "../providers/gemini-official-adapter";
 import { runOpenAiChatCompletion } from "../providers/openai-compat-adapter";
 import type { GlobalConfigStore } from "../storage/global-store";
 import type { ProjectStore } from "../storage/project-store";
@@ -107,16 +108,28 @@ export class DirectorService {
         if (!creds || !creds.apiKey) {
           return { ok: false, message: "所选剧本厂家缺少可用 API Key，请在模型中心补全" };
         }
-        rawText = await runOpenAiChatCompletion(
-          {
-            baseUrl: creds.view.baseUrl,
-            apiKey: creds.apiKey,
-            modelId: binding.modelId,
-            systemPrompt: DIRECTOR_SYSTEM_PROMPT,
-            userPrompt,
-          },
-          this.fetcher,
-        );
+        rawText =
+          creds.view.protocol === "gemini-official"
+            ? await runGeminiDirectorChat(
+                {
+                  baseUrl: creds.view.baseUrl,
+                  apiKey: creds.apiKey,
+                  modelId: binding.modelId,
+                  systemPrompt: DIRECTOR_SYSTEM_PROMPT,
+                  userPrompt,
+                },
+                this.fetcher,
+              )
+            : await runOpenAiChatCompletion(
+                {
+                  baseUrl: creds.view.baseUrl,
+                  apiKey: creds.apiKey,
+                  modelId: binding.modelId,
+                  systemPrompt: DIRECTOR_SYSTEM_PROMPT,
+                  userPrompt,
+                },
+                this.fetcher,
+              );
         providerSummary = `${creds.view.name} · ${binding.modelId}`;
       }
 
