@@ -13,3 +13,6 @@ artifacts/
 *.tsbuildinfo
 /resources/media/ffmpeg.exe
 /resources/media/ffprobe.exe
+
+__pycache__/
+*.pyc
