@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, Mic, Pause, Play, Plus, Sparkles, Trash2, Video } from "lucide-react";
+import { evaluateShotSpeechStatus } from "@shared/media-selection";
 import type { Asset, CameraMove, Scene, Shot, ShotScale, Take } from "@shared/types/domain";
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
@@ -64,6 +65,9 @@ export function ShotInspector(props: {
   }
 
   const measuredSpeechSec = speechTake?.durationSec ?? null;
+  const speechStatus = currentShot
+    ? evaluateShotSpeechStatus(currentShot, speechTake ? [speechTake] : [], castAssets)
+    : null;
   const dialogueEstSec = currentShot?.dialogue
     ? Math.ceil(currentShot.dialogue.replace(/\s+/g, "").length / 4.5)
     : 0;
@@ -170,6 +174,14 @@ export function ShotInspector(props: {
                   </button>
                 ) : (
                   <span className="text-[11px] text-[#768196] truncate">暂无对白音频</span>
+                )}
+                {speechStatus?.state === "stale" && (
+                  <span
+                    data-testid="speech-stale-badge"
+                    className="px-1.5 py-0.5 rounded bg-[#f59e0b]/15 border border-[#f59e0b]/40 text-[10px] text-[#fbbf24] shrink-0"
+                  >
+                    {speechStatus.label}
+                  </span>
                 )}
               </div>
               <div className="flex items-center gap-2 shrink-0">

@@ -160,8 +160,12 @@ export function recordAssetPortraitCandidateInDb(
 ): void {
   const now = new Date().toISOString();
   projects.withProjectDb(input.projectId, (db) => {
-    const cur = db.get<{ media_path: string | null; candidate_paths_json: string | null }>(
-      `SELECT media_path, candidate_paths_json FROM assets WHERE id = ?`,
+    const cur = db.get<{
+      media_path: string | null;
+      candidate_paths_json: string | null;
+      locked_ref: number;
+    }>(
+      `SELECT media_path, candidate_paths_json, locked_ref FROM assets WHERE id = ?`,
       input.assetId,
     );
     let prevList: string[] = [];
@@ -180,16 +184,27 @@ export function recordAssetPortraitCandidateInDb(
       input.media.mediaPath,
       ...prevList.filter((p) => p !== input.media.mediaPath),
     ].slice(0, 8);
+    const isAlreadyConfirmed = Number(cur?.locked_ref ?? 0) === 1;
     db.transaction(() => {
-      // Deliberately sets locked_ref = 0 so the user inspects the generated candidate before locking!
-      db.run(
-        `UPDATE assets SET media_path = ?, media_sha256 = ?, candidate_paths_json = ?, locked_ref = 0, updated_at = ? WHERE id = ?`,
-        input.media.mediaPath,
-        input.media.mediaSha256,
-        JSON.stringify(nextCandidates),
-        now,
-        input.assetId,
-      );
+      if (isAlreadyConfirmed) {
+        // Keep the confirmed reference image & lock intact until the user explicitly confirms the candidate!
+        db.run(
+          `UPDATE assets SET candidate_paths_json = ?, updated_at = ? WHERE id = ?`,
+          JSON.stringify(nextCandidates),
+          now,
+          input.assetId,
+        );
+      } else {
+        // Asset is not yet confirmed: preview the new candidate as media_path while leaving locked_ref = 0.
+        db.run(
+          `UPDATE assets SET media_path = ?, media_sha256 = ?, candidate_paths_json = ?, locked_ref = 0, updated_at = ? WHERE id = ?`,
+          input.media.mediaPath,
+          input.media.mediaSha256,
+          JSON.stringify(nextCandidates),
+          now,
+          input.assetId,
+        );
+      }
       db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
     });
   });

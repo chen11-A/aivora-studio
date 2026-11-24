@@ -116,7 +116,15 @@ export function registerIpcHandlers(deps: {
         assetId: input.assetId,
         sourceFilePath: filePath,
       });
-      return { ok: true, asset, message: "定妆参考图已更新并保留历史候选" };
+      const keptConfirmed =
+        asset.lockedRef && asset.candidatePaths[0] && asset.candidatePaths[0] !== asset.mediaPath;
+      return {
+        ok: true,
+        asset,
+        message: keptConfirmed
+          ? "新图片已加入候选列表，原已确认参考保持不变，请在右侧确认采用"
+          : "定妆参考图已更新并保留历史候选",
+      };
     },
   );
   handle(

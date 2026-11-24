@@ -3,6 +3,7 @@ import { statfs } from "node:fs/promises";
 import path from "node:path";
 import type { ExportPreflightReport } from "../../shared/ipc-contract";
 import {
+  evaluateShotSpeechStatus,
   isSvgPlaceholderPath,
   isVideoMediaPath,
   resolveActiveVisualTake,
@@ -115,6 +116,12 @@ export async function preflightEpisodeExport(input: {
 
     const speech = resolveSelectedSpeechTake(shot, input.workspace.takes);
     if (speech) {
+      const speechStatus = evaluateShotSpeechStatus(shot, input.workspace.takes, input.workspace.assets);
+      if (speechStatus.state === "stale") {
+        warnings.push(
+          `「${shot.title}」${speechStatus.label}：当前配音版本与最新台词/声线不一致，建议先回分镜页重新配音再导出。`,
+        );
+      }
       const speechAbs = resolveConfinedMediaPath(input.projectDir, speech.mediaPath);
       if (!speechAbs || !existsSync(speechAbs)) {
         blockingIssues.push(`镜头「${shot.title}」的对白配音文件丢失（${speech.mediaPath}）。`);

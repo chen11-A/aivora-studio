@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { resolveConfirmedFirstFrameTake } from "../../shared/media-selection";
+import { buildSpeechSnapshot, resolveConfirmedFirstFrameTake, resolveShotSpeechVoiceId } from "../../shared/media-selection";
 import type { Job } from "../../shared/types/domain";
 import type { GenerationPlan, JobExecutionResult } from "../../shared/types/jobs";
 import type { CapabilityKey } from "../../shared/types/provider";
@@ -135,9 +135,11 @@ export class GenerationJobQueue {
       shot && input.kind === "speech"
         ? shot.dialogue.trim() || shot.subtitle.trim()
         : prepared.finalPrompt;
+    const speechVoice =
+      shot && input.kind === "speech" ? resolveShotSpeechVoiceId(shot, ws.assets) : "";
     const targetKey = input.assetId || input.shotId;
     const inputSha256 = createHash("sha256")
-      .update(`${targetKey}:${input.kind}:${modelId}:${promptPreview}`)
+      .update(`${targetKey}:${input.kind}:${modelId}:${speechVoice}:${promptPreview}`)
       .digest("hex");
 
     if (!blockingReason && this.activeInputHashes.has(inputSha256)) {
@@ -328,19 +330,28 @@ export class GenerationJobQueue {
       }
 
       if (plan.kind === "speech" && shot) {
-        const speakerAsset = ws.assets.find((a) => a.kind === "character" && a.name === shot.speaker);
+        const voice = resolveShotSpeechVoiceId(shot, ws.assets);
         const media = await runOpenAiSpeechSynthesis(
           {
             baseUrl: trustedBaseUrl,
             apiKey,
             modelId: snapshot.modelId,
             text: plan.promptPreview,
-            voice: speakerAsset?.voiceId || "alloy",
+            voice,
             projectDir: ws.dirPath,
           },
           this.fetcher,
         );
-        return await this.completeTakeJob(plan, ws.dirPath, jobId, snapshot, "speech", media, "对白配音生成成功，已绑定至当前镜头");
+        return await this.completeTakeJob(
+          plan,
+          ws.dirPath,
+          jobId,
+          snapshot,
+          "speech",
+          media,
+          "对白配音生成成功，已绑定至当前镜头",
+          buildSpeechSnapshot(plan.promptPreview, voice),
+        );
       }
 
       throw new Error(`当前协议（${snapshot.protocol}）暂不支持此生成类型，请在模型中心切换协议。`);
@@ -367,6 +378,7 @@ export class GenerationJobQueue {
     kind: "image" | "video" | "speech",
     media: { mediaPath: string; mediaSha256: string },
     message: string,
+    promptSnapshotOverride?: string,
   ): Promise<JobExecutionResult> {
     const durationSec =
       kind === "video" || kind === "speech"
@@ -377,7 +389,7 @@ export class GenerationJobQueue {
       shotId: plan.shotId,
       kind,
       media,
-      promptSnapshot: plan.promptPreview,
+      promptSnapshot: promptSnapshotOverride ?? plan.promptPreview,
       providerInfo: `${snapshot.providerLabel} · ${snapshot.modelId}`,
       durationSec,
     });

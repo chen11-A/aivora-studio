@@ -568,7 +568,13 @@ describe("GenerationJobQueue anti-duplicate-charge guarantees", () => {
     const prv = globalConfig.saveProvider({ name: "ImgGen", protocol: "openai-image", baseUrl: "https://api.imggen.test/v1", models: ["gpt-image-1"], apiKey: "sk-p", enabled: true });
     globalConfig.updateRouting({ script: null, image: { source: "provider", sourceId: prv.id, modelId: "gpt-image-1" }, video: null, tts: null });
     const demo = projects.openDemoProject();
-    const asset = demo.assets.find((a) => a.kind === "character")!;
+    const asset = projects.createAsset({
+      projectId: demo.project.id,
+      kind: "character",
+      name: "顾沉舟",
+      description: "黑色风衣青年",
+    });
+    expect(asset.lockedRef).toBe(false);
     const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
     const queue = new GenerationJobQueue(projects, globalConfig, oauth, async () =>
       new Response(JSON.stringify({ data: [{ b64_json: tinyPng }] }), { status: 200 }),

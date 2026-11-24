@@ -129,6 +129,68 @@ export function evaluateShotVisualStatus(
   return { state: "ready", label: "已就绪" };
 }
 
+export function resolveShotSpeechVoiceId(shot: Pick<Shot, "speaker">, assets: Asset[]): string {
+  const speaker = shot.speaker.trim();
+  if (speaker) {
+    const matched = assets.find((a) => a.kind === "character" && a.name.trim() === speaker);
+    if (matched?.voiceId) return matched.voiceId;
+  }
+  return "alloy";
+}
+
+export function buildSpeechSnapshot(text: string, voiceId: string): string {
+  return `[voice:${voiceId.trim() || "alloy"}] ${text.trim()}`;
+}
+
+export function parseSpeechSnapshot(raw: string | null | undefined): {
+  voiceId: string | null;
+  text: string;
+} {
+  const trimmed = (raw ?? "").trim();
+  const match = trimmed.match(/^\[voice:([^\]]+)\]\s*([\s\S]*)$/);
+  if (match) {
+    return { voiceId: match[1]!.trim(), text: match[2]!.trim() };
+  }
+  return { voiceId: null, text: trimmed };
+}
+
+export type ShotSpeechFreshness = {
+  state: "none" | "missing" | "stale" | "ready";
+  label: string;
+};
+
+/**
+ * Pure local (0-token) speech freshness detector:
+ * Compares the shot's current dialogue/subtitle and speaker voice against the selected speech take's
+ * recorded snapshot so edited lines or switched character voices are flagged as stale ("待重配").
+ */
+export function evaluateShotSpeechStatus(
+  shot: Shot,
+  takes: Take[],
+  assets: Asset[],
+): ShotSpeechFreshness {
+  const curText = shot.dialogue.trim() || shot.subtitle.trim();
+  const speechTake = resolveSelectedSpeechTake(shot, takes);
+  if (!curText) {
+    return { state: "none", label: "无台词" };
+  }
+  if (!speechTake) {
+    return { state: "missing", label: "缺配音" };
+  }
+  const snap = parseSpeechSnapshot(speechTake.promptSnapshot);
+  if (!snap.text) {
+    return { state: "ready", label: "已配音" };
+  }
+  const curVoice = resolveShotSpeechVoiceId(shot, assets);
+  if (snap.text !== curText) {
+    return { state: "stale", label: "台词已改·待重配" };
+  }
+  if (snap.voiceId && snap.voiceId !== curVoice) {
+    return { state: "stale", label: "声线已改·待重配" };
+  }
+  return { state: "ready", label: "已配音" };
+}
+
 export type EpisodeExportReadiness = {
   totalShots: number;
   totalDurationSec: number;

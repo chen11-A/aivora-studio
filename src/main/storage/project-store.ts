@@ -427,7 +427,9 @@ export class ProjectStore {
   }
 
   selectAssetCandidate(input: { projectId: string; assetId: string; mediaPath: string }): Asset {
-    return selectAssetCandidateInDb(this.getDb(input.projectId), input);
+    const dir = this.resolveProjectDir(input.projectId);
+    if (!dir) throw new Error("作品不存在");
+    return selectAssetCandidateInDb(this.getDb(input.projectId), dir, input);
   }
 
   importShotTakeFromPath(input: {

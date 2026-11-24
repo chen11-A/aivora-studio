@@ -459,4 +459,69 @@ describe("DirectorService proposal, apply, and 1-click undo", () => {
     projects2.closeAll();
     global2.close();
   });
+
+  it("blocks whole-episode undo when a shot receives a new video take after accepting a director proposal (P1 regression)", () => {
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-director-undo-guard-"));
+    tempDirs.push(base);
+    const projects = new ProjectStore(path.join(base, "ws"));
+    const globalConfig = new GlobalConfigStore(path.join(base, "app"), mockVault);
+    const oauth = new OAuthManager(globalConfig, async () => undefined);
+
+    const demo = projects.openDemoProject();
+    const epId = demo.episodes[0]!.id;
+    const origShot0 = demo.shots.filter((s) => s.episodeId === epId).sort((a, b) => a.orderIndex - b.orderIndex)[0]!;
+
+    const svc = new DirectorService(projects, globalConfig, oauth);
+    const proposal = parseDirectorProposalJson(
+      JSON.stringify({
+        scenes: [
+          {
+            title: "第一场 · 晚照书店",
+            summary: "微调开场",
+            shots: [
+              {
+                title: origShot0.title,
+                scale: origShot0.scale,
+                cameraMove: origShot0.cameraMove,
+                durationSec: origShot0.durationSec,
+                visualPrompt: `${origShot0.visualPrompt}，微风吹动招牌`,
+                dialogue: origShot0.dialogue,
+                speaker: origShot0.speaker,
+                subtitle: origShot0.subtitle,
+                characters: [],
+              },
+            ],
+          },
+        ],
+      }),
+      "DeepSeek",
+    );
+
+    const applied = svc.applyProposal({ projectId: demo.project.id, episodeId: epId, proposal });
+    expect(applied.ok).toBe(true);
+    expect(applied.undoToken).toBeTruthy();
+
+    // User adds a new video take to the shot AFTER accepting the director proposal
+    const afterAdd = projects.addSyntheticTake({
+      projectId: demo.project.id,
+      shotId: origShot0.id,
+      kind: "video",
+      label: "post-apply-video",
+    });
+    const newVideoTakeId = afterAdd.shots.find((s) => s.id === origShot0.id)?.selectedVideoTakeId;
+    expect(newVideoTakeId).toBeTruthy();
+
+    // Undo MUST refuse whole-episode rollback so the post-apply video take is never wiped out
+    const blocked = svc.undoApply({ projectId: demo.project.id, undoToken: applied.undoToken! });
+    expect(blocked.ok).toBe(false);
+    expect(blocked.message).toContain("已阻止整集回滚");
+
+    // Verify the post-apply video take is still present and selected in SQLite
+    const persisted = projects.openProject(demo.project.id);
+    expect(persisted.shots.find((s) => s.id === origShot0.id)?.selectedVideoTakeId).toBe(newVideoTakeId);
+    expect(persisted.takes.some((t) => t.id === newVideoTakeId)).toBe(true);
+
+    projects.closeAll();
+    globalConfig.close();
+  });
 });

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ImageUp, Lock, LockOpen, Plus, Sparkles, UserCheck, Volume2, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, ImageUp, Lock, LockOpen, Plus, Sparkles, UserCheck, Volume2, X } from "lucide-react";
 import type { AssetKind } from "@shared/types/domain";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
@@ -32,21 +32,50 @@ export function CastStage() {
 
   const [filter, setFilter] = useState<"all" | AssetKind>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newKind, setNewKind] = useState<AssetKind>("character");
   const [newDesc, setNewDesc] = useState("");
 
-  if (!workspace) return null;
-  const client = getDesktopClient();
-
-  const nonMusic = workspace.assets.filter((a) => a.kind !== "music");
+  const nonMusic = workspace ? workspace.assets.filter((a) => a.kind !== "music") : [];
   const visible = filter === "all" ? nonMusic : nonMusic.filter((a) => a.kind === filter);
   const selected =
     visible.find((a) => a.id === selectedId) ??
     nonMusic.find((a) => a.id === selectedId) ??
     visible[0] ??
     null;
+
+  const lastCandHeadRef = useRef<{ assetId: string; head: string | null }>({ assetId: "", head: null });
+  const selectedAssetId = selected?.id ?? "";
+  const selectedMediaPath = selected?.mediaPath ?? null;
+  const selectedCandHead = selected?.candidatePaths[0] ?? null;
+
+  useEffect(() => {
+    if (!selectedAssetId) {
+      setPreviewPath(null);
+      return;
+    }
+    const prev = lastCandHeadRef.current;
+    if (prev.assetId !== selectedAssetId) {
+      setPreviewPath(selectedMediaPath);
+    } else if (selectedCandHead && selectedCandHead !== prev.head) {
+      // Newly generated/imported candidate arrived: preview it without touching the confirmed reference!
+      setPreviewPath(selectedCandHead);
+    }
+    lastCandHeadRef.current = { assetId: selectedAssetId, head: selectedCandHead };
+  }, [selectedAssetId, selectedMediaPath, selectedCandHead]);
+
+  if (!workspace) return null;
+  const client = getDesktopClient();
+
+  const activePreviewPath =
+    previewPath && selected?.candidatePaths.includes(previewPath)
+      ? previewPath
+      : (selected?.mediaPath ?? null);
+  const isPreviewingAlternate = Boolean(
+    selected && activePreviewPath && activePreviewPath !== selected.mediaPath,
+  );
 
   const resolveSrc = (mediaPath: string | null) =>
     mediaPath
@@ -99,7 +128,7 @@ export function CastStage() {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-[12px] text-[#768196] hidden lg:inline">
-              支持直接拖入图片，生成候选后检视满意再「设为已确认参考」
+              生成候选不影响已确认参考，检视满意后点「确认采用」再替换
             </span>
             <button
               type="button"
@@ -177,7 +206,7 @@ export function CastStage() {
         </div>
       </section>
 
-      {/* Right Selected Asset Inspector (Reference Image, Candidate Strip, Lock, Appearance & Voice) */}
+      {/* Right Selected Asset Inspector (Confirmed Ref vs Candidate Preview Separation) */}
       <aside
         className="bg-[#14171e] border-l border-[#252b37] flex flex-col min-h-0 overflow-hidden"
         data-testid="cast-inspector"
@@ -210,41 +239,82 @@ export function CastStage() {
               className="rounded-lg overflow-hidden bg-[#0f1218] border border-[#252b37]"
             >
               <div className="aspect-video w-full relative overflow-hidden">
-                {resolveSrc(selected.mediaPath) && (
+                {resolveSrc(activePreviewPath) && (
                   <img
-                    src={resolveSrc(selected.mediaPath)!}
+                    src={resolveSrc(activePreviewPath)!}
                     alt={selected.name}
                     className="w-full h-full object-cover"
                   />
+                )}
+                {isPreviewingAlternate && (
+                  <span className="absolute top-2 left-2 px-2 py-0.5 rounded bg-[#f59e0b]/90 text-[#0b0e14] text-[10px] font-semibold">
+                    候选预览（未替换已确认参考）
+                  </span>
                 )}
               </div>
               {selected.candidatePaths.length > 1 && (
                 <div className="px-2.5 pt-2 flex items-center gap-1.5 overflow-x-auto" data-testid="asset-candidate-strip">
                   {selected.candidatePaths.map((cp, idx) => {
                     const cSrc = resolveSrc(cp);
-                    const isCur = cp === selected.mediaPath;
+                    const isPreview = cp === activePreviewPath;
+                    const isConfirmed = selected.lockedRef && cp === selected.mediaPath;
                     return (
                       <button
                         key={cp}
                         type="button"
-                        onClick={() => void selectAssetCandidate(selected.id, cp)}
-                        title={`切换候选定妆 #${idx + 1}`}
-                        className={`shrink-0 w-12 h-8 rounded overflow-hidden border cursor-pointer ${
-                          isCur ? "border-[#3b82f6] ring-1 ring-[#3b82f6]/50" : "border-[#252b37] opacity-75 hover:opacity-100"
+                        onClick={() => setPreviewPath(cp)}
+                        title={isConfirmed ? "当前已确认参考" : `预览候选定妆 #${idx + 1}`}
+                        className={`relative shrink-0 w-12 h-8 rounded overflow-hidden border cursor-pointer ${
+                          isPreview
+                            ? "border-[#3b82f6] ring-1 ring-[#3b82f6]/50"
+                            : isConfirmed
+                              ? "border-[#10b981]"
+                              : "border-[#252b37] opacity-75 hover:opacity-100"
                         }`}
                       >
                         {cSrc && <img src={cSrc} alt={`候选 ${idx + 1}`} className="w-full h-full object-cover" />}
+                        {isConfirmed && (
+                          <span className="absolute bottom-0 inset-x-0 bg-[#10b981]/90 text-[#0b0e14] text-[8px] font-bold text-center leading-3">
+                            已确认
+                          </span>
+                        )}
                       </button>
                     );
                   })}
                 </div>
               )}
               <div className="p-2.5 border-t border-[#252b37] flex flex-col gap-2">
-                <span className="text-[11px] text-[#768196] truncate">
-                  {selected.lockedRef
-                    ? "已确认参考：生首帧/生视频将注入此设定与参考图"
-                    : "候选状态（支持拖入图片）：满意后点「设为已确认参考」"}
-                </span>
+                {isPreviewingAlternate && activePreviewPath ? (
+                  <div className="flex flex-col gap-1.5 rounded bg-[#f59e0b]/10 border border-[#f59e0b]/35 p-2">
+                    <span className="text-[11px] text-[#fbbf24]">
+                      正在预览候选图，当前分镜仍沿用原已确认参考
+                    </span>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        data-testid="btn-confirm-candidate"
+                        onClick={() => void selectAssetCandidate(selected.id, activePreviewPath)}
+                        className="h-7 px-2 rounded bg-[#10b981] hover:bg-[#059669] text-[#0b0e14] text-[11px] font-semibold flex items-center justify-center gap-1 cursor-pointer"
+                      >
+                        <Check className="w-3 h-3" />
+                        <span>确认采用此图</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPreviewPath(selected.mediaPath)}
+                        className="btn-secondary h-7 px-2 text-[11px] justify-center"
+                      >
+                        回到已确认图
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <span className="text-[11px] text-[#768196] truncate">
+                    {selected.lockedRef
+                      ? "已确认参考：生首帧/生视频将注入此设定与参考图"
+                      : "候选状态（支持拖入图片）：满意后点「设为已确认参考」"}
+                  </span>
+                )}
                 <div className="grid grid-cols-2 gap-1.5">
                   <button
                     type="button"

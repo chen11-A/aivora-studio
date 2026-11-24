@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
+  evaluateShotSpeechStatus,
   evaluateShotVisualStatus,
   isSvgPlaceholderPath,
   isVideoMediaPath,
   resolveActiveVisualTake,
-  resolveSelectedSpeechTake,
 } from "../../shared/media-selection";
 import type {
   BatchGenerationMode,
@@ -71,9 +71,8 @@ export class BatchJobScheduler {
 
     for (const shot of epShots) {
       if (input.mode === "speech") {
-        const hasText = Boolean(shot.dialogue.trim() || shot.subtitle.trim());
-        const hasSpeech = Boolean(resolveSelectedSpeechTake(shot, ws.takes));
-        if (!hasText || hasSpeech) {
+        const speechStatus = evaluateShotSpeechStatus(shot, ws.takes, ws.assets);
+        if (speechStatus.state === "none" || speechStatus.state === "ready") {
           skippedReadyCount += 1;
           continue;
         }
@@ -111,7 +110,7 @@ export class BatchJobScheduler {
     if (plans.length === 0) {
       blockingReason =
         input.mode === "speech"
-          ? "当前分集所有有台词镜头均已配音，无需补齐。"
+          ? "当前分集所有有台词镜头均已有最新配音，无需补齐。"
           : input.mode === "image"
             ? "当前分集所有镜头均已有最新首帧图，无需补齐。"
             : "当前分集所有镜头均已有最新视频，无需补齐。";

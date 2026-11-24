@@ -185,7 +185,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       const ws = workspaces.get(input.projectId)!;
       const asset = ws.assets.find((a) => a.id === input.assetId)!;
       asset.mediaPath = input.mediaPath;
-      asset.lockedRef = false;
+      asset.lockedRef = true;
       return structuredClone(asset);
     },
     createShot: async (input) => {
@@ -446,7 +446,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     cancelEpisodeExport: async () => ({ ok: false, message: "浏览器预览模式无导出任务" }),
     onFlushBeforeClose: () => () => undefined,
     notifyFlushComplete: () => undefined,
-    getAppInfo: async () => ({ version: "1.2.0", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "1.2.1", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
     resolveDroppedFilePath: () => null,
   };

@@ -394,6 +394,7 @@ export const useStudioStore = create<StudioStore>((set, get) => {
       if (!ws) return;
       const updated = await client.selectAssetCandidate({ projectId: ws.project.id, assetId, mediaPath });
       set({ workspace: { ...ws, assets: ws.assets.map((a) => (a.id === assetId ? updated : a)) }, saveState: "saved" });
+      flashToast(`已将所选定妆图设为「${updated.name}」的已确认参考`);
     },
 
     async importShotTake(shotId, kind, sourceFilePath) {

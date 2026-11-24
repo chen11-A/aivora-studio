@@ -2,8 +2,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { evaluateShotSpeechStatus } from "../../shared/media-selection";
 import { OAuthManager } from "../auth/auth-manager";
 import { createSecretVault } from "../auth/secret-vault";
+import { preflightEpisodeExport } from "../media/export-preflight";
 import { probeFfmpegStatus, runMediaBinary } from "../media/ffmpeg-locator";
 import { GlobalConfigStore } from "../storage/global-store";
 import { ProjectStore } from "../storage/project-store";
@@ -23,7 +25,7 @@ afterEach(() => {
   while (tempDirs.length > 0) rmSync(tempDirs.pop()!, { recursive: true, force: true });
 });
 
-describe("v1.2.0 first-frame anchoring, multi-candidate portraits, and incremental BatchJobScheduler", () => {
+describe("v1.2.1 first-frame anchoring, confirmed-ref vs candidate separation, stale speech detection, and BatchJobScheduler", () => {
   it("anchors video regeneration on the confirmed raster first-frame image even when an older video take is selected", async () => {
     const base = mkdtempSync(path.join(tmpdir(), "aivora-ffanchor-"));
     tempDirs.push(base);
@@ -109,7 +111,7 @@ describe("v1.2.0 first-frame anchoring, multi-candidate portraits, and increment
     globalConfig.close();
   });
 
-  it("retains multiple portrait candidates in candidatePaths and lets user switch back while keeping lockedRef false", async () => {
+  it("keeps confirmed reference and lockedRef=true untouched when generating new portrait candidates until user confirms (P1 regression)", async () => {
     const base = mkdtempSync(path.join(tmpdir(), "aivora-candidates-"));
     tempDirs.push(base);
     const projects = new ProjectStore(path.join(base, "ws"));
@@ -127,34 +129,151 @@ describe("v1.2.0 first-frame anchoring, multi-candidate portraits, and increment
 
     const demo = projects.openDemoProject();
     const asset = demo.assets.find((a) => a.kind === "character")!;
+    // Start with a confirmed locked raster reference image
     const png1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
     const png2 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-    let callIdx = 0;
-    const queue = new GenerationJobQueue(projects, globalConfig, oauth, async () => {
-      callIdx += 1;
-      return new Response(JSON.stringify({ data: [{ b64_json: callIdx === 1 ? png1 : png2 }] }), { status: 200 });
-    });
-
-    const p1 = queue.preparePlan({ projectId: demo.project.id, shotId: "", assetId: asset.id, kind: "image" });
-    await queue.confirmAndRun(p1);
-    const after1 = projects.openProject(demo.project.id).assets.find((a) => a.id === asset.id)!;
-    const firstGenPath = after1.mediaPath!;
-
-    const p2 = queue.preparePlan({ projectId: demo.project.id, shotId: "", assetId: asset.id, kind: "image" });
-    await queue.confirmAndRun(p2);
-    const after2 = projects.openProject(demo.project.id).assets.find((a) => a.id === asset.id)!;
-    expect(after2.candidatePaths).toContain(firstGenPath);
-    expect(after2.candidatePaths).toContain(after2.mediaPath!);
-    expect(after2.lockedRef).toBe(false);
-
-    // Switch back to first generated candidate -> lockedRef stays false until user confirms
-    const switched = projects.selectAssetCandidate({
+    const oldRefFile = path.join(base, "confirmed-old.png");
+    writeFileSync(oldRefFile, Buffer.from(png1, "base64"));
+    const imported = projects.importAssetImageFromPath({
       projectId: demo.project.id,
       assetId: asset.id,
-      mediaPath: firstGenPath,
+      sourceFilePath: oldRefFile,
     });
-    expect(switched.mediaPath).toBe(firstGenPath);
-    expect(switched.lockedRef).toBe(false);
+    const confirmedOldPath = imported.mediaPath!;
+    if (!imported.lockedRef) projects.toggleAssetLock(demo.project.id, asset.id);
+
+    const queue = new GenerationJobQueue(projects, globalConfig, oauth, async () =>
+      new Response(JSON.stringify({ data: [{ b64_json: png2 }] }), { status: 200 }),
+    );
+
+    // Generating a new candidate on an already-confirmed asset MUST NOT replace mediaPath or clear lockedRef
+    const p2 = queue.preparePlan({ projectId: demo.project.id, shotId: "", assetId: asset.id, kind: "image" });
+    await queue.confirmAndRun(p2);
+    const afterGen = projects.openProject(demo.project.id).assets.find((a) => a.id === asset.id)!;
+    expect(afterGen.lockedRef).toBe(true);
+    expect(afterGen.mediaPath).toBe(confirmedOldPath);
+    const newCandidatePath = afterGen.candidatePaths[0]!;
+    expect(newCandidatePath).not.toBe(confirmedOldPath);
+    expect(afterGen.candidatePaths).toContain(confirmedOldPath);
+
+    // Only when the user explicitly confirms the candidate does mediaPath switch while staying lockedRef=true
+    const confirmed = projects.selectAssetCandidate({
+      projectId: demo.project.id,
+      assetId: asset.id,
+      mediaPath: newCandidatePath,
+    });
+    expect(confirmed.mediaPath).toBe(newCandidatePath);
+    expect(confirmed.lockedRef).toBe(true);
+
+    projects.closeAll();
+    globalConfig.close();
+  });
+
+  it("flags speech takes as stale when dialogue or speaker voice changes, queues them in BatchJobScheduler, and warns in export preflight (P1 regression)", async () => {
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-stale-speech-"));
+    tempDirs.push(base);
+    const projects = new ProjectStore(path.join(base, "ws"));
+    const globalConfig = new GlobalConfigStore(path.join(base, "app"), mockVault);
+    const oauth = new OAuthManager(globalConfig, async () => undefined);
+    const ttsProv = globalConfig.saveProvider({
+      name: "TTS",
+      protocol: "openai-tts",
+      baseUrl: "https://api.tts.test/v1",
+      models: ["tts-1"],
+      apiKey: "sk-tts",
+      enabled: true,
+    });
+    globalConfig.updateRouting({
+      script: null,
+      image: null,
+      video: null,
+      tts: { source: "provider", sourceId: ttsProv.id, modelId: "tts-1" },
+    });
+
+    const ff = await probeFfmpegStatus();
+    expect(ff.available).toBe(true);
+    const wavPath = path.join(base, "voice.wav");
+    await runMediaBinary(ff.ffmpegPath!, [
+      "-hide_banner", "-nostdin", "-y",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+      "-ar", "24000", "-ac", "1", wavPath,
+    ]);
+    const validAudioBytes = readFileSync(wavPath);
+
+    const demo = projects.openDemoProject();
+    const epId = demo.episodes[0]!.id;
+    const epShots = demo.shots.filter((s) => s.episodeId === epId).sort((a, b) => a.orderIndex - b.orderIndex);
+    const dialogueShot = epShots.find((s) => s.dialogue.trim().length > 0)!;
+
+    // 1. Save speech audio matching current dialogue & voice -> status is "ready" and batch skips it
+    projects.importShotTakeFromPath({
+      projectId: demo.project.id,
+      shotId: dialogueShot.id,
+      kind: "speech",
+      sourceFilePath: wavPath,
+      durationSec: 1.0,
+    });
+    const wsReady = projects.openProject(demo.project.id);
+    const readyShot = wsReady.shots.find((s) => s.id === dialogueShot.id)!;
+    expect(evaluateShotSpeechStatus(readyShot, wsReady.takes, wsReady.assets).state).toBe("ready");
+
+    const queue = new GenerationJobQueue(projects, globalConfig, oauth, async () =>
+      new Response(validAudioBytes, { status: 200, headers: { "content-type": "audio/wav" } }),
+    );
+    const scheduler = new BatchJobScheduler(projects, queue);
+
+    const planBeforeEdit = scheduler.prepareBatchPlan({ projectId: demo.project.id, episodeId: epId, mode: "speech" });
+    expect(planBeforeEdit.plans.some((p) => p.shotId === dialogueShot.id)).toBe(false);
+
+    // 2. Edit dialogue -> status becomes "stale", batch MUST queue this shot, and export preflight MUST warn!
+    projects.updateShot({
+      projectId: demo.project.id,
+      shotId: dialogueShot.id,
+      dialogue: "这本旧诗集，我终于找到了。",
+      subtitle: "这本旧诗集，我终于找到了。",
+    });
+    const wsEdited = projects.openProject(demo.project.id);
+    const editedShot = wsEdited.shots.find((s) => s.id === dialogueShot.id)!;
+    expect(evaluateShotSpeechStatus(editedShot, wsEdited.takes, wsEdited.assets).state).toBe("stale");
+
+    const planAfterEdit = scheduler.prepareBatchPlan({ projectId: demo.project.id, episodeId: epId, mode: "speech" });
+    expect(planAfterEdit.plans.some((p) => p.shotId === dialogueShot.id)).toBe(true);
+
+    const preflight = await preflightEpisodeExport({
+      workspace: wsEdited,
+      projectDir: wsEdited.dirPath,
+      episodeId: epId,
+    });
+    expect(preflight.warnings.some((w) => w.includes(dialogueShot.title) && w.includes("待重配"))).toBe(true);
+
+    // 3. Regenerate speech via AI TTS -> returns to "ready"
+    const regenPlan = queue.preparePlan({ projectId: demo.project.id, shotId: dialogueShot.id, kind: "speech" });
+    const regenRes = await queue.confirmAndRun(regenPlan);
+    expect(regenRes.ok).toBe(true);
+    const wsRegen = projects.openProject(demo.project.id);
+    expect(
+      evaluateShotSpeechStatus(
+        wsRegen.shots.find((s) => s.id === dialogueShot.id)!,
+        wsRegen.takes,
+        wsRegen.assets,
+      ).state,
+    ).toBe("ready");
+
+    // 4. Switch speaker character's voiceId -> status becomes "stale" again and batch queues it
+    const speakerChar = wsRegen.assets.find((a) => a.kind === "character" && a.name === editedShot.speaker);
+    if (speakerChar) {
+      projects.updateAsset({ projectId: demo.project.id, assetId: speakerChar.id, voiceId: "zh_female_crisp" });
+      const wsVoiceChanged = projects.openProject(demo.project.id);
+      expect(
+        evaluateShotSpeechStatus(
+          wsVoiceChanged.shots.find((s) => s.id === dialogueShot.id)!,
+          wsVoiceChanged.takes,
+          wsVoiceChanged.assets,
+        ).state,
+      ).toBe("stale");
+      const planAfterVoice = scheduler.prepareBatchPlan({ projectId: demo.project.id, episodeId: epId, mode: "speech" });
+      expect(planAfterVoice.plans.some((p) => p.shotId === dialogueShot.id)).toBe(true);
+    }
 
     projects.closeAll();
     globalConfig.close();

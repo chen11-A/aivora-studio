@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { buildSpeechSnapshot, isSvgPlaceholderPath } from "../../shared/media-selection";
 import {
   UpdateAssetInputSchema,
   type Asset,
@@ -115,16 +116,26 @@ export function importAssetImageInDb(
     copied.mediaPath,
     ...prevCandidates.filter((p) => p !== copied.mediaPath),
   ].slice(0, 8);
+  const keepConfirmedRaster = Number(row.locked_ref) === 1 && Boolean(prevMedia) && !isSvgPlaceholderPath(prevMedia);
   const now = new Date().toISOString();
   db.transaction(() => {
-    db.run(
-      `UPDATE assets SET media_path = ?, media_sha256 = ?, candidate_paths_json = ?, updated_at = ? WHERE id = ?`,
-      copied.mediaPath,
-      copied.mediaSha256,
-      JSON.stringify(nextCandidates),
-      now,
-      input.assetId,
-    );
+    if (keepConfirmedRaster) {
+      db.run(
+        `UPDATE assets SET candidate_paths_json = ?, updated_at = ? WHERE id = ?`,
+        JSON.stringify(nextCandidates),
+        now,
+        input.assetId,
+      );
+    } else {
+      db.run(
+        `UPDATE assets SET media_path = ?, media_sha256 = ?, candidate_paths_json = ?, updated_at = ? WHERE id = ?`,
+        copied.mediaPath,
+        copied.mediaSha256,
+        JSON.stringify(nextCandidates),
+        now,
+        input.assetId,
+      );
+    }
     db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
   });
   const updated = db.get<Record<string, unknown>>(`SELECT * FROM assets WHERE id = ?`, input.assetId);
@@ -134,6 +145,7 @@ export function importAssetImageInDb(
 
 export function selectAssetCandidateInDb(
   db: SqliteDriver,
+  projectDir: string,
   input: { projectId: string; assetId: string; mediaPath: string },
 ): Asset {
   const row = db.get<Record<string, unknown>>(`SELECT * FROM assets WHERE id = ?`, input.assetId);
@@ -145,11 +157,17 @@ export function selectAssetCandidateInDb(
   if (!candidates.includes(input.mediaPath)) {
     throw new Error("指定的定妆候选图不在历史列表中");
   }
+  let nextSha = row.media_sha256 ? String(row.media_sha256) : null;
+  const absPath = path.resolve(projectDir, input.mediaPath);
+  if (absPath.startsWith(path.resolve(projectDir)) && existsSync(absPath)) {
+    nextSha = createHash("sha256").update(readFileSync(absPath)).digest("hex");
+  }
   const now = new Date().toISOString();
   db.transaction(() => {
     db.run(
-      `UPDATE assets SET media_path = ?, locked_ref = 0, updated_at = ? WHERE id = ?`,
+      `UPDATE assets SET media_path = ?, media_sha256 = ?, locked_ref = 1, updated_at = ? WHERE id = ?`,
       input.mediaPath,
+      nextSha,
       now,
       input.assetId,
     );
@@ -171,8 +189,8 @@ export function importShotTakeInDb(
     durationSec?: number | null;
   },
 ): void {
-  const shot = db.get<{ visual_prompt: string }>(
-    `SELECT visual_prompt FROM shots WHERE id = ?`,
+  const shot = db.get<{ visual_prompt: string; dialogue: string; subtitle: string; speaker: string }>(
+    `SELECT visual_prompt, dialogue, subtitle, speaker FROM shots WHERE id = ?`,
     input.shotId,
   );
   if (!shot) throw new Error("镜头不存在");
@@ -200,6 +218,19 @@ export function importShotTakeInDb(
   const nextVer = Number(maxVer) + 1;
   const takeId = `tk_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
 
+  let speechSnapshot = "";
+  if (input.kind === "speech") {
+    const speakerRow = shot.speaker.trim()
+      ? db.get<{ voice_id: string | null }>(
+          `SELECT voice_id FROM assets WHERE project_id = ? AND kind = 'character' AND TRIM(name) = ? LIMIT 1`,
+          input.projectId,
+          shot.speaker.trim(),
+        )
+      : undefined;
+    const text = shot.dialogue.trim() || shot.subtitle.trim();
+    speechSnapshot = text ? buildSpeechSnapshot(text, speakerRow?.voice_id || "alloy") : "";
+  }
+
   db.transaction(() => {
     if (input.kind === "speech") {
       db.run(`UPDATE takes SET is_selected = 0 WHERE shot_id = ? AND kind = 'speech'`, input.shotId);
@@ -211,7 +242,7 @@ export function importShotTakeInDb(
         nextVer,
         copied.mediaPath,
         copied.mediaSha256,
-        shot.visual_prompt,
+        speechSnapshot,
         `本地导入音频 · ${copied.baseName}`,
         dur,
         now,

@@ -340,10 +340,57 @@ export class DirectorService {
     if (!snap || snap.projectId !== input.projectId) {
       return { ok: false, message: "撤销快照已失效或不存在" };
     }
+
+    const postApplyTakes = this.projects.withProjectDb(input.projectId, (db) => {
+      const snapTakeIds = new Set(snap.takes.map((t) => t.id));
+      const currentTakes = db.all<{ id: string; shot_id: string; title: string }>(
+        `SELECT t.id, t.shot_id, s.title
+         FROM takes t
+         JOIN shots s ON t.shot_id = s.id
+         WHERE s.episode_id = ?`,
+        snap.episodeId,
+      );
+      return currentTakes.filter((t) => !snapTakeIds.has(t.id));
+    });
+    if (postApplyTakes.length > 0) {
+      const affectedTitles = [...new Set(postApplyTakes.map((t) => t.title))].slice(0, 3).join("、");
+      const suffix = new Set(postApplyTakes.map((t) => t.shot_id)).size > 3 ? "等" : "";
+      return {
+        ok: false,
+        message: `检测到拆镜后已有镜头新增了版本（${affectedTitles}${suffix}，共 ${postApplyTakes.length} 个新版本），为防止丢失新素材已阻止整集回滚；请直接保留当前版本或在分镜页微调镜头。`,
+      };
+    }
+
     const now = new Date().toISOString();
     this.projects.withProjectDb(input.projectId, (db) => {
       db.transaction(() => {
+        const otherEpisodeShots = db.all<{ character_asset_ids_json: string | null }>(
+          `SELECT character_asset_ids_json FROM shots WHERE episode_id != ?`,
+          snap.episodeId,
+        );
+        const referencedElsewhere = new Set<string>();
+        for (const row of otherEpisodeShots) {
+          try {
+            const parsed = JSON.parse(String(row.character_asset_ids_json ?? "[]")) as unknown;
+            if (Array.isArray(parsed)) {
+              for (const id of parsed) {
+                if (typeof id === "string") referencedElsewhere.add(id);
+              }
+            }
+          } catch {
+            // ignore malformed JSON
+          }
+        }
         for (const assetId of snap.createdAssetIds) {
+          if (referencedElsewhere.has(assetId)) continue;
+          const row = db.get<{ locked_ref: number; media_path: string | null }>(
+            `SELECT locked_ref, media_path FROM assets WHERE id = ?`,
+            assetId,
+          );
+          if (!row) continue;
+          const mediaPath = row.media_path ? String(row.media_path).toLowerCase() : "";
+          const hasCustomRaster = Boolean(mediaPath) && !mediaPath.endsWith(".svg");
+          if (Number(row.locked_ref) === 1 || hasCustomRaster) continue;
           db.run(`DELETE FROM assets WHERE id = ?`, assetId);
         }
         db.run(`DELETE FROM shots WHERE episode_id = ?`, snap.episodeId);
