@@ -61,7 +61,9 @@ export function ShotActionPolishBox({ currentShot }: { currentShot: Shot }) {
               : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
           }`}
         >
-          <Star className="w-3 h-3 shrink-0" />
+          <span key={currentShot.keyBeat ? "k1" : "k0"} className="aivora-icon-pop inline-flex">
+            <Star className="w-3 h-3 shrink-0" />
+          </span>
           <span className="truncate">{currentShot.keyBeat ? "关键节拍" : "关键标记"}</span>
         </button>
 
@@ -85,11 +87,13 @@ export function ShotActionPolishBox({ currentShot }: { currentShot: Shot }) {
               : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
           }`}
         >
-          {isPaidVideo ? (
-            <Film className="w-3 h-3 shrink-0" />
-          ) : (
-            <ImageIcon className="w-3 h-3 shrink-0" />
-          )}
+          <span key={isPaidVideo ? "vid" : "still"} className="aivora-icon-pop inline-flex">
+            {isPaidVideo ? (
+              <Film className="w-3 h-3 shrink-0" />
+            ) : (
+              <ImageIcon className="w-3 h-3 shrink-0" />
+            )}
+          </span>
           <span className="truncate">{isPaidVideo ? "付费动态" : "静帧推拉"}</span>
         </button>
 
@@ -113,10 +117,10 @@ export function ShotActionPolishBox({ currentShot }: { currentShot: Shot }) {
       {activePolish && (
         <div
           data-testid="action-polish-card"
-          className="rounded-xl bg-[var(--accent-primary-soft)] border border-[var(--accent-primary-border)] p-2.5 flex flex-col gap-1.5 text-[11px]"
+          className="aivora-attention-in rounded-xl bg-[var(--accent-primary-soft)] border border-[var(--accent-primary-border)] p-2.5 flex flex-col gap-1.5 text-[11px]"
         >
           <div className="flex items-center justify-between gap-2">
-            <span className="font-semibold text-[var(--accent-primary-text)] inline-flex items-center gap-1">
+            <span className="font-semibold text-[var(--accent-primary-text)] inline-flex items-center gap-1 tabular-nums">
               <Sparkles className="w-3 h-3" />
               动作精修提案（{activePolish.suggestedScale} · {activePolish.suggestedCameraMove} ·{" "}
               {activePolish.suggestedDurationSec}s）
@@ -134,15 +138,8 @@ export function ShotActionPolishBox({ currentShot }: { currentShot: Shot }) {
             {activePolish.refinedVisualPrompt}
           </p>
           {activePolish.actionBeats.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {activePolish.actionBeats.map((b, i) => (
-                <span
-                  key={i}
-                  className="px-1.5 py-0.5 rounded bg-[var(--bg-surface)] text-[var(--text-secondary)] text-[10px]"
-                >
-                  {b}
-                </span>
-              ))}
+            <div className="text-[11px] text-[var(--text-secondary)] leading-snug pt-0.5 border-t border-[var(--accent-primary-border)]/40">
+              {activePolish.actionBeats.join(" → ")}
             </div>
           )}
           <div className="flex items-center justify-end gap-1.5 pt-1">

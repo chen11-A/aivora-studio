@@ -4,6 +4,7 @@ import type { BatchGenerationMode } from "@shared/types/jobs";
 import { useAiGenerationStore } from "../store/useAiGenerationStore";
 import { useStudioStore } from "../store/useStudioStore";
 import { ModalShell } from "./ui/OverlayShell";
+import { SlidingSegmentedControl } from "./ui/SlidingSegmentedControl";
 
 const MODES: Array<{ id: BatchGenerationMode; label: string; desc: string }> = [
   { id: "speech", label: "批量补配音", desc: "只处理有台词且待配音镜头" },
@@ -34,6 +35,7 @@ export function BatchJobModal() {
   }, [open, progress?.running, pollProgress]);
 
   const isRunning = Boolean(progress?.running);
+  const activeModeMeta = MODES.find((m) => m.id === mode) ?? MODES[1]!;
   const pct =
     progress && progress.totalCount > 0
       ? Math.round((progress.completedCount / progress.totalCount) * 100)
@@ -64,27 +66,27 @@ export function BatchJobModal() {
       </div>
 
       <div className="panel-scroll flex-1 p-5 flex flex-col gap-4">
-        <div className="grid grid-cols-3 gap-2">
-          {MODES.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              disabled={isRunning}
-              onClick={() => void selectMode(m.id)}
-              className={`aivora-pressable p-2.5 rounded-xl border text-left cursor-pointer ${
-                mode === m.id
-                  ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary)] text-[var(--text-primary)]"
-                  : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
-              }`}
-            >
-              <div className="text-[12px] font-semibold">{m.label}</div>
-              <div className="text-[10px] text-[var(--text-muted)] mt-0.5 leading-snug">{m.desc}</div>
-            </button>
-          ))}
+        <div className="flex flex-col gap-1.5">
+          <SlidingSegmentedControl<BatchGenerationMode>
+            ariaLabel="批量补齐模式"
+            tone="surface"
+            fullWidth
+            disabled={isRunning}
+            value={mode}
+            onChange={(nextMode) => void selectMode(nextMode)}
+            options={MODES.map((m) => ({
+              id: m.id,
+              content: () => <span>{m.label}</span>,
+            }))}
+          />
+          <div className="text-[11px] text-[var(--text-muted)] px-0.5">{activeModeMeta.desc}</div>
         </div>
 
         {plan && (
-          <div className="rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] p-3.5 text-[12px] flex flex-col gap-1.5 text-[var(--text-secondary)] tabular-nums">
+          <div
+            key={plan.mode}
+            className="aivora-panel-swap rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] p-3.5 text-[12px] flex flex-col gap-1.5 text-[var(--text-secondary)] tabular-nums"
+          >
             <div className="flex justify-between gap-2">
               <span>{mode === "video" ? "剪辑镜头 / 付费视频" : "本集镜头统计"}</span>
               <span className="text-[var(--text-primary)]">
@@ -121,7 +123,7 @@ export function BatchJobModal() {
           plan.blockedUnconfirmedSpeakerShots.length > 0 && (
             <div
               data-testid="batch-blocked-speakers"
-              className="rounded-xl bg-[var(--accent-amber-soft)] border border-[var(--accent-amber-border)] p-3 text-[11px] text-[var(--accent-amber-ink)] flex flex-col gap-1.5"
+              className="aivora-attention-in rounded-xl bg-[var(--accent-amber-soft)] border border-[var(--accent-amber-border)] p-3 text-[11px] text-[var(--accent-amber-ink)] flex flex-col gap-1.5"
             >
               <div className="flex items-center gap-1.5 font-semibold">
                 <AlertTriangle className="w-3.5 h-3.5 text-[var(--accent-amber-text)] shrink-0" />
@@ -151,7 +153,7 @@ export function BatchJobModal() {
           )}
 
         {plan && !plan.canRun && !isRunning && (
-          <div className="rounded-xl bg-[var(--accent-amber-soft)] border border-[var(--accent-amber-border)] p-3 text-[12px] text-[var(--accent-amber-ink)] flex items-start gap-2">
+          <div className="aivora-attention-in rounded-xl bg-[var(--accent-amber-soft)] border border-[var(--accent-amber-border)] p-3 text-[12px] text-[var(--accent-amber-ink)] flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 text-[var(--accent-amber-text)] shrink-0 mt-0.5" />
             <div className="flex-1">
               <div>{plan.blockingReason}</div>

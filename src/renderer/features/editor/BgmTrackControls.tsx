@@ -165,7 +165,7 @@ export function BgmTrackControls(props: {
           <span>背景配乐（对白时自动轻柔压低）</span>
         </span>
         {props.bgmAsset && (
-          <span className="font-mono tabular-nums text-[var(--text-primary)]">{props.bgmVolumeDb} dB</span>
+          <span className="font-medium tabular-nums text-[var(--text-primary)]">{props.bgmVolumeDb} dB</span>
         )}
       </div>
 
@@ -264,13 +264,10 @@ export function BgmTrackControls(props: {
                   className="rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)] p-2 flex flex-col gap-1"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[var(--text-primary)] font-medium truncate">
+                    <span className="text-[var(--text-primary)] font-medium truncate tabular-nums">
                       {track.name}
-                      <span className="ml-1.5 px-1.5 py-0.5 rounded bg-[var(--accent-amber-soft)] text-[var(--accent-amber-text)] text-[10px]">
-                        {track.mood}
-                      </span>
-                      <span className="ml-1 text-[10px] text-[var(--text-muted)] tabular-nums">
-                        {Math.round(track.durationSec)}s
+                      <span className="ml-1.5 text-[10px] font-normal text-[var(--text-muted)]">
+                        · {track.mood} · {Math.round(track.durationSec)}s
                       </span>
                     </span>
                     <button

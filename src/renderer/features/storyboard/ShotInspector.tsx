@@ -4,6 +4,7 @@ import { evaluateShotSpeechStatus } from "@shared/media-selection";
 import type { Asset, CameraMove, Scene, Shot, ShotScale, Take } from "@shared/types/domain";
 import { CollapsibleRegion } from "../../components/ui/CollapsibleRegion";
 import { ConfirmInlineAction } from "../../components/ui/ConfirmInlineAction";
+import { SlidingSegmentedControl } from "../../components/ui/SlidingSegmentedControl";
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
 import { ShotActionPolishBox } from "./ShotActionPolishBox";
@@ -11,7 +12,7 @@ import { ShotSpeakerWarning } from "./ShotSpeakerWarning";
 
 const SCALES: ShotScale[] = ["远景", "全景", "中景", "近景", "特写"];
 const MOVES: CameraMove[] = ["固定", "缓推", "缓拉", "横摇", "跟拍", "微摇"];
-const DURATIONS = [2, 3, 5, 8] as const;
+const DURATIONS = ["2", "3", "5", "8"] as const;
 
 export function ShotInspector(props: {
   currentShot: Shot | null;
@@ -353,64 +354,54 @@ export function ShotInspector(props: {
             </div>
           </CollapsibleRegion>
 
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1.5">
             <label className="text-[11px] text-[var(--text-secondary)]">景别与运镜</label>
-            <div className="flex flex-wrap gap-1">
-              {SCALES.map((sc) => (
-                <button
-                  key={sc}
-                  type="button"
-                  onClick={() => editShot({ shotId: currentShot.id, scale: sc })}
-                  className={`aivora-pressable px-2 py-0.5 rounded-md text-[11px] border cursor-pointer ${
-                    currentShot.scale === sc
-                      ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary)] text-[var(--text-primary)] font-medium"
-                      : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
-                  }`}
-                >
-                  {sc}
-                </button>
-              ))}
-            </div>
-            <div className="flex flex-wrap gap-1 pt-0.5">
-              {MOVES.map((mv) => (
-                <button
-                  key={mv}
-                  type="button"
-                  onClick={() => editShot({ shotId: currentShot.id, cameraMove: mv })}
-                  className={`aivora-pressable px-2 py-0.5 rounded-md text-[11px] border cursor-pointer ${
-                    currentShot.cameraMove === mv
-                      ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary)] text-[var(--text-primary)] font-medium"
-                      : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
-                  }`}
-                >
-                  {mv}
-                </button>
-              ))}
-            </div>
+            <SlidingSegmentedControl
+              ariaLabel="镜头景别"
+              size="sm"
+              tone="surface"
+              fullWidth
+              value={currentShot.scale}
+              onChange={(sc) => editShot({ shotId: currentShot.id, scale: sc })}
+              buttonClassName="px-1"
+              options={SCALES.map((sc) => ({
+                id: sc,
+                content: () => <span>{sc}</span>,
+              }))}
+            />
+            <SlidingSegmentedControl
+              ariaLabel="镜头运镜"
+              size="sm"
+              tone="surface"
+              fullWidth
+              value={currentShot.cameraMove}
+              onChange={(mv) => editShot({ shotId: currentShot.id, cameraMove: mv })}
+              buttonClassName="px-1"
+              options={MOVES.map((mv) => ({
+                id: mv,
+                content: () => <span>{mv}</span>,
+              }))}
+            />
           </div>
 
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1.5">
             <label className="text-[11px] text-[var(--text-secondary)] tabular-nums">
               时长（当前 {currentShot.durationSec}s）
             </label>
-            <div className="grid grid-cols-4 gap-1.5">
-              {DURATIONS.map((sec) => (
-                <button
-                  key={sec}
-                  type="button"
-                  onClick={() => editShot({ shotId: currentShot.id, durationSec: sec })}
-                  className={`aivora-pressable h-7 rounded-md text-[11px] border cursor-pointer tabular-nums ${
-                    currentShot.durationSec === sec
-                      ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary)] text-[var(--text-primary)] font-medium"
-                      : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
-                  }`}
-                >
-                  {sec}s
-                </button>
-              ))}
-            </div>
+            <SlidingSegmentedControl
+              ariaLabel="镜头时长预设"
+              size="sm"
+              tone="surface"
+              fullWidth
+              value={String(currentShot.durationSec)}
+              onChange={(sec) => editShot({ shotId: currentShot.id, durationSec: Number(sec) })}
+              options={DURATIONS.map((sec) => ({
+                id: sec,
+                content: () => <span className="tabular-nums">{sec}s</span>,
+              }))}
+            />
             {!measuredSpeechSec && dialogueEstSec > currentShot.durationSec && (
-              <div className="flex items-center justify-between gap-2 pt-1 text-[11px] text-[var(--accent-amber-text)] tabular-nums">
+              <div className="aivora-attention-in flex items-center justify-between gap-2 pt-0.5 text-[11px] text-[var(--accent-amber-text)] tabular-nums">
                 <span>台词约需 {dialogueEstSec}s，建议适当拉长</span>
                 <button
                   type="button"

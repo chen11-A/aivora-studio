@@ -170,19 +170,19 @@ export function DirectorProposalModal() {
                 ]}
               />
 
-              <div className="flex flex-wrap items-center gap-1.5 text-[11px] tabular-nums">
-                <span className="px-2 py-0.5 rounded bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-[var(--text-secondary)]">
+              <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--text-secondary)] tabular-nums">
+                <span>
                   保留 {matchedMap.size} · 新增 {newCount}
                   {removedCount > 0 ? ` · 移除 ${removedCount}` : ""}
                 </span>
                 {keyBeatCount > 0 && (
-                  <span className="px-2 py-0.5 rounded bg-[var(--accent-success-soft)] border border-[var(--accent-success-border)] text-[var(--accent-success-text)]">
-                    关键节拍 {keyBeatCount}
+                  <span className="text-[var(--accent-success-text)] font-medium">
+                    · 关键节拍 {keyBeatCount}
                   </span>
                 )}
                 {unconfirmedSpeakers > 0 && (
-                  <span className="px-2 py-0.5 rounded bg-[var(--accent-amber-soft)] border border-[var(--accent-amber-border)] text-[var(--accent-amber-text)]">
-                    待确认说话人 {unconfirmedSpeakers}
+                  <span className="text-[var(--accent-amber-text)] font-medium">
+                    · 待确认说话人 {unconfirmedSpeakers}
                   </span>
                 )}
               </div>
@@ -207,7 +207,7 @@ export function DirectorProposalModal() {
             )}
           </div>
 
-          <div className="panel-scroll flex-1 p-5 flex flex-col gap-4">
+          <div key={tab} className="panel-scroll aivora-panel-swap flex-1 p-5 flex flex-col gap-4">
             {tab === "outline" && (
               <>
                 {activeProposal.screenwriterTrace && (

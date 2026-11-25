@@ -279,7 +279,7 @@ export function StoryboardStage() {
         <div className="flex-1 min-h-0 p-4 sm:p-5 flex items-center justify-center overflow-hidden">
           {currentShot ? (
             <div
-              className={`relative rounded-xl overflow-hidden bg-[var(--bg-surface)] border border-[var(--border-subtle)] shadow-2xl flex items-center justify-center transition-all ${
+              className={`relative rounded-xl overflow-hidden bg-[var(--bg-surface)] border border-[var(--border-subtle)] shadow-2xl flex items-center justify-center transition-[border-color,box-shadow] duration-[var(--dur-fast)] ease-[var(--ease-out)] ${
                 canvasDragOver ? "aivora-drop-active" : ""
               } ${
                 isPortrait ? "h-full max-h-[480px] aspect-[9/16]" : "w-full max-w-[780px] aspect-video"
@@ -331,7 +331,7 @@ export function StoryboardStage() {
         {detectedDownload && currentShot && (
           <div
             data-testid="detected-download-banner"
-            className="aivora-toast mx-4 mb-2 px-3 py-2 rounded-xl bg-[var(--accent-success-soft)] border border-[var(--accent-success-border)] flex items-center justify-between gap-3 shrink-0"
+            className="aivora-attention-in mx-4 mb-2 px-3 py-2 rounded-xl bg-[var(--accent-success-soft)] border border-[var(--accent-success-border)] flex items-center justify-between gap-3 shrink-0"
           >
             <div className="flex items-center gap-2 min-w-0 text-[12px] text-[var(--accent-success-ink)]">
               <Download className="w-4 h-4 text-[var(--accent-success-text)] shrink-0" />

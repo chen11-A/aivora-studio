@@ -115,7 +115,7 @@ export function EditorTimeline(props: {
         <span className="truncate">
           四轨时间轴（视频 · 对白 · 配乐 · 字幕）· 点击或拖动可直接定位播放头
         </span>
-        <span className="font-mono tabular-nums shrink-0">总时长：{fmtTime(totalSec)}</span>
+        <span className="tabular-nums shrink-0">总时长：{fmtTime(totalSec)}</span>
       </div>
 
       <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden px-3 py-2">
@@ -140,7 +140,10 @@ export function EditorTimeline(props: {
                 willChange: "transform",
               }}
             >
-              <span className="absolute -top-1 -left-[4px] w-[10px] h-[10px] rounded-full bg-[var(--accent-danger)] shadow-sm ring-2 ring-[var(--bg-surface)]" />
+              <span
+                className="absolute -top-1 -left-[4px] w-[10px] h-[10px] rounded-full bg-[var(--accent-danger)] shadow-sm ring-2 ring-[var(--bg-surface)] transition-transform duration-[var(--dur-press)] ease-[var(--ease-out)]"
+                style={{ transform: scrubbing ? "scale(1.28)" : "scale(1)" }}
+              />
             </div>
           )}
 
@@ -217,7 +220,7 @@ export function EditorTimeline(props: {
               <span className="block truncate min-w-0 tabular-nums">
                 {bgmAsset
                   ? `背景配乐：${bgmAsset.name} · ${bgmVolumeDb} dB（对白段自动压低 8 dB）`
-                  : "未选用背景配乐（可在右侧「内置配乐」直接试听选用）"}
+                  : "未选用配乐（可在右侧「内置配乐」直接试听选用）"}
               </span>
             </div>
           </div>
@@ -239,7 +242,7 @@ export function EditorTimeline(props: {
                       : "bg-[var(--bg-inset)] border border-dashed border-[var(--border-subtle)] text-[var(--text-muted)]"
                   }`}
                 >
-                  <span className="block truncate min-w-0">{shot.subtitle || "—"}</span>
+                  <span className="block truncate min-w-0">{shot.subtitle || "无字幕"}</span>
                 </div>
               ))}
             </div>

@@ -23,7 +23,7 @@ function makeDemoSvgDataUrl(title: string, subtitle: string, tag: string, bg1: s
     <text x="164" y="99" text-anchor="middle" fill="#F3F6FB" font-family="sans-serif" font-size="16" font-weight="600">${tag}</text>
     <text x="76" y="400" fill="#F8FAFC" font-family="sans-serif" font-size="44" font-weight="700">${title}</text>
     <text x="76" y="452" fill="#CBD5E1" font-family="sans-serif" font-size="22">${subtitle}</text>
-    <text x="76" y="644" fill="#94A3B8" font-family="monospace" font-size="16">AIVORA STUDIO · 16:9</text>
+    <text x="76" y="644" fill="#94A3B8" font-family="sans-serif" font-size="16">AIVORA STUDIO · 16:9</text>
   </svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
@@ -485,7 +485,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     cancelEpisodeExport: async () => ({ ok: false, message: "浏览器预览模式无导出任务" }),
     onFlushBeforeClose: () => () => undefined,
     notifyFlushComplete: () => undefined,
-    getAppInfo: async () => ({ version: "1.8.0", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "1.9.0", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
     resolveDroppedFilePath: () => null,
   };

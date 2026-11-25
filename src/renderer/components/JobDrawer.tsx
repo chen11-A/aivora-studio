@@ -135,7 +135,7 @@ export function JobDrawer() {
                   <div className="pt-2 border-t border-[var(--border-subtle)] flex flex-col gap-2">
                     <input
                       type="text"
-                      className="input-field h-8 text-[11px] font-mono"
+                      className="input-field h-8 text-[11px] tabular-nums"
                       placeholder="粘贴或核对任务编号"
                       value={manualIds[job.id] ?? job.remoteTaskId ?? ""}
                       onChange={(e) =>

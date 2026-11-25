@@ -151,16 +151,13 @@ export function ProjectHome() {
                         <img
                           src={coverSrc}
                           alt={item.name}
-                          className="w-full h-full object-cover transition-transform duration-[var(--dur-base)] ease-[var(--ease-out)] group-hover:scale-[1.03]"
+                          className="w-full h-full object-cover transition-transform duration-[var(--dur-base)] ease-[var(--ease-out)] motion-safe:group-hover:scale-[1.03]"
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-[var(--text-muted)]">
                           <Film className="w-8 h-8" />
                         </div>
                       )}
-                      <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md bg-[var(--bg-overlay-chip)] backdrop-blur-sm border border-white/15 text-[11px] font-medium text-white tabular-nums">
-                        {item.aspectRatio}
-                      </span>
                     </div>
                     <div className="p-3.5 flex flex-col gap-1.5">
                       <h3 className="text-[14px] font-semibold text-[var(--text-primary)] truncate">
@@ -171,7 +168,7 @@ export function ProjectHome() {
                       </p>
                       <div className="flex items-center justify-between text-[11px] text-[var(--text-muted)] pt-1 tabular-nums">
                         <span>
-                          {item.episodeCount} 集 · {item.shotCount} 镜头
+                          {item.aspectRatio} · {item.episodeCount} 集 · {item.shotCount} 镜头
                         </span>
                         <span className="flex items-center gap-1">
                           <Clock className="w-3 h-3" />
@@ -183,9 +180,9 @@ export function ProjectHome() {
                   <div className="px-3.5 py-2 border-t border-[var(--border-subtle)] bg-[var(--bg-inset)] flex items-center justify-between gap-2">
                     <span
                       className="text-[11px] text-[var(--text-muted)] truncate min-w-0"
-                      title={item.dirPath}
+                      title={`本地位置：${item.dirPath}`}
                     >
-                      {item.dirPath}
+                      {item.dirPath.split(/[\\/]/).filter(Boolean).pop() || item.dirPath}
                     </span>
                     <button
                       type="button"

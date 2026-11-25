@@ -51,7 +51,7 @@ export const PROVIDER_PROTOCOLS: Array<{
     id: "comfy-worker",
     label: "ComfyUI 远程算力（本地显卡 / AutoDL / Colab）",
     defaultUrl: "https://your-tunnel.trycloudflare.com",
-    defaultModels: "flux-schnell, wan2.2-i2v-5b, wan2.2-i2v-14b-gguf, ltx-2.5-distilled",
+    defaultModels: "flux-schnell, wan2.2-i2v-5b",
     keyPlaceholder: "访问令牌（由 Colab / Worker 启动时生成）",
     hint: "同时支持生图与生视频；下次重开只需点「编辑」粘贴新连接码即可秒换地址。",
     presetEndpoint: false,

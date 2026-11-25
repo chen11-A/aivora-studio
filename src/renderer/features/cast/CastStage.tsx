@@ -170,7 +170,7 @@ export function CastStage() {
                       if (dragOverId === asset.id) setDragOverId(null);
                     }}
                     onDrop={(e) => handleDropImage(asset.id, e)}
-                    className={`aivora-card rounded-xl overflow-hidden flex flex-col cursor-pointer ${
+                    className={`aivora-card group rounded-xl overflow-hidden flex flex-col cursor-pointer ${
                       dragActive
                         ? "aivora-drop-active"
                         : active
@@ -179,10 +179,13 @@ export function CastStage() {
                     }`}
                   >
                     <div className="aspect-video bg-[var(--bg-inset)] relative overflow-hidden">
-                      {src && <img src={src} alt={asset.name} className="w-full h-full object-cover" />}
-                      <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md bg-[var(--bg-overlay-chip)] backdrop-blur-sm border border-white/15 text-[11px] font-medium text-white">
-                        {getAssetKindLabel(asset.kind)}
-                      </span>
+                      {src && (
+                        <img
+                          src={src}
+                          alt={asset.name}
+                          className="w-full h-full object-cover transition-transform duration-[var(--dur-base)] ease-[var(--ease-out)] motion-safe:group-hover:scale-[1.02]"
+                        />
+                      )}
                       {dragActive && (
                         <div className="absolute inset-0 bg-[var(--accent-primary)]/20 backdrop-blur-xs flex items-center justify-center">
                           <span className="px-2.5 py-1 rounded-md bg-[var(--bg-overlay-chip)] border border-white/15 text-[12px] font-semibold text-white shadow-md">
@@ -193,19 +196,32 @@ export function CastStage() {
                     </div>
                     <div className="p-3.5 flex flex-col gap-2">
                       <div className="flex items-center justify-between gap-2">
-                        <h3 className="text-[14px] font-semibold text-[var(--text-primary)] truncate">
-                          {asset.name}
-                        </h3>
-                        <span
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium border shrink-0 ${
+                        <div className="flex items-baseline gap-1.5 min-w-0">
+                          <h3 className="text-[14px] font-semibold text-[var(--text-primary)] truncate">
+                            {asset.name}
+                          </h3>
+                          <span className="text-[11px] text-[var(--text-muted)] shrink-0">
+                            {getAssetKindLabel(asset.kind)}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void toggleAssetLock(asset.id);
+                          }}
+                          title={asset.lockedRef ? "点击取消参考锁定" : "点击设为参考图（分镜自动沿用）"}
+                          className={`aivora-pressable inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium border shrink-0 cursor-pointer ${
                             asset.lockedRef
                               ? "bg-[var(--accent-success-soft)] border-[var(--accent-success-border)] text-[var(--accent-success-text)]"
-                              : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)]"
+                              : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)]"
                           }`}
                         >
-                          {asset.lockedRef ? <Lock className="w-3 h-3" /> : <LockOpen className="w-3 h-3" />}
-                          <span>{asset.lockedRef ? "已锁定参考" : "待确认"}</span>
-                        </span>
+                          <span key={asset.lockedRef ? "l" : "u"} className="aivora-icon-pop inline-flex">
+                            {asset.lockedRef ? <Lock className="w-3 h-3" /> : <LockOpen className="w-3 h-3" />}
+                          </span>
+                          <span>{asset.lockedRef ? "已锁定" : "设为参考"}</span>
+                        </button>
                       </div>
                       <p className="text-[12px] text-[var(--text-secondary)] line-clamp-2 min-h-[36px]">
                         {asset.description || "暂无外观描述"}
@@ -253,7 +269,7 @@ export function CastStage() {
         </div>
 
         {selected ? (
-          <div className="panel-scroll flex-1 p-4 flex flex-col gap-3.5">
+          <div key={selected.id} className="panel-scroll aivora-panel-swap flex-1 p-4 flex flex-col gap-3.5">
             <div
               onDragOver={(e) => {
                 e.preventDefault();
@@ -290,10 +306,7 @@ export function CastStage() {
                 )}
               </div>
               {selected.candidatePaths.length > 1 && (
-                <div
-                  className="px-2.5 pt-2 flex items-center gap-1.5 overflow-x-auto"
-                  data-testid="asset-candidate-strip"
-                >
+                <div className="px-2.5 pt-2 flex items-center gap-1.5 overflow-x-auto" data-testid="asset-candidate-strip">
                   {selected.candidatePaths.map((cp, idx) => {
                     const cSrc = resolveSrc(cp);
                     const isPreview = cp === activePreviewPath;
@@ -325,7 +338,7 @@ export function CastStage() {
               )}
               <div className="p-2.5 border-t border-[var(--border-subtle)] flex flex-col gap-2">
                 {isPreviewingAlternate && activePreviewPath ? (
-                  <div className="flex flex-col gap-1.5 rounded-lg bg-[var(--accent-amber-soft)] border border-[var(--accent-amber-border)] p-2">
+                  <div className="aivora-attention-in flex flex-col gap-1.5 rounded-lg bg-[var(--accent-amber-soft)] border border-[var(--accent-amber-border)] p-2">
                     <span className="text-[11px] text-[var(--accent-amber-ink)]">
                       正在对比候选图，原锁定参考图不受影响
                     </span>
@@ -406,15 +419,11 @@ export function CastStage() {
                 </label>
                 <select
                   value={selected.voiceId ?? ""}
-                  onChange={(e) =>
-                    editAsset({ assetId: selected.id, voiceId: e.target.value || null })
-                  }
+                  onChange={(e) => editAsset({ assetId: selected.id, voiceId: e.target.value || null })}
                   className="input-field h-9 py-1 px-2.5 text-[12px]"
                 >
                   {VOICE_PRESETS.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.label}
-                    </option>
+                    <option key={v.id} value={v.id}>{v.label}</option>
                   ))}
                 </select>
               </div>
@@ -427,13 +436,7 @@ export function CastStage() {
         )}
       </aside>
 
-      <ModalShell
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        ariaLabel="新建角色或场景"
-        maxWidthClass="max-w-[440px]"
-        className="p-5 flex flex-col gap-4"
-      >
+      <ModalShell open={createOpen} onClose={() => setCreateOpen(false)} ariaLabel="新建角色或场景" maxWidthClass="max-w-[440px]" className="p-5 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h2 className="text-[15px] font-semibold text-[var(--text-primary)]">新建角色 / 场景 / 道具</h2>
           <button
@@ -445,29 +448,18 @@ export function CastStage() {
             <X className="w-4 h-4" />
           </button>
         </div>
-        <form
-          className="flex flex-col gap-3.5"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void handleCreate();
-          }}
-        >
-          <div className="grid grid-cols-3 gap-1.5">
-            {(["character", "scene", "prop"] as AssetKind[]).map((k) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setNewKind(k)}
-                className={`aivora-pressable h-8 rounded-lg text-[12px] cursor-pointer border ${
-                  newKind === k
-                    ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary)] text-[var(--text-primary)] font-medium"
-                    : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)]"
-                }`}
-              >
-                {getAssetKindLabel(k)}
-              </button>
-            ))}
-          </div>
+        <form className="flex flex-col gap-3.5" onSubmit={(e) => { e.preventDefault(); void handleCreate(); }}>
+          <SlidingSegmentedControl
+            ariaLabel="设定类型"
+            tone="surface"
+            fullWidth
+            value={newKind}
+            onChange={(k) => setNewKind(k)}
+            options={(["character", "scene", "prop"] as AssetKind[]).map((k) => ({
+              id: k,
+              content: () => <span>{getAssetKindLabel(k)}</span>,
+            }))}
+          />
           <input
             type="text"
             value={newName}
@@ -484,12 +476,8 @@ export function CastStage() {
             className="input-field p-3 text-[12px] resize-none"
           />
           <div className="flex justify-end gap-2">
-            <button type="button" className="btn-secondary" onClick={() => setCreateOpen(false)}>
-              取消
-            </button>
-            <button type="submit" disabled={!newName.trim()} className="btn-primary">
-              添加到角色场景
-            </button>
+            <button type="button" className="btn-secondary" onClick={() => setCreateOpen(false)}>取消</button>
+            <button type="submit" disabled={!newName.trim()} className="btn-primary">添加到角色场景</button>
           </div>
         </form>
       </ModalShell>

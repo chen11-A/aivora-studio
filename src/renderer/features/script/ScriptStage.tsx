@@ -12,12 +12,13 @@ import {
   RotateCcw,
   Sparkles,
 } from "lucide-react";
+import { SlidingSegmentedControl } from "../../components/ui/SlidingSegmentedControl";
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
 import { DirectorProposalModal } from "./DirectorProposalModal";
 import { ScreenwriterOutlineModal } from "./ScreenwriterOutlineModal";
 
-const SOFT_TARGET_OPTIONS = [12, 16, 20, 24] as const;
+const SOFT_TARGET_OPTIONS = ["12", "16", "20", "24"] as const;
 
 export function ScriptStage() {
   const workspace = useStudioStore((s) => s.workspace);
@@ -188,28 +189,24 @@ export function ScriptStage() {
 
             <div className="flex items-center justify-between gap-2 pt-0.5">
               <span
-                className="text-[11px] text-[var(--text-secondary)]"
+                className="text-[11px] text-[var(--text-secondary)] shrink-0"
                 title="每场软目标镜头数，遇关键动作与独立证据不会硬裁切"
               >
                 每场软目标
               </span>
-              <div className="flex items-center gap-1">
-                {SOFT_TARGET_OPTIONS.map((num) => (
-                  <button
-                    key={num}
-                    type="button"
-                    data-testid={`soft-target-${num}`}
-                    onClick={() => setSoftTargetShotsPerScene(num)}
-                    className={`aivora-pressable px-1.5 py-0.5 rounded text-[11px] border tabular-nums cursor-pointer ${
-                      softTargetShotsPerScene === num
-                        ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary)] text-[var(--text-primary)] font-medium"
-                        : "bg-[var(--bg-surface)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
-                    }`}
-                  >
-                    {num}镜
-                  </button>
-                ))}
-              </div>
+              <SlidingSegmentedControl
+                ariaLabel="每场软目标镜头数"
+                size="sm"
+                tone="surface"
+                value={String(softTargetShotsPerScene)}
+                onChange={(v) => setSoftTargetShotsPerScene(Number(v))}
+                buttonClassName="px-1.5"
+                options={SOFT_TARGET_OPTIONS.map((num) => ({
+                  id: num,
+                  testId: `soft-target-${num}`,
+                  content: () => <span className="tabular-nums">{num}镜</span>,
+                }))}
+              />
             </div>
 
             <button
@@ -255,7 +252,7 @@ export function ScriptStage() {
           {liveReviewReport && (
             <div
               data-testid="live-review-panel"
-              className="rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] p-3 flex flex-col gap-2"
+              className="aivora-attention-in rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] p-3 flex flex-col gap-2"
             >
               <div className="flex items-center justify-between gap-2 text-[11px]">
                 <span className="font-semibold text-[var(--text-primary)] flex items-center gap-1.5">

@@ -230,7 +230,7 @@ export function ScreenwriterOutlineModal() {
             )}
 
             {currentDraftEp && (
-              <div className="flex flex-col gap-2.5">
+              <div key={currentDraftEp.id} className="aivora-panel-swap flex flex-col gap-2.5">
                 <div className="flex items-center justify-between text-[11px] text-[var(--text-muted)] tabular-nums">
                   <span>
                     {currentDraftEp.title} · 共 {currentDraftEp.scenes.length} 场 · 原文第{" "}

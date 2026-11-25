@@ -194,14 +194,14 @@ export function ModelCenterModal() {
                         className="rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-3"
                       >
                         <div className="min-w-0 flex-1">
-                          <div className="text-[13px] font-medium text-[var(--text-primary)] flex items-center gap-2 flex-wrap">
+                          <div className="text-[13px] font-medium text-[var(--text-primary)] flex items-baseline gap-1.5 flex-wrap">
                             <span>{p.name}</span>
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-secondary)]">
-                              {getProtocolBadgeLabel(p.protocol)}
+                            <span className="text-[11px] font-normal text-[var(--text-muted)]">
+                              · {getProtocolBadgeLabel(p.protocol)}
                             </span>
                             {p.keyHint && (
-                              <span className="text-[11px] font-mono text-[var(--text-muted)]">
-                                {p.keyHint}
+                              <span className="text-[11px] font-normal tabular-nums text-[var(--text-muted)]">
+                                · {p.keyHint}
                               </span>
                             )}
                           </div>

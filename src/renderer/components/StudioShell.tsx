@@ -127,16 +127,16 @@ export function StudioShell({ children }: { children: ReactNode }) {
                 <span className="hidden sm:inline">作品库</span>
               </button>
               <div className="h-4 w-px bg-[var(--border-subtle)] shrink-0 hidden sm:block" />
-              <div className="hidden sm:flex items-center gap-2 min-w-0">
+              <div className="hidden sm:flex items-center gap-1.5 min-w-0">
                 <span className="font-semibold text-[13px] text-[var(--text-primary)] truncate">
                   {workspace.project.name}
                 </span>
-                <span className="px-1.5 py-0.5 rounded bg-[var(--bg-inset)] border border-[var(--border-subtle)] text-[11px] text-[var(--text-secondary)] shrink-0 hidden md:inline">
-                  {workspace.project.aspectRatio}
+                <span className="text-[11px] text-[var(--text-muted)] shrink-0 hidden md:inline tabular-nums">
+                  · {workspace.project.aspectRatio}
                 </span>
                 {currentEp && (
                   <span className="text-[12px] text-[var(--text-muted)] truncate hidden xl:inline">
-                    {currentEp.title}
+                    · {currentEp.title}
                   </span>
                 )}
               </div>
@@ -298,7 +298,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
         {saveError && (
           <div
             role="alert"
-            className="flex items-center justify-between gap-3 px-4 py-2 bg-[var(--accent-danger-soft)] border-b border-[var(--accent-danger-border)] text-[var(--accent-danger-ink)] text-[12px] shrink-0"
+            className="aivora-attention-in flex items-center justify-between gap-3 px-4 py-2 bg-[var(--accent-danger-soft)] border-b border-[var(--accent-danger-border)] text-[var(--accent-danger-ink)] text-[12px] shrink-0"
           >
             <div className="flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 text-[var(--accent-danger-text)]" />
@@ -339,7 +339,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
         <div className="flex items-center gap-3 min-w-0">
           {workspace ? (
             <>
-              <span className="flex items-center gap-1.5 shrink-0">
+              <span key={saveState} className="flex items-center gap-1.5 shrink-0">
                 {saveState === "saving" ? (
                   <>
                     <Loader2 className="w-3 h-3 animate-spin text-[var(--accent-primary-text)]" />
@@ -347,7 +347,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
                   </>
                 ) : saveState === "error" ? (
                   <>
-                    <AlertTriangle className="w-3 h-3 text-[var(--accent-danger-text)]" />
+                    <AlertTriangle className="w-3 h-3 text-[var(--accent-danger-text)] aivora-icon-pop" />
                     <span className="text-[var(--accent-danger-text)]">保存异常</span>
                   </>
                 ) : (
@@ -380,16 +380,18 @@ export function StudioShell({ children }: { children: ReactNode }) {
             className="aivora-pressable inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
             title="切换界面外观（深色 / 浅色 / 跟随系统）"
           >
-            {themeMode === "dark" ? (
-              <Moon className="w-3 h-3" />
-            ) : themeMode === "light" ? (
-              <Sun className="w-3 h-3" />
-            ) : (
-              <Monitor className="w-3 h-3" />
-            )}
+            <span key={themeMode} className="aivora-icon-pop inline-flex">
+              {themeMode === "dark" ? (
+                <Moon className="w-3 h-3" />
+              ) : themeMode === "light" ? (
+                <Sun className="w-3 h-3" />
+              ) : (
+                <Monitor className="w-3 h-3" />
+              )}
+            </span>
             <span>{themeLabel}</span>
           </button>
-          <span className="tabular-nums">v1.8.0</span>
+          <span className="tabular-nums">v1.9.0</span>
         </div>
       </footer>
     </div>

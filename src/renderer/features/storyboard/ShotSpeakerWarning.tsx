@@ -20,7 +20,7 @@ export function ShotSpeakerWarning(props: {
     return (
       <div
         data-testid="unconfirmed-speaker-banner"
-        className="rounded-lg bg-[var(--accent-amber-soft)] border border-[var(--accent-amber-border)] px-2.5 py-2 flex flex-col gap-1.5 text-[11px] text-[var(--accent-amber-ink)]"
+        className="aivora-attention-in rounded-lg bg-[var(--accent-amber-soft)] border border-[var(--accent-amber-border)] px-2.5 py-2 flex flex-col gap-1.5 text-[11px] text-[var(--accent-amber-ink)]"
       >
         <div className="flex items-center gap-1.5 font-medium">
           <ShieldAlert className="w-3.5 h-3.5 text-[var(--accent-amber-text)] shrink-0" />

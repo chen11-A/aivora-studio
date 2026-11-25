@@ -16,3 +16,5 @@ artifacts/
 
 __pycache__/
 *.pyc
+.agents/
+skills-lock.json

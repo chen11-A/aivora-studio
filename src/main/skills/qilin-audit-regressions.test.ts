@@ -17,6 +17,8 @@ import { buildScreenwriterOutline } from "./screenwriter-outline";
 import { reviewWorkspaceEpisode } from "./script-reviewer";
 
 const tempDirs: string[] = [];
+const openProjectStores: ProjectStore[] = [];
+const openGlobalConfigs: GlobalConfigStore[] = [];
 
 const mockVault = createSecretVault({
   isEncryptionAvailable: () => true,
@@ -29,11 +31,19 @@ function createEnv() {
   const dir = mkdtempSync(join(tmpdir(), "aivora-audit-reg-"));
   tempDirs.push(dir);
   const projects = new ProjectStore(join(dir, "ws"));
+  openProjectStores.push(projects);
   const globalConfig = new GlobalConfigStore(join(dir, "cfg"), mockVault);
+  openGlobalConfigs.push(globalConfig);
   return { dir, projects, globalConfig };
 }
 
 afterEach(() => {
+  while (openProjectStores.length > 0) {
+    try { openProjectStores.pop()?.closeAll(); } catch { /* already closed */ }
+  }
+  while (openGlobalConfigs.length > 0) {
+    try { openGlobalConfigs.pop()?.close(); } catch { /* already closed */ }
+  }
   while (tempDirs.length > 0) {
     const d = tempDirs.pop();
     if (d) rmSync(d, { recursive: true, force: true });

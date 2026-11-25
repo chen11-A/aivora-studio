@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Monitor, Pause, Play, RotateCcw, Scissors, Smartphone, Subtitles } from "lucide-react";
 import { evaluateEpisodeExportReadiness, isVideoMediaPath, resolveActiveVisualTake, resolveSelectedSpeechTake, resolveShotTrimWindow } from "@shared/media-selection";
 import type { SubtitleStyle } from "@shared/types/domain";
+import { SlidingSegmentedControl } from "../../components/ui/SlidingSegmentedControl";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useStudioStore } from "../../store/useStudioStore";
 import { BgmTrackControls } from "./BgmTrackControls";
@@ -184,32 +185,33 @@ export function EditorStage() {
                 ? `正在预览：${currentShot.title}（版本 ${currentTake.versionNumber}）`
                 : "成片时间轴预览"}
             </span>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                type="button"
-                onClick={() => void updateProjectSettings({ aspectRatio: "16:9" })}
-                className={`aivora-pressable h-7 px-2.5 rounded-md text-[11px] flex items-center gap-1 border cursor-pointer ${
-                  !isPortrait
-                    ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary)] text-[var(--text-primary)] font-medium"
-                    : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)]"
-                }`}
-              >
-                <Monitor className="w-3 h-3" />
-                <span>16:9</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => void updateProjectSettings({ aspectRatio: "9:16" })}
-                className={`aivora-pressable h-7 px-2.5 rounded-md text-[11px] flex items-center gap-1 border cursor-pointer ${
-                  isPortrait
-                    ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary)] text-[var(--text-primary)] font-medium"
-                    : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)]"
-                }`}
-              >
-                <Smartphone className="w-3 h-3" />
-                <span>9:16</span>
-              </button>
-            </div>
+            <SlidingSegmentedControl
+              ariaLabel="成片画幅比例"
+              size="sm"
+              tone="surface"
+              value={workspace.project.aspectRatio}
+              onChange={(ratio) => void updateProjectSettings({ aspectRatio: ratio })}
+              options={[
+                {
+                  id: "16:9",
+                  content: () => (
+                    <>
+                      <Monitor className="w-3 h-3" />
+                      <span className="tabular-nums">16:9</span>
+                    </>
+                  ),
+                },
+                {
+                  id: "9:16",
+                  content: () => (
+                    <>
+                      <Smartphone className="w-3 h-3" />
+                      <span className="tabular-nums">9:16</span>
+                    </>
+                  ),
+                },
+              ]}
+            />
           </div>
 
           <div className="flex-1 min-h-0 p-4 flex items-center justify-center overflow-hidden">
@@ -274,7 +276,7 @@ export function EditorStage() {
               </span>
             </button>
             <span
-              className="font-mono text-[12px] text-[var(--text-primary)] tabular-nums"
+              className="text-[12px] font-medium text-[var(--text-primary)] tabular-nums"
               data-testid="editor-timecode"
             >
               {fmtTime(playback.playheadSec)} / {fmtTime(playback.totalSec)}
@@ -388,7 +390,7 @@ export function EditorStage() {
                             : Number((nextIn + currentTrim.effectiveDurationSec).toFixed(2));
                         editShot({ shotId: currentShot.id, trimInSec: nextIn, trimOutSec: nextOut });
                       }}
-                      className="w-full min-w-0 h-6 px-1.5 rounded bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-[var(--text-primary)] font-mono tabular-nums text-[11px]"
+                      className="w-full min-w-0 h-6 px-1.5 rounded bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-[var(--text-primary)] tabular-nums text-[11px]"
                     />
                   </label>
                   <label className="flex items-center gap-1 min-w-0 text-[var(--text-muted)]">
@@ -403,12 +405,12 @@ export function EditorStage() {
                         const rawOut = Math.max(currentTrim.trimInSec + 0.5, Number(e.target.value) || 1);
                         editShot({ shotId: currentShot.id, trimInSec: currentTrim.trimInSec, trimOutSec: rawOut });
                       }}
-                      className="w-full min-w-0 h-6 px-1.5 rounded bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-[var(--text-primary)] font-mono tabular-nums text-[11px]"
+                      className="w-full min-w-0 h-6 px-1.5 rounded bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-[var(--text-primary)] tabular-nums text-[11px]"
                     />
                   </label>
                   <span
                     key={trimPulseSeq}
-                    className={`px-1 rounded text-right font-mono tabular-nums text-[11px] text-[var(--accent-primary-text)] whitespace-nowrap ${
+                    className={`px-1 rounded text-right font-medium tabular-nums text-[11px] text-[var(--accent-primary-text)] whitespace-nowrap ${
                       trimPulseSeq > 0 ? "aivora-value-pulse" : ""
                     }`}
                   >

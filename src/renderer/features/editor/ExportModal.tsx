@@ -146,7 +146,7 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
           </div>
 
           {blocked && (
-            <div className="rounded-xl bg-[var(--accent-danger-soft)] border border-[var(--accent-danger-border)] p-3 text-[12px] text-[var(--accent-danger-ink)] flex flex-col gap-1.5">
+            <div className="aivora-attention-in rounded-xl bg-[var(--accent-danger-soft)] border border-[var(--accent-danger-border)] p-3 text-[12px] text-[var(--accent-danger-ink)] flex flex-col gap-1.5">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 text-[var(--accent-danger-text)] shrink-0 mt-0.5" />
                 <span>
@@ -166,7 +166,7 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
           )}
 
           {!blocked && preflightWarnings.length > 0 && (
-            <div className="rounded-xl bg-[var(--accent-amber-soft)] border border-[var(--accent-amber-border)] p-3 text-[11px] text-[var(--accent-amber-ink)] flex flex-col gap-1">
+            <div className="aivora-attention-in rounded-xl bg-[var(--accent-amber-soft)] border border-[var(--accent-amber-border)] p-3 text-[11px] text-[var(--accent-amber-ink)] flex flex-col gap-1">
               <div className="font-medium flex items-center gap-1.5">
                 <AlertTriangle className="w-3.5 h-3.5 text-[var(--accent-amber-text)] shrink-0" />
                 <span>导出前提醒（不影响导出，也可先回分镜页微调）</span>
@@ -180,13 +180,13 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
           )}
 
           {exporting && exportProgress && (
-            <div className="rounded-xl bg-[var(--bg-inset)] border border-[var(--accent-primary-border)] p-3.5 flex flex-col gap-2">
+            <div className="aivora-attention-in rounded-xl bg-[var(--bg-inset)] border border-[var(--accent-primary-border)] p-3.5 flex flex-col gap-2">
               <div className="flex items-center justify-between text-[12px]">
                 <span className="flex items-center gap-2 text-[var(--text-primary)] font-medium">
                   <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--accent-primary-text)]" />
                   {canceling ? "正在安全中止并清理临时文件…" : exportProgress.stage}
                 </span>
-                <span className="font-mono tabular-nums text-[var(--accent-primary-text)]">
+                <span className="font-medium tabular-nums text-[var(--accent-primary-text)]">
                   {exportProgress.percent}%
                 </span>
               </div>
@@ -202,7 +202,7 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
 
           {!exporting && lastExportResult && (
             <div
-              className={`rounded-xl p-3.5 border text-[12px] flex flex-col gap-2 ${
+              className={`aivora-attention-in rounded-xl p-3.5 border text-[12px] flex flex-col gap-2 ${
                 lastExportResult.ok
                   ? "bg-[var(--accent-success-soft)] border-[var(--accent-success-border)] text-[var(--accent-success-ink)]"
                   : lastExportResult.canceled

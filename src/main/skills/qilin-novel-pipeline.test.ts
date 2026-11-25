@@ -21,6 +21,8 @@ import {
 import type { DirectorProposal } from "../../shared/types/jobs";
 
 const tempDirs: string[] = [];
+const openProjectStores: ProjectStore[] = [];
+const openGlobalConfigs: GlobalConfigStore[] = [];
 
 const mockVault = createSecretVault({
   isEncryptionAvailable: () => true,
@@ -33,11 +35,19 @@ function createTestEnv() {
   const dir = mkdtempSync(join(tmpdir(), "aivora-qilin-"));
   tempDirs.push(dir);
   const projects = new ProjectStore(join(dir, "workspace"));
+  openProjectStores.push(projects);
   const globalConfig = new GlobalConfigStore(join(dir, "config"), mockVault);
+  openGlobalConfigs.push(globalConfig);
   return { dir, projects, globalConfig };
 }
 
 afterEach(() => {
+  while (openProjectStores.length > 0) {
+    try { openProjectStores.pop()?.closeAll(); } catch { /* already closed */ }
+  }
+  while (openGlobalConfigs.length > 0) {
+    try { openGlobalConfigs.pop()?.close(); } catch { /* already closed */ }
+  }
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) rmSync(dir, { recursive: true, force: true });
@@ -313,6 +323,7 @@ describe("《天渊麒麟录》前三章端到端回归验收 (QL-01 → QL-03 �
     const archivePath = join(dir, "qilin-backup.aivora.zip");
     await projects.exportArchiveToPath(ws.project.id, archivePath);
     const store2 = new ProjectStore(join(dir, "workspace-reimport"));
+    openProjectStores.push(store2);
     const reimported = await store2.importArchiveFromPath(archivePath);
     const reLuShot = reimported.shots.find((s) => s.dialogue.includes("是麒麟"))!;
     const reUnconfirmed = reimported.shots.find((s) => s.dialogue.includes("快逃出去"))!;
