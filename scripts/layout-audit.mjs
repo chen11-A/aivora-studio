@@ -410,13 +410,24 @@ async function runAudit() {
         if (!playheadTransform || playheadTransform === "none") {
           runtimeErrors.push("Timeline playhead is not using GPU transform!");
         }
-        // Test direct timeline scrubbing click
+        // Test direct timeline click (glide) + keyboard ArrowRight seek (instant)
         const tlBox = await page.locator('[data-testid="editor-timeline"]').boundingBox();
         if (tlBox) {
           await page.mouse.click(tlBox.x + 260, tlBox.y + 60);
-          await page.waitForTimeout(100);
+          await page.waitForTimeout(80);
+          const clickMotion = await page.locator('[data-testid="timeline-playhead"]').getAttribute("data-motion");
           const scrubbedTime = await page.locator('[data-testid="editor-timecode"]').textContent();
           if (!scrubbedTime) runtimeErrors.push("Timeline scrubbing failed to update timecode");
+          if (clickMotion !== "glide") {
+            runtimeErrors.push(`Expected click playhead data-motion="glide", got ${clickMotion}`);
+          }
+          await page.keyboard.press("ArrowRight");
+          await page.waitForTimeout(60);
+          const keyMotion = await page.locator('[data-testid="timeline-playhead"]').getAttribute("data-motion");
+          const keyTime = await page.locator('[data-testid="editor-timecode"]').textContent();
+          if (keyMotion !== "instant" || keyTime === scrubbedTime) {
+            runtimeErrors.push(`Keyboard ArrowRight seek failed (motion=${keyMotion}, ${scrubbedTime} -> ${keyTime})`);
+          }
         }
         const clsValue = await page.evaluate(() => Number((window.__aivoraCls || 0).toFixed(4)));
         perfMetrics = { ...rafResult, cls: clsValue };
@@ -428,6 +439,26 @@ async function runAudit() {
         }
         uxAssertions.push("modal-hotkey-guard-gpu-playhead-and-scrubbing:ok");
         uxAssertions.push(`perf-cls-zero-and-raf-smooth:cls=${clsValue},fps=${rafResult.approxFps}`);
+
+        // 6b2. Project menu cleanup two-step confirmation + layered Escape + focus restoration
+        await page.click('[data-testid="open-project-menu"]');
+        await page.waitForSelector('[data-testid="clean-assets-trigger"]');
+        await page.click('[data-testid="clean-assets-trigger"]');
+        await page.waitForSelector('[data-testid="confirm-clean-assets-box"]');
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(80);
+        const confirmStillShown = await page.locator('[data-testid="confirm-clean-assets-box"]').count();
+        const triggerRestored = await page.locator('[data-testid="clean-assets-trigger"]').count();
+        if (confirmStillShown !== 0 || triggerRestored !== 1) {
+          runtimeErrors.push(`Escape on cleanup confirmation failed to disarm cleanly (confirm=${confirmStillShown}, trigger=${triggerRestored})`);
+        }
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(240);
+        const focusedTestId = await page.evaluate(() => document.activeElement?.getAttribute("data-testid") || "");
+        if (focusedTestId !== "open-project-menu") {
+          runtimeErrors.push(`Closing project menu via Escape did not restore focus to trigger (focused=${focusedTestId})`);
+        }
+        uxAssertions.push("cleanup-confirm-layered-escape-and-focus-restore:ok");
       }
       await checkAndSnap("editor");
 
@@ -448,10 +479,19 @@ async function runAudit() {
         if (modalStillOpen !== 1 || delBtnBack < 1) {
           runtimeErrors.push(`Escape on armed ConfirmInlineAction closed parent ModelCenterModal (modal=${modalStillOpen}, delBtn=${delBtnBack})`);
         }
+        // Pressing Escape once more closes ModalShell and returns focus to open-model-center button
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(260);
+        const modalClosed = await page.locator('[data-testid="model-center-modal"]').count();
+        const restoredFocus = await page.evaluate(() => document.activeElement?.getAttribute("data-testid") || "");
+        if (modalClosed !== 0 || restoredFocus !== "open-model-center") {
+          runtimeErrors.push(`Escape on ModelCenterModal failed close/focus restore (closed=${modalClosed}, focus=${restoredFocus})`);
+        }
         uxAssertions.push("modal-escape-stack-preserves-parent:ok");
+      } else {
+        await page.click('[data-testid="close-model-center"]');
+        await page.waitForTimeout(240);
       }
-      await page.click('[data-testid="close-model-center"]');
-      await page.waitForTimeout(240);
 
       // 7. Switch to Light Mode & verify zero layout issues in light theme too!
       if (vp.checkUx) {

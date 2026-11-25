@@ -202,6 +202,7 @@ describe("Renderer story-pipeline director proposal isolation (GPT P1 regression
       episodeId: epA.id,
       episodeTitle: epA.title,
     });
+    expect(useStudioStore.getState().toast).toContain("切回该分集即可查看与采纳");
 
     // User clicks Apply while activeEpisodeId is STILL B
     const applied = await harness.actions.applyDirector();
@@ -270,5 +271,30 @@ describe("Renderer story-pipeline director proposal isolation (GPT P1 regression
 
     expect(harness.getState().directorProposal).toBeNull();
     expect(harness.getState().directorProposalTarget).toBeNull();
+  });
+
+  it("blocks sending script to director when local persistence flush fails", async () => {
+    const ws = makeWorkspace("prj_savefail", "保存失败拦截测试");
+    useStudioStore.setState({
+      workspace: ws,
+      activeEpisodeId: ws.episodes[0]!.id,
+      saveState: "saved",
+    });
+
+    // Inject a failing persistence operation via editEpisodeScript on a non-existent preview project
+    useStudioStore.getState().editEpisodeScript(ws.episodes[0]!.id, "尚未成功落盘的新剧本");
+
+    let directorCalls = 0;
+    const harness = createHarness({
+      proposeDirectorSplit: async () => {
+        directorCalls += 1;
+        return { ok: true, message: "should not be called" };
+      },
+    });
+
+    await harness.actions.proposeDirector();
+    expect(directorCalls).toBe(0);
+    expect(useStudioStore.getState().saveState).toBe("error");
+    expect(useStudioStore.getState().toast).toContain("本地保存失败");
   });
 });

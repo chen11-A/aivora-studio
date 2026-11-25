@@ -29,14 +29,15 @@ import {
   updateJobRow,
   type LockedProviderSnapshot,
 } from "./job-persistence";
+import { detectGenerationPlanDrift, PlanDriftError } from "./plan-drift";
 
 const MAX_PREPARED_PLAN_CACHE = 512;
 
 /**
  * Anti-Duplicate-Charge Job Queue:
  * 1. `preparePlan` produces an explicit confirmation summary with locked config & input snapshot (0 network calls).
- * 2. `confirmAndRun` executes strictly against the locked snapshot; ambiguous network timeouts become `unknown`
- *    and NEVER auto-retry; failures NEVER overwrite a shot's currently selected take.
+ * 2. `confirmAndRun` verifies no post-confirm parameter drift and executes strictly against the locked snapshot;
+ *    ambiguous network timeouts become `unknown` and NEVER auto-retry; failures NEVER overwrite selected takes.
  * 3. `recoverUnknownJob` performs strictly GET-only status lookup by `remoteTaskId`.
  */
 export class GenerationJobQueue {
@@ -279,6 +280,13 @@ export class GenerationJobQueue {
     return plan;
   }
 
+  detectPlanDrift(rawPlan: GenerationPlan): { drifted: boolean; reasons: string[] } {
+    const plan = this.resolveAuthoritativePlan(rawPlan);
+    if (!plan.lockedInput) return { drifted: false, reasons: [] };
+    const ws = this.projects.openProject(plan.projectId);
+    return detectGenerationPlanDrift(ws, plan);
+  }
+
   async confirmAndRun(rawPlan: GenerationPlan): Promise<JobExecutionResult> {
     const plan = this.resolveAuthoritativePlan(rawPlan);
     if (!plan.canRun || !plan.providerSnapshotJson || !plan.lockedInput) {
@@ -293,6 +301,11 @@ export class GenerationJobQueue {
     const ws = this.projects.openProject(plan.projectId);
     const shotExists = plan.assetId ? true : ws.shots.some((s) => s.id === plan.shotId);
     if (!shotExists) throw new Error("镜头不存在");
+
+    const drift = detectGenerationPlanDrift(ws, plan);
+    if (drift.drifted) {
+      throw new PlanDriftError(drift.reasons);
+    }
 
     insertRunningJobRow(this.projects, {
       jobId,

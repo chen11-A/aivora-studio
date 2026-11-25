@@ -14,6 +14,7 @@ import type {
 } from "../../shared/types/jobs";
 import type { ProjectStore } from "../storage/project-store";
 import type { GenerationJobQueue } from "./job-queue";
+import { formatPlanDriftPauseMessage, PlanDriftError } from "./plan-drift";
 
 const BATCH_CONCURRENCY = 2;
 
@@ -23,6 +24,8 @@ const BATCH_CONCURRENCY = 2;
  * - Executes through `GenerationJobQueue.confirmAndRun` with max concurrency = 2 to avoid 429s.
  * - `pause(projectId)` immediately halts dispatching queued shots while allowing already-sent
  *   in-flight requests to finish safely without risking duplicate charges.
+ * - If a queued shot's prompt/first-frame/duration/voice changed after confirmation, pauses ONLY
+ *   that shot with an explicit explanation and lets unaffected shots continue uninterrupted.
  */
 export class BatchJobScheduler {
   private readonly snapshots = new Map<string, BatchProgressSnapshot>();
@@ -48,6 +51,7 @@ export class BatchJobScheduler {
       if (item.status === "queued") {
         item.status = "paused";
         item.message = "已暂停派发（未发送外部请求）";
+        snap.pausedCount = (snap.pausedCount ?? 0) + 1;
       }
     }
     return {
@@ -191,6 +195,7 @@ export class BatchJobScheduler {
       completedCount: 0,
       failedCount: 0,
       unknownCount: 0,
+      pausedCount: 0,
       totalCount: batchPlan.plans.length,
       items: batchPlan.plans.map((p) => ({
         shotId: p.shotId,
@@ -219,6 +224,13 @@ export class BatchJobScheduler {
         const idx = cursor++;
         const plan = batchPlan.plans[idx]!;
         const item = snapshot.items[idx]!;
+        const drift = this.jobQueue.detectPlanDrift(plan);
+        if (drift.drifted) {
+          item.status = "paused";
+          item.message = formatPlanDriftPauseMessage(drift.reasons);
+          snapshot.pausedCount = (snapshot.pausedCount ?? 0) + 1;
+          continue;
+        }
         item.status = "running";
         item.message = "正在生成…";
         try {
@@ -237,9 +249,15 @@ export class BatchJobScheduler {
             snapshot.failedCount += 1;
           }
         } catch (err) {
-          item.status = "failed";
-          item.message = err instanceof Error ? err.message : "任务执行失败";
-          snapshot.failedCount += 1;
+          if (err instanceof PlanDriftError) {
+            item.status = "paused";
+            item.message = err.message;
+            snapshot.pausedCount = (snapshot.pausedCount ?? 0) + 1;
+          } else {
+            item.status = "failed";
+            item.message = err instanceof Error ? err.message : "任务执行失败";
+            snapshot.failedCount += 1;
+          }
         }
       }
     };

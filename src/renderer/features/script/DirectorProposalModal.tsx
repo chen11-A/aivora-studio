@@ -67,9 +67,9 @@ export function DirectorProposalModal() {
     workspace?.episodes.find((e) => e.id === targetEpId)?.title ??
     "";
   const isProjectMatch = !targetProjectId || !workspace || workspace.project.id === targetProjectId;
-  const isDifferentActiveEpisode = Boolean(
-    targetEpId && activeEpisodeId && targetEpId !== activeEpisodeId,
-  );
+  const currentEpId = activeEpisodeId ?? workspace?.episodes[0]?.id ?? null;
+  const isEpisodeMatch = !targetEpId || !currentEpId || targetEpId === currentEpId;
+  const isDifferentActiveEpisode = Boolean(targetEpId && currentEpId && targetEpId !== currentEpId);
   const prevShots =
     workspace && targetEpId && isProjectMatch
       ? workspace.shots
@@ -114,7 +114,7 @@ export function DirectorProposalModal() {
 
   return (
     <ModalShell
-      open={Boolean(proposal && isProjectMatch)}
+      open={Boolean(proposal && isProjectMatch && isEpisodeMatch)}
       onClose={close}
       ariaLabel="三步拆镜提案预览"
       testId="director-proposal-modal"

@@ -42,6 +42,7 @@ export function ScriptStage() {
   const liveReviewReport = useAiGenerationStore((s) => s.liveReviewReport);
   const clearLiveReviewReport = useAiGenerationStore((s) => s.clearLiveReviewReport);
   const runLiveEpisodeReview = useAiGenerationStore((s) => s.runLiveEpisodeReview);
+  const directorProposal = useAiGenerationStore((s) => s.directorProposal);
   const directorProposalTarget = useAiGenerationStore((s) => s.directorProposalTarget);
   const closeDirectorProposal = useAiGenerationStore((s) => s.closeDirectorProposal);
   const [reviewExpanded, setReviewExpanded] = useState(false);
@@ -65,6 +66,14 @@ export function ScriptStage() {
 
   if (!workspace) return null;
   const episode = workspace.episodes.find((e) => e.id === activeEpisodeId) ?? workspace.episodes[0];
+  const waitingOtherEpisodeProposal =
+    directorProposal &&
+    directorProposalTarget &&
+    directorProposalTarget.projectId === workspace.project.id &&
+    episode &&
+    directorProposalTarget.episodeId !== episode.id
+      ? directorProposalTarget
+      : null;
   const episodeScenes = workspace.scenes
     .filter((sc) => sc.episodeId === episode?.id)
     .sort((a, b) => a.orderIndex - b.orderIndex);
@@ -183,6 +192,36 @@ export function ScriptStage() {
         </div>
 
         <div className="panel-scroll flex-1 p-4 flex flex-col gap-4">
+          {waitingOtherEpisodeProposal && (
+            <div
+              data-testid="pending-other-episode-proposal"
+              className="aivora-attention-in rounded-xl bg-[var(--accent-primary-soft)] border border-[var(--accent-primary-border)] p-3 flex flex-col gap-2 text-[11px]"
+            >
+              <div className="font-semibold text-[var(--text-primary)]">
+                「{waitingOtherEpisodeProposal.episodeTitle}」拆镜提案已就绪
+              </div>
+              <div className="text-[var(--text-secondary)] leading-snug">
+                未打断当前分集编辑，切回该分集即可预览与采纳。
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => void selectEpisode(waitingOtherEpisodeProposal.episodeId)}
+                  className="btn-primary flex-1 h-7 text-[11px]"
+                >
+                  切回查看提案
+                </button>
+                <button
+                  type="button"
+                  onClick={closeDirectorProposal}
+                  className="btn-secondary h-7 text-[11px] px-2.5"
+                >
+                  忽略
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] p-3.5 flex flex-col gap-2.5">
             <div className="text-[12px] font-semibold text-[var(--text-primary)]">三步轻协作拆镜</div>
             <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">

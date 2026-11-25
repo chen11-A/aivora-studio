@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Monitor, Pause, Play, RotateCcw, Scissors, Smartphone } from "lucide-react";
 import { evaluateEpisodeExportReadiness, isVideoMediaPath, resolveActiveVisualTake, resolveSelectedSpeechTake, resolveShotTrimWindow } from "@shared/media-selection";
 import { SlidingSegmentedControl } from "../../components/ui/SlidingSegmentedControl";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useStudioStore } from "../../store/useStudioStore";
 import { BgmTrackControls } from "./BgmTrackControls";
+import { EditorClipsBin, type EditorClipBinItem } from "./EditorClipsBin";
 import { EditorTimeline } from "./EditorTimeline";
 import { SubtitleStylePicker, subtitlePreviewClass } from "./SubtitleStylePicker";
 import { useTimelinePlayback } from "./useTimelinePlayback";
@@ -104,8 +105,28 @@ export function EditorStage() {
     setTrimPulseSeq((n) => n + 1);
   };
 
-  const hotkeyRef = useRef({ togglePlay: playback.togglePlay, markTrimIn, markTrimOut });
-  hotkeyRef.current = { togglePlay: playback.togglePlay, markTrimIn, markTrimOut };
+  const hotkeyRef = useRef({
+    togglePlay: playback.togglePlay,
+    markTrimIn,
+    markTrimOut,
+    stepBySec: playback.stepBySec,
+    seekToTime: playback.seekToTime,
+    seekToShot: playback.seekToShot,
+    totalSec: playback.totalSec,
+  });
+  hotkeyRef.current = {
+    togglePlay: playback.togglePlay,
+    markTrimIn,
+    markTrimOut,
+    stepBySec: playback.stepBySec,
+    seekToTime: playback.seekToTime,
+    seekToShot: playback.seekToShot,
+    totalSec: playback.totalSec,
+  };
+
+  const handleSelectShot = useCallback((index: number) => {
+    hotkeyRef.current.seekToShot(index);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -113,6 +134,10 @@ export function EditorStage() {
       if (document.querySelector('[role="dialog"]')) return;
       if (e.target instanceof HTMLElement && ["input", "textarea", "select"].includes(e.target.tagName.toLowerCase())) return;
       if (e.key === " ") { e.preventDefault(); hotkeyRef.current.togglePlay(); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); hotkeyRef.current.stepBySec(e.shiftKey ? -1 : -0.1); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); hotkeyRef.current.stepBySec(e.shiftKey ? 1 : 0.1); }
+      else if (e.key === "Home") { e.preventDefault(); hotkeyRef.current.seekToTime(0, "instant"); }
+      else if (e.key === "End") { e.preventDefault(); hotkeyRef.current.seekToTime(hotkeyRef.current.totalSec, "instant"); }
       else if (e.key === "i" || e.key === "I") { e.preventDefault(); hotkeyRef.current.markTrimIn(); }
       else if (e.key === "o" || e.key === "O") { e.preventDefault(); hotkeyRef.current.markTrimOut(); }
     };
@@ -120,48 +145,38 @@ export function EditorStage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  if (!workspace) return null;
+  const readiness = useMemo(
+    () => (workspace ? evaluateEpisodeExportReadiness(workspace, activeEpisodeId) : null),
+    [workspace, activeEpisodeId],
+  );
+  const clipBinItems = useMemo<EditorClipBinItem[]>(() => {
+    if (!workspace) return [];
+    return epShots.map((shot) => {
+      const win = resolveShotTrimWindow(shot);
+      return {
+        shot,
+        versionNumber: resolveActiveVisualTake(shot, workspace.takes)?.versionNumber ?? null,
+        isTrimmed: win.isTrimmed,
+        trimInSec: win.trimInSec,
+        trimOutSec: win.trimOutSec,
+        effectiveDurationSec: win.effectiveDurationSec,
+      };
+    });
+  }, [epShots, workspace]);
 
-  const readiness = evaluateEpisodeExportReadiness(workspace, activeEpisodeId);
+  if (!workspace || !readiness) return null;
+
   const isPortrait = workspace.project.aspectRatio === "9:16";
 
   return (
     <div className="h-full grid grid-rows-[minmax(0,1fr)_206px] min-h-0 overflow-hidden">
       {/* Top 3-Column Row */}
       <div className="aivora-editor-top min-h-0 overflow-hidden">
-        {/* Top-Left Selected Clips Bin */}
-        <aside className="aivora-hide-narrow bg-[var(--bg-surface)] border-r border-[var(--border-subtle)] flex flex-col min-h-0 overflow-hidden">
-          <div className="h-10 px-3.5 border-b border-[var(--border-subtle)] flex items-center text-[12px] font-semibold text-[var(--text-secondary)] shrink-0 tabular-nums">
-            本集镜头（{epShots.length}）
-          </div>
-          <div className="panel-scroll flex-1 p-2 flex flex-col gap-1.5">
-            {epShots.map((shot, idx) => {
-              const tk = resolveActiveVisualTake(shot, workspace.takes);
-              const win = resolveShotTrimWindow(shot);
-              const active = idx === playback.activeSegment?.index;
-              return (
-                <button
-                  key={shot.id}
-                  type="button"
-                  onClick={() => playback.seekToShot(idx)}
-                  className={`aivora-pressable w-full text-left px-2.5 py-2 rounded-lg border cursor-pointer ${
-                    active
-                      ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary)] text-[var(--text-primary)] font-medium"
-                      : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
-                  }`}
-                >
-                  <div className="text-[12px] truncate">{shot.title}</div>
-                  <div className="text-[10px] text-[var(--text-muted)] flex items-center justify-between mt-0.5 tabular-nums">
-                    <span>{tk ? `版本 ${tk.versionNumber}` : "缺少画面"}</span>
-                    <span>
-                      {win.isTrimmed ? `${win.trimInSec}~${win.trimOutSec}s` : `${win.effectiveDurationSec}s`}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </aside>
+        <EditorClipsBin
+          items={clipBinItems}
+          activeIndex={playback.activeSegment?.index ?? null}
+          onSelectShot={handleSelectShot}
+        />
 
         {/* Top-Center Real Playback Preview */}
         <section className="bg-[var(--bg-canvas)] flex flex-col min-h-0 overflow-hidden">
@@ -456,6 +471,7 @@ export function EditorStage() {
         playheadSec={playback.playheadSec}
         totalSec={playback.totalSec}
         playing={playback.playing}
+        seekMotion={playback.seekMotion}
         bgmAsset={bgmAsset}
         bgmVolumeDb={workspace.project.bgmVolumeDb}
         onSeekTime={playback.seekToTime}

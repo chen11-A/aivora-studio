@@ -31,7 +31,7 @@ import {
 } from "../lib/theme";
 import { useAiGenerationStore } from "../store/useAiGenerationStore";
 import { useStudioStore } from "../store/useStudioStore";
-import { useAnimatedPresence } from "./ui/OverlayShell";
+import { useAnimatedPresence, useEscapeLayer } from "./ui/OverlayShell";
 import { SlidingSegmentedControl } from "./ui/SlidingSegmentedControl";
 
 const STAGES: Array<{ id: StageId; step: string; label: string; icon: typeof ScrollText }> = [
@@ -51,6 +51,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
   const clearToast = useStudioStore((s) => s.clearToast);
   const modelCenter = useStudioStore((s) => s.modelCenter);
   const modelCenterOpen = useStudioStore((s) => s.modelCenterOpen);
+  const exporting = useStudioStore((s) => s.exporting);
   const returnHome = useStudioStore((s) => s.returnHome);
   const setStage = useStudioStore((s) => s.setStage);
   const setModelCenterOpen = useStudioStore((s) => s.setModelCenterOpen);
@@ -64,8 +65,10 @@ export function StudioShell({ children }: { children: ReactNode }) {
   const jobs = useAiGenerationStore((s) => s.jobs);
   const runningJob = useAiGenerationStore((s) => s.runningJob);
   const batchRunning = useAiGenerationStore((s) => Boolean(s.batchProgress?.running));
+  const directorLoading = useAiGenerationStore((s) => s.directorLoading);
 
   const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmCleanArmed, setConfirmCleanArmed] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
   const menuRef = useRef<HTMLDivElement | null>(null);
   const lastToastRef = useRef<string | null>(null);
@@ -74,23 +77,32 @@ export function StudioShell({ children }: { children: ReactNode }) {
   const menuPresence = useAnimatedPresence(menuOpen);
   const toastPresence = useAnimatedPresence(Boolean(toast));
 
+  const hasActiveGeneration = runningJob || batchRunning || exporting || directorLoading;
+
   useEffect(() => {
     return subscribeTheme(() => setThemeMode(getStoredThemeMode()));
   }, []);
+
+  useEffect(() => {
+    if (!menuOpen || hasActiveGeneration) setConfirmCleanArmed(false);
+  }, [menuOpen, hasActiveGeneration]);
+
+  useEscapeLayer(menuOpen, () => {
+    if (confirmCleanArmed) {
+      setConfirmCleanArmed(false);
+    } else {
+      setMenuOpen(false);
+    }
+  });
 
   useEffect(() => {
     if (!menuOpen) return;
     const onPointerDown = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenuOpen(false);
-    };
     window.addEventListener("mousedown", onPointerDown);
-    window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("mousedown", onPointerDown);
-      window.removeEventListener("keydown", onKey);
     };
   }, [menuOpen]);
 
@@ -243,21 +255,55 @@ export function StudioShell({ children }: { children: ReactNode }) {
                         <div className="text-[10px] text-[var(--text-muted)]">打包脚本、设定与全部素材</div>
                       </div>
                     </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setMenuOpen(false);
-                        void cleanUnreferencedAssets();
-                      }}
-                      className="aivora-pressable w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5 text-[var(--text-secondary)] shrink-0" />
-                      <div className="min-w-0">
-                        <div className="font-medium">清理未用缓存文件</div>
-                        <div className="text-[10px] text-[var(--text-muted)]">绝不删除任何历史版本</div>
-                      </div>
-                    </button>
+                    {!hasActiveGeneration &&
+                      (confirmCleanArmed ? (
+                        <div
+                          data-testid="confirm-clean-assets-box"
+                          className="aivora-attention-in rounded-lg bg-[var(--accent-amber-soft)] border border-[var(--accent-amber-border)] p-2.5 flex flex-col gap-2"
+                        >
+                          <div className="text-[11px] font-medium text-[var(--accent-amber-ink)]">
+                            确认清理未用缓存文件？
+                          </div>
+                          <div className="text-[10px] text-[var(--accent-amber-ink)] opacity-90 leading-snug">
+                            仅删除无镜头与候选引用的孤儿缓存，绝不删历史版本与待试听配乐。
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              data-testid="confirm-clean-assets-btn"
+                              onClick={() => {
+                                setConfirmCleanArmed(false);
+                                setMenuOpen(false);
+                                void cleanUnreferencedAssets();
+                              }}
+                              className="aivora-pressable flex-1 h-7 rounded-md bg-[var(--accent-danger)] hover:bg-[var(--accent-danger-hover)] text-white text-[11px] font-semibold cursor-pointer"
+                            >
+                              确认清理
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmCleanArmed(false)}
+                              className="btn-secondary h-7 px-2.5 text-[11px]"
+                            >
+                              取消
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="clean-assets-trigger"
+                          onClick={() => setConfirmCleanArmed(true)}
+                          className="aivora-pressable w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left text-[var(--text-primary)] hover:bg-[var(--bg-hover)] cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-[var(--text-secondary)] shrink-0" />
+                          <div className="min-w-0">
+                            <div className="font-medium">清理未用缓存文件</div>
+                            <div className="text-[10px] text-[var(--text-muted)]">绝不删除任何历史版本</div>
+                          </div>
+                        </button>
+                      ))}
                   </div>
                 )}
               </div>
@@ -391,7 +437,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
             </span>
             <span>{themeLabel}</span>
           </button>
-          <span className="tabular-nums">v1.9.2</span>
+          <span className="tabular-nums">v1.9.3</span>
         </div>
       </footer>
     </div>

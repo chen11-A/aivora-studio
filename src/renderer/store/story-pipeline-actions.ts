@@ -53,8 +53,13 @@ function showToast(message: string) {
   useStudioStore.getState().showToast(message, 3600);
 }
 
-async function flushEdits() {
-  await flushPendingSaves();
+async function flushEdits(actionLabel: string): Promise<boolean> {
+  const ok = await flushPendingSaves();
+  if (!ok) {
+    useStudioStore.setState({ saveState: "error" });
+    showToast(`本地保存失败，已拦截「${actionLabel}」以防使用旧内容，请先重试保存。`);
+  }
+  return ok;
 }
 
 function normalizeOutlineForApply(outline: ScreenwriterOutlineProposal): ScreenwriterOutlineProposal {
@@ -121,7 +126,7 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
     },
 
     async openScreenwriterModal(rawText) {
-      await flushEdits();
+      if (!(await flushEdits("预分集与分场"))) return;
       const { workspace, activeEpisodeId } = useStudioStore.getState();
       const ep = workspace?.episodes.find((e) => e.id === activeEpisodeId) ?? workspace?.episodes[0];
       set({
@@ -166,7 +171,7 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
       }
       set({ directorLoading: true } as Partial<T>);
       try {
-        await flushEdits();
+        if (!(await flushEdits("写入分集与场次"))) return null;
         const safeOutline = normalizeOutlineForApply(outline);
         const res = await client.applyScreenwriterOutline({
           projectId: workspace.project.id,
@@ -215,7 +220,7 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
       const seq = ++directorReqSeq;
       set({ directorLoading: true } as Partial<T>);
       try {
-        await flushEdits();
+        if (!(await flushEdits("生成拆镜提案"))) return;
         const res = await client.proposeDirectorSplit({
           projectId: reqProjectId,
           episodeId: epId,
@@ -235,6 +240,11 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
             directorProposal: res.proposal,
             directorProposalTarget: boundTarget,
           } as Partial<T>);
+          const curEpId = curState.activeEpisodeId ?? curState.workspace?.episodes[0]?.id;
+          if (curEpId && curEpId !== boundTarget.episodeId) {
+            showToast(`「${boundTarget.episodeTitle}」拆镜提案已就绪，切回该分集即可查看与采纳`);
+            return;
+          }
         }
         showToast(res.message);
       } catch (err) {
@@ -271,7 +281,7 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
       }
       set({ directorLoading: true } as Partial<T>);
       try {
-        await flushEdits();
+        if (!(await flushEdits("采纳拆镜提案"))) return false;
         const res = await client.applyDirectorProposal({
           projectId: targetProjectId,
           episodeId: targetEpisodeId,
@@ -323,7 +333,7 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
     },
 
     async runLiveEpisodeReview() {
-      await flushEdits();
+      if (!(await flushEdits("原文审片"))) return;
       const { workspace, activeEpisodeId } = useStudioStore.getState();
       const epId = activeEpisodeId ?? workspace?.episodes[0]?.id;
       if (!workspace || !epId) return;
@@ -342,7 +352,7 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
     },
 
     async proposeActionPolish(shotId) {
-      await flushEdits();
+      if (!(await flushEdits("单镜动作精修"))) return;
       const { workspace } = useStudioStore.getState();
       if (!workspace) return;
       const reqProjectId = workspace.project.id;

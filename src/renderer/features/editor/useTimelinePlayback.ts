@@ -43,6 +43,7 @@ export function useTimelinePlayback(shots: Shot[]) {
 
   const [playing, setPlaying] = useState(false);
   const [playheadSec, setPlayheadSec] = useState(0);
+  const [seekMotion, setSeekMotion] = useState<"glide" | "instant">("glide");
   const lastFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -54,6 +55,7 @@ export function useTimelinePlayback(shots: Shot[]) {
       lastFrameRef.current = null;
       return;
     }
+    setSeekMotion("instant");
     let rafId = 0;
     const tick = (now: number) => {
       if (lastFrameRef.current === null) {
@@ -78,21 +80,33 @@ export function useTimelinePlayback(shots: Shot[]) {
 
   const activeSegment = useMemo(() => {
     if (segments.length === 0) return null;
-    for (const seg of segments) {
-      if (playheadSec < seg.endSec) return seg;
+    let lo = 0;
+    let hi = segments.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (playheadSec < segments[mid]!.endSec) hi = mid;
+      else lo = mid + 1;
     }
-    return segments[segments.length - 1] ?? null;
+    return segments[lo] ?? segments[segments.length - 1] ?? null;
   }, [segments, playheadSec]);
 
-  const seekToTime = (sec: number) => {
+  const seekToTime = (sec: number, motion: "glide" | "instant" = "glide") => {
     const clamped = Math.max(0, Math.min(totalSec, sec));
+    setSeekMotion(motion);
     setPlayheadSec(clamped);
   };
 
   const seekToShot = (index: number) => {
     const seg = segments[index];
     if (!seg) return;
+    setSeekMotion("glide");
     setPlayheadSec(seg.startSec);
+  };
+
+  const stepBySec = (deltaSec: number) => {
+    setPlaying(false);
+    setSeekMotion("instant");
+    setPlayheadSec((prev) => Number(Math.max(0, Math.min(totalSec, prev + deltaSec)).toFixed(2)));
   };
 
   const togglePlay = () => {
@@ -101,6 +115,7 @@ export function useTimelinePlayback(shots: Shot[]) {
       setPlaying(false);
       return;
     }
+    setSeekMotion("instant");
     if (playheadSec >= totalSec - 0.05) {
       setPlayheadSec(0);
     }
@@ -111,6 +126,7 @@ export function useTimelinePlayback(shots: Shot[]) {
 
   const resetToStart = () => {
     setPlaying(false);
+    setSeekMotion("glide");
     setPlayheadSec(0);
   };
 
@@ -121,6 +137,7 @@ export function useTimelinePlayback(shots: Shot[]) {
     totalSec,
     playing,
     playheadSec,
+    seekMotion,
     activeSegment,
     offsetInShotSec,
     sourceVideoTimeSec: activeSegment ? activeSegment.trimInSec + offsetInShotSec : 0,
@@ -128,6 +145,7 @@ export function useTimelinePlayback(shots: Shot[]) {
     pause,
     seekToTime,
     seekToShot,
+    stepBySec,
     resetToStart,
   };
 }

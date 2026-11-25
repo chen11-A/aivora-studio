@@ -56,8 +56,13 @@ function showToast(message: string) {
   useStudioStore.getState().showToast(message, 3600);
 }
 
-async function flushEdits() {
-  await flushPendingSaves();
+async function flushEdits(actionLabel: string): Promise<boolean> {
+  const ok = await flushPendingSaves();
+  if (!ok) {
+    useStudioStore.setState({ saveState: "error" });
+    showToast(`本地保存失败，已拦截「${actionLabel}」以防使用旧参数，请先重试保存。`);
+  }
+  return ok;
 }
 
 async function syncModelCenter() {
@@ -156,7 +161,7 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
     },
 
     async openGenerationConfirm(shotId, kind) {
-      await flushEdits();
+      if (!(await flushEdits("打开生成确认"))) return;
       const ws = useStudioStore.getState().workspace;
       if (!ws) return;
       const plan = await client.prepareGenerationPlan({ projectId: ws.project.id, shotId, kind });
@@ -164,7 +169,7 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
     },
 
     async openAssetPortraitConfirm(assetId) {
-      await flushEdits();
+      if (!(await flushEdits("生成定妆候选"))) return;
       const ws = useStudioStore.getState().workspace;
       if (!ws) return;
       const plan = await client.prepareGenerationPlan({
@@ -220,7 +225,7 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
     },
 
     async selectBatchMode(mode) {
-      await flushEdits();
+      if (!(await flushEdits("准备批量补齐"))) return;
       const { workspace, activeEpisodeId } = useStudioStore.getState();
       const epId = activeEpisodeId ?? workspace?.episodes[0]?.id;
       if (!get().batchProgress?.running) {

@@ -166,6 +166,7 @@ export type BatchProgressSnapshot = {
   completedCount: number;
   failedCount: number;
   unknownCount: number;
+  pausedCount?: number;
   totalCount: number;
   items: Array<{
     shotId: string;

@@ -179,6 +179,7 @@ export function BatchJobModal() {
             <div className="flex items-center justify-between text-[12px]">
               <span className="font-semibold text-[var(--text-primary)] tabular-nums">
                 进度：已完成 {progress.completedCount}/{progress.totalCount}
+                {(progress.pausedCount ?? 0) > 0 ? ` · 已暂停 ${progress.pausedCount}` : ""}
                 {progress.failedCount > 0 ? ` · 失败 ${progress.failedCount}` : ""}
                 {progress.unknownCount > 0 ? ` · 待查单 ${progress.unknownCount}` : ""}
               </span>
@@ -192,33 +193,41 @@ export function BatchJobModal() {
             </div>
             <div className="max-h-44 overflow-y-auto divide-y divide-[var(--border-subtle)] text-[11px]">
               {progress.items.map((item) => (
-                <div key={item.shotId} className="py-1.5 flex items-center justify-between gap-2">
-                  <span className="text-[var(--text-primary)] truncate">{item.shotTitle}</span>
-                  <span
-                    className={`shrink-0 ${
-                      item.status === "succeeded"
-                        ? "text-[var(--accent-success-text)]"
+                <div key={item.shotId} className="py-1.5 flex flex-col gap-0.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[var(--text-primary)] truncate">{item.shotTitle}</span>
+                    <span
+                      className={`shrink-0 ${
+                        item.status === "succeeded"
+                          ? "text-[var(--accent-success-text)]"
+                          : item.status === "running"
+                            ? "text-[var(--accent-primary-text)]"
+                            : item.status === "paused" || item.status === "unknown"
+                              ? "text-[var(--accent-amber-text)]"
+                              : item.status === "failed"
+                                ? "text-[var(--accent-danger-text)]"
+                                : "text-[var(--text-muted)]"
+                      }`}
+                    >
+                      {item.status === "succeeded"
+                        ? "已完成"
                         : item.status === "running"
-                          ? "text-[var(--accent-primary-text)]"
-                          : item.status === "paused" || item.status === "unknown"
-                            ? "text-[var(--accent-amber-text)]"
-                            : item.status === "failed"
-                              ? "text-[var(--accent-danger-text)]"
-                              : "text-[var(--text-muted)]"
-                    }`}
-                  >
-                    {item.status === "succeeded"
-                      ? "已完成"
-                      : item.status === "running"
-                        ? "生成中…"
-                        : item.status === "paused"
-                          ? "已暂停"
-                          : item.status === "unknown"
-                            ? "待查单找回"
-                            : item.status === "failed"
-                              ? "失败"
-                              : "排队中"}
-                  </span>
+                          ? "生成中…"
+                          : item.status === "paused"
+                            ? "已暂停"
+                            : item.status === "unknown"
+                              ? "待查单找回"
+                              : item.status === "failed"
+                                ? "失败"
+                                : "排队中"}
+                    </span>
+                  </div>
+                  {(item.status === "paused" || item.status === "failed" || item.status === "unknown") &&
+                    item.message && (
+                      <div className="text-[10px] text-[var(--text-muted)] leading-snug">
+                        {item.message}
+                      </div>
+                    )}
                 </div>
               ))}
             </div>
