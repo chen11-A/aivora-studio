@@ -16,7 +16,7 @@ export function normalizeGroundingText(text: string): string {
     .toLowerCase();
 }
 
-function isLikelyNonDialogueQuote(quoteText: string, fullLine: string, matchIndex: number): boolean {
+export function isLikelyNonDialogueQuote(quoteText: string, fullLine: string, matchIndex: number): boolean {
   const trimmed = quoteText.trim();
   if (!trimmed) return true;
   // Dialogue quotes with sentence punctuation are almost always speech
@@ -24,7 +24,7 @@ function isLikelyNonDialogueQuote(quoteText: string, fullLine: string, matchInde
   const before = fullLine.slice(Math.max(0, matchIndex - 6), matchIndex);
   const after = fullLine.slice(matchIndex + quoteText.length + 2, matchIndex + quoteText.length + 8);
   // Proper nouns / shop names / signs (e.g. 那家“晚照书店” / 「晚照书店」的招牌)
-  if (/(那家|一家|名叫|名为|叫做|牌子|招牌|写着|贴着)$/.test(before)) return true;
+  if (/(那家|一家|这家|名叫|名为|叫做|牌子|招牌|写着|贴着)$/.test(before)) return true;
   if (/^(的|这|那)?(招牌|纸条|字样|二字|两字|三字|四字)/.test(after)) return true;
   // Onomatopoeia / sound effects (e.g. 门铃“叮”地响了一声 / 铁棍“当啷”落地)
   if (/^(地|的|一声|声|落地|作响|响)/.test(after) && trimmed.length <= 4) return true;
@@ -60,13 +60,28 @@ export function extractScriptDialogueLines(scriptText: string): string[] {
       continue;
     }
 
-    // 2. Screenplay format: `林晚（轻声）：这家店居然还开着。`
-    if (/^第[一二三四五六七八九十百0-9]+[场幕集回]/.test(line)) continue;
+    // 2. Unquoted narrative speech with comma ("陆照问，那一声，是麒麟？" / "沈砚轻声道，小心脚下。")
+    if (/^第[零一二三四五六七八九十百千万0-9]+[章回卷节篇场幕集]/.test(line)) continue;
+    const commaSpeech =
+      /^[\u4e00-\u9fa5]{2,8}(?:低声|轻声|沉声|冷声|淡声|急声)?(?:问|问道|道|说|说道|喊|喊道|吼|吼道|答|回|叹|笑|追问|反问)[，,]\s*(.+)$/.exec(
+        line,
+      );
+    if (commaSpeech && commaSpeech[1]!.trim().length >= 2) {
+      dialogues.push(commaSpeech[1]!.trim());
+      continue;
+    }
+
+    // 3. Screenplay format: `林晚（轻声）：这家店居然还开着。`
     const spMatch = /^([^：:（(\s]{1,8})(?:[（(][^）)]{0,24}[）)])?[：:]\s*(.+)$/.exec(line);
     if (spMatch) {
       const speaker = spMatch[1]!.trim();
       const speech = spMatch[2]!.trim();
-      if (!/^(时间|地点|人物|场景|旁白说明|备注|画面|景别)$/.test(speaker) && speech.length >= 2) {
+      if (
+        !/^(时间|地点|人物|场景|旁白说明|备注|画面|景别|石碑铭文|铭文|碑文|传闻|传说|古语|注|提示|说明)$/.test(
+          speaker,
+        ) &&
+        speech.length >= 2
+      ) {
         dialogues.push(speech);
       }
     }
@@ -116,20 +131,33 @@ function mergeTwoShots(a: DirectorProposedShot, b: DirectorProposedShot): Direct
 
   let dialogue = "";
   let speaker = "";
+  let speakerAssetId: string | null = null;
+  let speakerStatus: DirectorProposedShot["speakerStatus"] = "none";
   let subtitle = "";
   if (aHasDlg && bHasDlg) {
     dialogue = `${a.dialogue.trim()}${/[。！？!?，,]$/.test(a.dialogue.trim()) ? "" : "，"}${b.dialogue.trim()}`;
     speaker = a.speaker.trim() || b.speaker.trim();
+    speakerAssetId = a.speakerAssetId ?? b.speakerAssetId ?? null;
+    speakerStatus =
+      a.speakerStatus === "unconfirmed" || b.speakerStatus === "unconfirmed"
+        ? "unconfirmed"
+        : speaker
+          ? "confirmed"
+          : "unconfirmed";
     subtitle = [a.subtitle.trim() || a.dialogue.trim(), b.subtitle.trim() || b.dialogue.trim()]
       .filter(Boolean)
       .join(" ");
   } else if (aHasDlg) {
     dialogue = a.dialogue.trim();
     speaker = a.speaker.trim();
+    speakerAssetId = a.speakerAssetId ?? null;
+    speakerStatus = a.speakerStatus ?? (speaker ? "confirmed" : "unconfirmed");
     subtitle = a.subtitle.trim() || a.dialogue.trim();
   } else if (bHasDlg) {
     dialogue = b.dialogue.trim();
     speaker = b.speaker.trim();
+    speakerAssetId = b.speakerAssetId ?? null;
+    speakerStatus = b.speakerStatus ?? (speaker ? "confirmed" : "unconfirmed");
     subtitle = b.subtitle.trim() || b.dialogue.trim();
   } else {
     subtitle = a.subtitle.trim() || b.subtitle.trim();
@@ -141,6 +169,17 @@ function mergeTwoShots(a: DirectorProposedShot, b: DirectorProposedShot): Direct
   const durationSec = Math.max(1, Math.min(MAX_MERGED_DURATION_SEC, a.durationSec + b.durationSec));
   const cameraMove = a.cameraMove !== "固定" ? a.cameraMove : b.cameraMove;
   const scale = aHasDlg ? a.scale : bHasDlg ? b.scale : a.scale;
+  const sourceSpan =
+    a.sourceSpan && b.sourceSpan
+      ? {
+          paragraphStart: Math.min(a.sourceSpan.paragraphStart, b.sourceSpan.paragraphStart),
+          paragraphEnd: Math.max(a.sourceSpan.paragraphEnd, b.sourceSpan.paragraphEnd),
+        }
+      : (a.sourceSpan ?? b.sourceSpan ?? null);
+  const videoPlanMode =
+    a.videoPlanMode === "paid_video" || b.videoPlanMode === "paid_video"
+      ? "paid_video"
+      : (a.videoPlanMode ?? b.videoPlanMode ?? "still_motion");
 
   return {
     title: a.title,
@@ -150,8 +189,14 @@ function mergeTwoShots(a: DirectorProposedShot, b: DirectorProposedShot): Direct
     visualPrompt,
     dialogue,
     speaker,
+    speakerAssetId,
+    speakerStatus,
     subtitle,
     sourceExcerpt,
+    sourceSpan,
+    keyBeat: Boolean(a.keyBeat || b.keyBeat),
+    keyBeatReason: uniqueStrings([a.keyBeatReason ?? "", b.keyBeatReason ?? ""]).join(" · "),
+    videoPlanMode,
     characters,
   };
 }
@@ -163,12 +208,16 @@ function findBestMergeIndex(shots: DirectorProposedShot[]): number {
   for (let i = 0; i < shots.length - 1; i++) {
     const a = shots[i]!;
     const b = shots[i + 1]!;
+    // QL-02: NEVER swallow or merge a protected keyBeat shot (key action, reaction, or prop)
+    if (a.keyBeat || b.keyBeat) continue;
+
     const aDlg = a.dialogue.trim();
     const bDlg = b.dialogue.trim();
     const combinedDur = a.durationSec + b.durationSec;
 
-    // Never merge two different speakers' spoken dialogue into one shot
+    // Never merge two different speakers' dialogue or unconfirmed speakers together
     if (aDlg && bDlg) {
+      if (a.speakerStatus === "unconfirmed" || b.speakerStatus === "unconfirmed") continue;
       const sameSpeaker =
         a.speaker.trim() !== "" && a.speaker.trim() === b.speaker.trim();
       const combinedChars = aDlg.length + bDlg.length;
@@ -186,14 +235,14 @@ function findBestMergeIndex(shots: DirectorProposedShot[]): number {
     if (combinedDur > MAX_MERGED_DURATION_SEC) continue;
 
     if (!aDlg && !bDlg) {
-      // Priority 1: merge two adjacent action/atmosphere shots
+      // Priority 1: merge two adjacent redundant atmosphere/description shots
       const score = 100 + combinedDur;
       if (score < bestScore) {
         bestScore = score;
         bestIdx = i;
       }
     } else {
-      // Priority 2: attach an adjacent action shot onto a dialogue shot
+      // Priority 2: attach an adjacent non-keyBeat transition shot onto a dialogue shot
       const score = 200 + combinedDur;
       if (score < bestScore) {
         bestScore = score;
@@ -204,10 +253,18 @@ function findBestMergeIndex(shots: DirectorProposedShot[]): number {
   return bestIdx;
 }
 
+export type SceneOverflowDetail = {
+  title: string;
+  shotCount: number;
+  keyBeatCount: number;
+  distinctSpeakerDialogueCount: number;
+  reason: string;
+};
+
 /**
- * Attempts to merge adjacent compatible shots when a scene exceeds `maxShotsPerScene` (default 16),
- * NEVER truncating the ending or dropping spoken dialogue. If a scene still cannot fit within
- * the limit without losing distinct speakers' lines, all shots are preserved and flagged.
+ * Attempts to merge adjacent compatible non-keyBeat shots when a scene exceeds the soft target
+ * (`maxShotsPerScene`, default 16). NEVER truncates the ending, NEVER drops spoken dialogue,
+ * and NEVER swallows `keyBeat` action/reaction/prop shots.
  */
 export function mergeProposalToMaxShots(
   proposal: DirectorProposal,
@@ -216,10 +273,12 @@ export function mergeProposalToMaxShots(
   proposal: DirectorProposal;
   mergedFromCount: number;
   overflowScenes: Array<{ title: string; shotCount: number }>;
+  overflowDetails: SceneOverflowDetail[];
 } {
   let totalBefore = 0;
   let totalAfter = 0;
   const overflowScenes: Array<{ title: string; shotCount: number }> = [];
+  const overflowDetails: SceneOverflowDetail[] = [];
 
   const scenes: DirectorProposedScene[] = proposal.scenes.map((scene) => {
     totalBefore += scene.shots.length;
@@ -232,7 +291,20 @@ export function mergeProposalToMaxShots(
     }
     totalAfter += shots.length;
     if (shots.length > maxShotsPerScene) {
+      const keyBeatCount = shots.filter((s) => s.keyBeat).length;
+      const distinctSpeakerDialogueCount = shots.filter((s) => s.dialogue.trim()).length;
+      const reasons: string[] = [];
+      if (keyBeatCount > 0) reasons.push(`含 ${keyBeatCount} 个受保护的关键动作/道具节拍`);
+      if (distinctSpeakerDialogueCount > 0) reasons.push(`含 ${distinctSpeakerDialogueCount} 镜独立角色对白`);
+      const reason = reasons.length > 0 ? reasons.join("、") : "相邻镜头合并会超过单镜合理时长";
       overflowScenes.push({ title: scene.title, shotCount: shots.length });
+      overflowDetails.push({
+        title: scene.title,
+        shotCount: shots.length,
+        keyBeatCount,
+        distinctSpeakerDialogueCount,
+        reason,
+      });
     }
     return { ...scene, shots };
   });
@@ -250,9 +322,10 @@ export function mergeProposalToMaxShots(
   }
 
   return {
-    proposal: { ...proposal, scenes },
+    proposal: { ...proposal, softTargetShotsPerScene: maxShotsPerScene, scenes },
     mergedFromCount: didMerge ? totalBefore : 0,
     overflowScenes,
+    overflowDetails,
   };
 }
 
@@ -274,13 +347,17 @@ export function evaluateDirectorProposalGrounding(
   scriptText: string,
   options?: {
     mergedFromCount?: number;
+    softTargetShotsPerScene?: number;
     overflowScenes?: Array<{ title: string; shotCount: number }>;
+    overflowDetails?: SceneOverflowDetail[];
   },
 ): DirectorGroundingReport {
   const allShots = proposal.scenes.flatMap((s) => s.shots);
+  const softTarget = options?.softTargetShotsPerScene ?? proposal.softTargetShotsPerScene ?? MAX_SHOTS_PER_SCENE;
+  const paidVideoShotCount = allShots.filter((s) => (s.videoPlanMode ?? "paid_video") === "paid_video").length;
+  const keyBeatCount = allShots.filter((s) => Boolean(s.keyBeat)).length;
   const scriptNorm = normalizeGroundingText(scriptText);
   const scriptDialogues = extractScriptDialogueLines(scriptText);
-  // sourceExcerpt is strictly for traceability; only dialogue/subtitle count as filmed speech
   const shotDialogueCorpus = normalizeGroundingText(
     allShots.map((s) => `${s.dialogue} ${s.subtitle}`).join(" "),
   );
@@ -338,12 +415,15 @@ export function evaluateDirectorProposalGrounding(
   const mergedFromCount = options?.mergedFromCount ?? 0;
   if (mergedFromCount > 0) {
     warnings.push(
-      `原拆镜共 ${mergedFromCount} 镜，已自动合并相邻镜头至 ${allShots.length} 镜（未截断结尾与对白）。`,
+      `原拆镜共 ${mergedFromCount} 镜，已安全合并重复信息至 ${allShots.length} 镜（未吞并关键节拍，未截断结尾与对白）。`,
     );
   }
+  const detailByTitle = new Map((options?.overflowDetails ?? []).map((d) => [d.title, d]));
   for (const ov of options?.overflowScenes ?? []) {
+    const detail = detailByTitle.get(ov.title);
+    const why = detail?.reason ?? "无法在不丢失关键节拍或不同角色台词的前提下继续合并";
     warnings.push(
-      `「${ov.title}」含 ${ov.shotCount} 镜（超过 ${MAX_SHOTS_PER_SCENE} 镜上限且无法在不丢失不同角色台词的前提下继续合并），已保留全部镜头，建议拆分为多场。`,
+      `「${ov.title}」保留 ${ov.shotCount} 镜（超过 ${softTarget} 镜上限软目标，原因：${why}），已完整保留全部证据，可按需拆分场次或将静帧设为推拉省费。`,
     );
   }
   if (!endingCovered && finalBeat.snippet) {
@@ -369,12 +449,15 @@ export function evaluateDirectorProposalGrounding(
     !hasOverflow;
 
   const summary = ok
-    ? `拆镜验收通过 · 对白回溯 ${dialogueCoveragePct}%（${matchedDialogueCount}/${scriptDialogues.length}）· 结尾已覆盖`
-    : `拆镜发现 ${warnings.length} 项提醒 · 对白回溯 ${dialogueCoveragePct}% · 结尾${endingCovered ? "已覆盖" : "未覆盖"}`;
+    ? `拆镜验收通过 · 对白回溯 ${dialogueCoveragePct}%（${matchedDialogueCount}/${scriptDialogues.length}）· 关键节拍 ${keyBeatCount} 处 · 结尾已覆盖`
+    : `拆镜发现 ${warnings.length} 项提醒 · 对白回溯 ${dialogueCoveragePct}% · 关键节拍 ${keyBeatCount} 处 · 结尾${endingCovered ? "已覆盖" : "未覆盖"}`;
 
   return {
     ok,
     totalShots: allShots.length,
+    paidVideoShotCount,
+    softTargetShotsPerScene: softTarget,
+    keyBeatCount,
     mergedFromCount,
     scriptDialogueCount: scriptDialogues.length,
     matchedDialogueCount,
@@ -396,10 +479,13 @@ export function finalizeDirectorProposal(
   const merged = mergeProposalToMaxShots(proposal, maxShotsPerScene);
   const grounding = evaluateDirectorProposalGrounding(merged.proposal, scriptText, {
     mergedFromCount: merged.mergedFromCount,
+    softTargetShotsPerScene: maxShotsPerScene,
     overflowScenes: merged.overflowScenes,
+    overflowDetails: merged.overflowDetails,
   });
   return {
     ...merged.proposal,
+    softTargetShotsPerScene: maxShotsPerScene,
     grounding,
   };
 }

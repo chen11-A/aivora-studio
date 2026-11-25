@@ -92,28 +92,56 @@ export function readWorkspaceFromDb(
 
   const shots: Shot[] = db
     .all<Record<string, unknown>>(`SELECT * FROM shots ORDER BY order_index ASC`)
-    .map((r) => ({
-      id: String(r.id),
-      sceneId: String(r.scene_id),
-      episodeId: String(r.episode_id),
-      orderIndex: Number(r.order_index),
-      title: String(r.title),
-      scale: (r.scale as Shot["scale"]) || "中景",
-      cameraMove: (r.camera_move as Shot["cameraMove"]) || "固定",
-      durationSec: Number(r.duration_sec ?? 3),
-      trimInSec: Number(r.trim_in_sec ?? 0),
-      trimOutSec: Number(r.trim_out_sec ?? 0),
-      visualPrompt: String(r.visual_prompt ?? ""),
-      negativePrompt: String(r.negative_prompt ?? ""),
-      dialogue: String(r.dialogue ?? ""),
-      speaker: String(r.speaker ?? ""),
-      subtitle: String(r.subtitle ?? ""),
-      characterAssetIds: JSON.parse(String(r.character_asset_ids_json ?? "[]")),
-      selectedImageTakeId: r.selected_image_take_id ? String(r.selected_image_take_id) : null,
-      selectedVideoTakeId: r.selected_video_take_id ? String(r.selected_video_take_id) : null,
-      selectedSpeechTakeId: r.selected_speech_take_id ? String(r.selected_speech_take_id) : null,
-      updatedAt: String(r.updated_at),
-    }));
+    .map((r) => {
+      let sourceSpan: Shot["sourceSpan"] = null;
+      if (r.source_span_json) {
+        try {
+          const parsed = JSON.parse(String(r.source_span_json)) as Shot["sourceSpan"];
+          if (parsed && typeof parsed.paragraphStart === "number") {
+            sourceSpan = parsed;
+          }
+        } catch {
+          sourceSpan = null;
+        }
+      }
+      const rawSpeakerStatus = String(r.speaker_status ?? "none");
+      const speakerStatus: Shot["speakerStatus"] =
+        rawSpeakerStatus === "confirmed" || rawSpeakerStatus === "unconfirmed"
+          ? rawSpeakerStatus
+          : "none";
+      const rawPlanMode = String(r.video_plan_mode ?? "paid_video");
+      const videoPlanMode: Shot["videoPlanMode"] =
+        rawPlanMode === "still_motion" || rawPlanMode === "skip" ? rawPlanMode : "paid_video";
+
+      return {
+        id: String(r.id),
+        sceneId: String(r.scene_id),
+        episodeId: String(r.episode_id),
+        orderIndex: Number(r.order_index),
+        title: String(r.title),
+        scale: (r.scale as Shot["scale"]) || "中景",
+        cameraMove: (r.camera_move as Shot["cameraMove"]) || "固定",
+        durationSec: Number(r.duration_sec ?? 3),
+        trimInSec: Number(r.trim_in_sec ?? 0),
+        trimOutSec: Number(r.trim_out_sec ?? 0),
+        visualPrompt: String(r.visual_prompt ?? ""),
+        negativePrompt: String(r.negative_prompt ?? ""),
+        dialogue: String(r.dialogue ?? ""),
+        speaker: String(r.speaker ?? ""),
+        speakerAssetId: r.speaker_asset_id ? String(r.speaker_asset_id) : null,
+        speakerStatus,
+        subtitle: String(r.subtitle ?? ""),
+        sourceSpan,
+        keyBeat: Number(r.key_beat ?? 0) === 1,
+        keyBeatReason: String(r.key_beat_reason ?? ""),
+        videoPlanMode,
+        characterAssetIds: JSON.parse(String(r.character_asset_ids_json ?? "[]")),
+        selectedImageTakeId: r.selected_image_take_id ? String(r.selected_image_take_id) : null,
+        selectedVideoTakeId: r.selected_video_take_id ? String(r.selected_video_take_id) : null,
+        selectedSpeechTakeId: r.selected_speech_take_id ? String(r.selected_speech_take_id) : null,
+        updatedAt: String(r.updated_at),
+      };
+    });
 
   const takes: Take[] = db
     .all<Record<string, unknown>>(`SELECT * FROM takes ORDER BY version_number ASC`)

@@ -31,13 +31,13 @@ function makeWorkspace(): ProjectWorkspace {
       {
         id: "sh_1", sceneId: "sc_1", episodeId: "ep_1", orderIndex: 0, title: "镜01",
         scale: "远景", cameraMove: "固定", durationSec: 3, trimInSec: 0, trimOutSec: 0, visualPrompt: "", negativePrompt: "",
-        dialogue: "", speaker: "", subtitle: "第一句", characterAssetIds: [],
+        dialogue: "", speaker: "", speakerAssetId: null, speakerStatus: "none", subtitle: "第一句", sourceSpan: null, keyBeat: false, keyBeatReason: "", videoPlanMode: "paid_video", characterAssetIds: [],
         selectedImageTakeId: "tk_img", selectedVideoTakeId: "tk_vid", selectedSpeechTakeId: null, updatedAt: now,
       },
       {
         id: "sh_2", sceneId: "sc_1", episodeId: "ep_1", orderIndex: 1, title: "镜02",
         scale: "近景", cameraMove: "固定", durationSec: 4, trimInSec: 0, trimOutSec: 0, visualPrompt: "", negativePrompt: "",
-        dialogue: "", speaker: "", subtitle: "", characterAssetIds: [],
+        dialogue: "", speaker: "", speakerAssetId: null, speakerStatus: "none", subtitle: "", sourceSpan: null, keyBeat: false, keyBeatReason: "", videoPlanMode: "paid_video", characterAssetIds: [],
         selectedImageTakeId: null, selectedVideoTakeId: null, selectedSpeechTakeId: null, updatedAt: now,
       },
     ],

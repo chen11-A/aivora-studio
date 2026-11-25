@@ -108,17 +108,19 @@ export function ConfirmJobModal() {
               <AlertTriangle className="w-4 h-4 text-[var(--accent-amber-text)] shrink-0 mt-0.5" />
               <div className="flex-1">
                 <div>{activePlan.blockingReason}</div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    close();
-                    setModelCenterOpen(true);
-                  }}
-                  className="aivora-pressable mt-2 inline-flex items-center gap-1 text-[var(--accent-primary-text)] hover:underline font-medium cursor-pointer"
-                >
-                  <Cpu className="w-3.5 h-3.5" />
-                  <span>前往模型中心配置</span>
-                </button>
+                {activePlan.blockingReason?.includes("模型中心") && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      close();
+                      setModelCenterOpen(true);
+                    }}
+                    className="aivora-pressable mt-2 inline-flex items-center gap-1 text-[var(--accent-primary-text)] hover:underline font-medium cursor-pointer"
+                  >
+                    <Cpu className="w-3.5 h-3.5" />
+                    <span>前往模型中心配置</span>
+                  </button>
+                )}
               </div>
             </div>
           )}

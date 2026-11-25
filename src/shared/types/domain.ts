@@ -32,6 +32,20 @@ export type CameraMove = z.infer<typeof CameraMoveSchema>;
 export const SubtitleStyleSchema = z.enum(["white", "yellow", "bar", "variety"]);
 export type SubtitleStyle = z.infer<typeof SubtitleStyleSchema>;
 
+export const SpeakerStatusSchema = z.enum(["none", "confirmed", "unconfirmed"]);
+export type SpeakerStatus = z.infer<typeof SpeakerStatusSchema>;
+
+export const VideoPlanModeSchema = z.enum(["paid_video", "still_motion", "skip"]);
+export type VideoPlanMode = z.infer<typeof VideoPlanModeSchema>;
+
+export const SourceSpanSchema = z.object({
+  paragraphStart: z.number().int().min(0),
+  paragraphEnd: z.number().int().min(0),
+  charStart: z.number().int().min(0).optional(),
+  charEnd: z.number().int().min(0).optional(),
+});
+export type SourceSpan = z.infer<typeof SourceSpanSchema>;
+
 export const SourceAnchorSchema = z.object({
   paragraphIndex: z.number().int().min(0),
   excerpt: z.string().max(400),
@@ -135,7 +149,13 @@ export const ShotSchema = z.object({
   negativePrompt: z.string().default(""),
   dialogue: z.string().default(""),
   speaker: z.string().default(""),
+  speakerAssetId: z.string().nullable().default(null),
+  speakerStatus: SpeakerStatusSchema.default("none"),
   subtitle: z.string().default(""),
+  sourceSpan: SourceSpanSchema.nullable().default(null),
+  keyBeat: z.boolean().default(false),
+  keyBeatReason: z.string().default(""),
+  videoPlanMode: VideoPlanModeSchema.default("paid_video"),
   characterAssetIds: z.array(z.string()).default([]),
   selectedImageTakeId: z.string().nullable().default(null),
   selectedVideoTakeId: z.string().nullable().default(null),
@@ -204,7 +224,13 @@ export const UpdateShotInputSchema = z.object({
   negativePrompt: z.string().optional(),
   dialogue: z.string().optional(),
   speaker: z.string().optional(),
+  speakerAssetId: z.string().nullable().optional(),
+  speakerStatus: SpeakerStatusSchema.optional(),
   subtitle: z.string().optional(),
+  sourceSpan: SourceSpanSchema.nullable().optional(),
+  keyBeat: z.boolean().optional(),
+  keyBeatReason: z.string().optional(),
+  videoPlanMode: VideoPlanModeSchema.optional(),
   characterAssetIds: z.array(z.string()).optional(),
   selectedImageTakeId: z.string().nullable().optional(),
   selectedVideoTakeId: z.string().nullable().optional(),

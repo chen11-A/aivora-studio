@@ -129,7 +129,14 @@ export function evaluateShotVisualStatus(
   return { state: "ready", label: "已就绪" };
 }
 
-export function resolveShotSpeechVoiceId(shot: Pick<Shot, "speaker">, assets: Asset[]): string {
+export function resolveShotSpeechVoiceId(
+  shot: Pick<Shot, "speaker" | "speakerAssetId">,
+  assets: Asset[],
+): string {
+  if (shot.speakerAssetId) {
+    const byId = assets.find((a) => a.id === shot.speakerAssetId && a.kind === "character");
+    if (byId?.voiceId) return byId.voiceId;
+  }
   const speaker = shot.speaker.trim();
   if (speaker) {
     const matched = assets.find((a) => a.kind === "character" && a.name.trim() === speaker);
@@ -169,7 +176,7 @@ export function evaluateShotSpeechStatus(
   takes: Take[],
   assets: Asset[],
 ): ShotSpeechFreshness {
-  const curText = shot.dialogue.trim() || shot.subtitle.trim();
+  const curText = shot.dialogue.trim();
   const speechTake = resolveSelectedSpeechTake(shot, takes);
   if (!curText) {
     return { state: "none", label: "无台词" };

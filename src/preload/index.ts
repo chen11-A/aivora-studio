@@ -80,10 +80,16 @@ const api: AivoraDesktopApi = {
   updateOAuthModels: (input) => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_OAUTH_MODELS, input),
   oauthStartLogin: (providerId) => ipcRenderer.invoke(IPC_CHANNELS.OAUTH_START_LOGIN, providerId),
   oauthDisconnect: (providerId) => ipcRenderer.invoke(IPC_CHANNELS.OAUTH_DISCONNECT, providerId),
+  proposeScreenwriterOutline: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SCREENWRITER_PROPOSE_OUTLINE, input),
+  applyScreenwriterOutline: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SCREENWRITER_APPLY_OUTLINE, input),
   proposeDirectorSplit: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_PROPOSE, input),
   applyDirectorProposal: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_APPLY, input),
   undoDirectorApply: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_UNDO, input),
   getDirectorUndoState: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_UNDO_STATE, input),
+  reviewEpisodeShots: (input) => ipcRenderer.invoke(IPC_CHANNELS.SCRIPT_REVIEW_EPISODE, input),
+  proposeActionPolish: (input) => ipcRenderer.invoke(IPC_CHANNELS.ACTION_POLISH_PROPOSE, input),
   prepareGenerationPlan: (input) => ipcRenderer.invoke(IPC_CHANNELS.JOB_PREPARE_PLAN, input),
   confirmAndRunJob: (plan) => ipcRenderer.invoke(IPC_CHANNELS.JOB_CONFIRM_RUN, plan),
   recoverUnknownJob: (input) => ipcRenderer.invoke(IPC_CHANNELS.JOB_RECOVER_UNKNOWN, input),

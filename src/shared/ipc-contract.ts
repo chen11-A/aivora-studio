@@ -297,10 +297,32 @@ export type AivoraDesktopApi = {
   oauthStartLogin: (providerId: OAuthProviderId) => Promise<OAuthLoginResult>;
   oauthDisconnect: (providerId: OAuthProviderId) => Promise<{ ok: boolean; message: string }>;
 
-  // Director skill (proposal-only, persistent undoable)
+  // 3-Step Story Pipeline: Screenwriter Outline -> Director Split -> Script Review (+ on-demand Action Polish)
+  proposeScreenwriterOutline: (input: {
+    projectId: string;
+    rawText: string;
+    defaultTitle?: string;
+  }) => Promise<{
+    ok: boolean;
+    outline?: import("./types/story-pipeline").ScreenwriterOutlineProposal;
+    message: string;
+  }>;
+  applyScreenwriterOutline: (input: {
+    projectId: string;
+    outline: import("./types/story-pipeline").ScreenwriterOutlineProposal;
+    replaceEmptyFirstEpisode?: boolean;
+    replaceEpisodeId?: string | null;
+  }) => Promise<{
+    ok: boolean;
+    workspace?: ProjectWorkspace;
+    createdEpisodeIds?: string[];
+    message: string;
+  }>;
   proposeDirectorSplit: (input: {
     projectId: string;
     episodeId: string;
+    softTargetShotsPerScene?: number;
+    sceneDrafts?: import("./types/story-pipeline").ScreenwriterSceneDraft[];
   }) => Promise<{ ok: boolean; proposal?: DirectorProposal; message: string }>;
   applyDirectorProposal: (input: {
     projectId: string;
@@ -315,6 +337,23 @@ export type AivoraDesktopApi = {
     projectId: string;
     episodeId: string;
   }) => Promise<{ undoToken: string | null }>;
+  reviewEpisodeShots: (input: {
+    projectId: string;
+    episodeId: string;
+    softTargetShotsPerScene?: number;
+  }) => Promise<{
+    ok: boolean;
+    report?: import("./types/story-pipeline").ScriptReviewReport;
+    message: string;
+  }>;
+  proposeActionPolish: (input: {
+    projectId: string;
+    shotId: string;
+  }) => Promise<{
+    ok: boolean;
+    proposal?: import("./types/story-pipeline").ActionPolishProposal;
+    message: string;
+  }>;
 
   // Anti-duplicate-charge Job Queue & Incremental Batch Scheduler
   prepareGenerationPlan: (input: {
@@ -405,10 +444,14 @@ export const IPC_CHANNELS = {
   UPDATE_OAUTH_MODELS: "aivora:oauth:update-models",
   OAUTH_START_LOGIN: "aivora:oauth:start",
   OAUTH_DISCONNECT: "aivora:oauth:disconnect",
+  SCREENWRITER_PROPOSE_OUTLINE: "aivora:screenwriter:propose-outline",
+  SCREENWRITER_APPLY_OUTLINE: "aivora:screenwriter:apply-outline",
   DIRECTOR_PROPOSE: "aivora:director:propose",
   DIRECTOR_APPLY: "aivora:director:apply",
   DIRECTOR_UNDO: "aivora:director:undo",
   DIRECTOR_UNDO_STATE: "aivora:director:undo-state",
+  SCRIPT_REVIEW_EPISODE: "aivora:director:review-episode",
+  ACTION_POLISH_PROPOSE: "aivora:director:action-polish",
   JOB_PREPARE_PLAN: "aivora:jobs:prepare-plan",
   JOB_CONFIRM_RUN: "aivora:jobs:confirm-run",
   JOB_RECOVER_UNKNOWN: "aivora:jobs:recover-unknown",

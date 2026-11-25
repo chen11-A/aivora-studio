@@ -63,7 +63,13 @@ export function createShotInDb(
     negativePrompt: "",
     dialogue: "",
     speaker: "",
+    speakerAssetId: null,
+    speakerStatus: "none",
     subtitle: "",
+    sourceSpan: null,
+    keyBeat: false,
+    keyBeatReason: "",
+    videoPlanMode: "paid_video",
     characterAssetIds: [],
     selectedImageTakeId: null,
     selectedVideoTakeId: null,
@@ -131,7 +137,6 @@ export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): str
     input.trimInSec !== undefined ? input.trimInSec : Number(row.trim_in_sec ?? 0);
   const nextTrimOut =
     input.trimOutSec !== undefined ? input.trimOutSec : Number(row.trim_out_sec ?? 0);
-  // If user adjusted durationSec directly without specifying trimOutSec, reset trimOutSec so duration takes effect
   const effectiveTrimOut =
     input.durationSec !== undefined && input.trimOutSec === undefined
       ? 0
@@ -148,11 +153,47 @@ export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): str
       ? JSON.stringify(input.characterAssetIds)
       : String(row.character_asset_ids_json ?? "[]");
 
+  const nextDialogue = input.dialogue ?? String(row.dialogue ?? "");
+  const nextSpeaker = input.speaker ?? String(row.speaker ?? "");
+  const nextSpeakerAssetId =
+    input.speakerAssetId !== undefined
+      ? input.speakerAssetId
+      : input.speaker !== undefined && !input.speaker.trim()
+        ? null
+        : ((row.speaker_asset_id as string | null) ?? null);
+  let nextSpeakerStatus = input.speakerStatus ?? String(row.speaker_status ?? "none");
+  if (
+    input.speakerStatus === undefined &&
+    (input.speaker !== undefined ||
+      input.speakerAssetId !== undefined ||
+      input.dialogue !== undefined)
+  ) {
+    if (!nextDialogue.trim()) {
+      nextSpeakerStatus = nextSpeaker.trim() || nextSpeakerAssetId ? "confirmed" : "none";
+    } else if (nextSpeaker.trim() || nextSpeakerAssetId) {
+      nextSpeakerStatus = "confirmed";
+    } else {
+      nextSpeakerStatus = "unconfirmed";
+    }
+  }
+  const nextSourceSpanJson =
+    input.sourceSpan !== undefined
+      ? input.sourceSpan
+        ? JSON.stringify(input.sourceSpan)
+        : null
+      : ((row.source_span_json as string | null) ?? null);
+  const nextKeyBeat =
+    input.keyBeat !== undefined ? (input.keyBeat ? 1 : 0) : Number(row.key_beat ?? 0);
+  const nextKeyBeatReason = input.keyBeatReason ?? String(row.key_beat_reason ?? "");
+  const nextVideoPlanMode = input.videoPlanMode ?? String(row.video_plan_mode ?? "paid_video");
+
   db.transaction(() => {
     db.run(
       `UPDATE shots SET title = ?, scale = ?, camera_move = ?, duration_sec = ?,
        trim_in_sec = ?, trim_out_sec = ?, visual_prompt = ?,
-       negative_prompt = ?, dialogue = ?, speaker = ?, subtitle = ?, character_asset_ids_json = ?,
+       negative_prompt = ?, dialogue = ?, speaker = ?, speaker_asset_id = ?, speaker_status = ?,
+       subtitle = ?, source_span_json = ?, key_beat = ?, key_beat_reason = ?, video_plan_mode = ?,
+       character_asset_ids_json = ?,
        selected_image_take_id = ?, selected_video_take_id = ?, selected_speech_take_id = ?, updated_at = ?
        WHERE id = ?`,
       input.title ?? String(row.title),
@@ -163,9 +204,15 @@ export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): str
       effectiveTrimOut,
       input.visualPrompt ?? String(row.visual_prompt ?? ""),
       input.negativePrompt ?? String(row.negative_prompt ?? ""),
-      input.dialogue ?? String(row.dialogue ?? ""),
-      input.speaker ?? String(row.speaker ?? ""),
+      nextDialogue,
+      nextSpeaker,
+      nextSpeakerAssetId,
+      nextSpeakerStatus,
       input.subtitle ?? String(row.subtitle ?? ""),
+      nextSourceSpanJson,
+      nextKeyBeat,
+      nextKeyBeatReason,
+      nextVideoPlanMode,
       nextCharIdsJson,
       input.selectedImageTakeId !== undefined
         ? input.selectedImageTakeId

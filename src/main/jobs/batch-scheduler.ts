@@ -67,13 +67,31 @@ export class BatchJobScheduler {
       .sort((a, b) => a.orderIndex - b.orderIndex);
 
     const plans: GenerationPlan[] = [];
+    const blockedUnconfirmedSpeakerShots: Array<{ shotId: string; shotTitle: string; reason: string }> = [];
     let skippedReadyCount = 0;
+    let stillMotionSkippedCount = 0;
+    const paidVideoShotsInEpisode = epShots.filter((s) => s.videoPlanMode === "paid_video").length;
 
     for (const shot of epShots) {
       if (input.mode === "speech") {
+        if (!shot.dialogue.trim()) {
+          skippedReadyCount += 1;
+          continue;
+        }
         const speechStatus = evaluateShotSpeechStatus(shot, ws.takes, ws.assets);
         if (speechStatus.state === "none" || speechStatus.state === "ready") {
           skippedReadyCount += 1;
+          continue;
+        }
+        if (shot.speakerStatus === "unconfirmed" || !shot.speaker.trim()) {
+          blockedUnconfirmedSpeakerShots.push({
+            shotId: shot.id,
+            shotTitle: shot.title,
+            reason:
+              shot.speakerStatus === "unconfirmed"
+                ? "说话人待确认（严禁错声线扣费）"
+                : "有台词但未指定说话人",
+          });
           continue;
         }
       } else if (input.mode === "image") {
@@ -85,6 +103,10 @@ export class BatchJobScheduler {
           continue;
         }
       } else {
+        if (shot.videoPlanMode !== "paid_video") {
+          stillMotionSkippedCount += 1;
+          continue;
+        }
         const active = resolveActiveVisualTake(shot, ws.takes);
         const freshness = evaluateShotVisualStatus(shot, ws.takes, ws.assets);
         const hasRealVideo = Boolean(active && isVideoMediaPath(active.mediaPath));
@@ -105,15 +127,24 @@ export class BatchJobScheduler {
     const firstBlocking = plans.find((p) => !p.canRun)?.blockingReason ?? null;
     const runnable = plans.filter((p) => p.canRun);
     const firstPlan = plans[0];
+    const configuredDisplay = firstPlan
+      ? { providerLabel: firstPlan.providerLabel, modelId: firstPlan.modelId }
+      : this.jobQueue.getConfiguredRoutingDisplay(input.mode);
 
     let blockingReason: string | null = null;
     if (plans.length === 0) {
-      blockingReason =
-        input.mode === "speech"
-          ? "当前分集所有有台词镜头均已有最新配音，无需补齐。"
-          : input.mode === "image"
-            ? "当前分集所有镜头均已有最新首帧图，无需补齐。"
-            : "当前分集所有镜头均已有最新视频，无需补齐。";
+      if (input.mode === "speech" && blockedUnconfirmedSpeakerShots.length > 0) {
+        blockingReason = `已拦截 ${blockedUnconfirmedSpeakerShots.length} 个「待确认说话人」镜头，严禁拿错声线扣费；请先在分镜右侧确认说话人后再批量配音。`;
+      } else if (input.mode === "video" && stillMotionSkippedCount > 0 && paidVideoShotsInEpisode === 0) {
+        blockingReason = `本集 ${epShots.length} 个剪辑镜头均标记为静帧推拉/跳过，无需发起付费视频生成。`;
+      } else {
+        blockingReason =
+          input.mode === "speech"
+            ? "当前分集所有已确认说话人的台词镜头均已有最新配音，无需补齐。"
+            : input.mode === "image"
+              ? "当前分集所有镜头均已有最新首帧图，无需补齐。"
+              : "当前分集所有需付费动态镜头均已有最新视频，无需补齐。";
+      }
     } else if (runnable.length === 0) {
       blockingReason = firstBlocking ?? "请先在「模型中心」配置对应环节的模型路由与密钥。";
     }
@@ -128,10 +159,13 @@ export class BatchJobScheduler {
       episodeId: input.episodeId,
       mode: input.mode,
       totalShotsInEpisode: epShots.length,
+      paidVideoShotsInEpisode,
+      stillMotionSkippedCount,
+      blockedUnconfirmedSpeakerShots,
       skippedReadyCount,
       plans: runnable,
-      providerLabel: firstPlan?.providerLabel ?? "未配置模型",
-      modelId: firstPlan?.modelId ?? "",
+      providerLabel: configuredDisplay.providerLabel,
+      modelId: configuredDisplay.modelId,
       estimatedTotalSec,
       canRun: blockingReason === null && runnable.length > 0,
       blockingReason,

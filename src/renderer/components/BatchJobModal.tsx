@@ -22,6 +22,8 @@ export function BatchJobModal() {
   const pauseRun = useAiGenerationStore((s) => s.pauseBatchRun);
   const pollProgress = useAiGenerationStore((s) => s.pollBatchProgress);
   const setModelCenterOpen = useStudioStore((s) => s.setModelCenterOpen);
+  const selectShot = useStudioStore((s) => s.selectShot);
+  const setStage = useStudioStore((s) => s.setStage);
 
   useEffect(() => {
     if (!open || !progress?.running) return;
@@ -84,13 +86,23 @@ export function BatchJobModal() {
         {plan && (
           <div className="rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] p-3.5 text-[12px] flex flex-col gap-1.5 text-[var(--text-secondary)] tabular-nums">
             <div className="flex justify-between gap-2">
-              <span>本集镜头统计</span>
+              <span>{mode === "video" ? "剪辑镜头 / 付费视频" : "本集镜头统计"}</span>
               <span className="text-[var(--text-primary)]">
-                共 {plan.totalShotsInEpisode} 镜 · 待补齐{" "}
+                全集 {plan.totalShotsInEpisode} 镜
+                {mode === "video" && plan.paidVideoShotsInEpisode !== undefined
+                  ? `（需付费视频 ${plan.paidVideoShotsInEpisode} 镜）`
+                  : ""}
+                {" · "}待补齐{" "}
                 <strong className="text-[var(--accent-primary-text)]">{plan.plans.length}</strong> 镜 · 已跳过{" "}
                 <strong className="text-[var(--accent-success-text)]">{plan.skippedReadyCount}</strong> 镜
               </span>
             </div>
+            {mode === "video" && (plan.stillMotionSkippedCount ?? 0) > 0 && (
+              <div className="flex justify-between gap-2 text-[11px] text-[var(--accent-success-text)]">
+                <span>静帧推拉自动省费</span>
+                <span>已排除 {plan.stillMotionSkippedCount} 个静帧推拉镜头，不走付费视频生成</span>
+              </div>
+            )}
             <div className="flex justify-between gap-2">
               <span>使用模型</span>
               <span className="text-[var(--text-primary)] truncate">
@@ -103,6 +115,40 @@ export function BatchJobModal() {
             </div>
           </div>
         )}
+
+        {mode === "speech" &&
+          plan?.blockedUnconfirmedSpeakerShots &&
+          plan.blockedUnconfirmedSpeakerShots.length > 0 && (
+            <div
+              data-testid="batch-blocked-speakers"
+              className="rounded-xl bg-[var(--accent-amber-soft)] border border-[var(--accent-amber-border)] p-3 text-[11px] text-[var(--accent-amber-ink)] flex flex-col gap-1.5"
+            >
+              <div className="flex items-center gap-1.5 font-semibold">
+                <AlertTriangle className="w-3.5 h-3.5 text-[var(--accent-amber-text)] shrink-0" />
+                <span>
+                  已拦截 {plan.blockedUnconfirmedSpeakerShots.length} 个「说话人待确认」镜头（防错配默认声线扣费）
+                </span>
+              </div>
+              <div className="max-h-28 overflow-y-auto flex flex-col gap-1">
+                {plan.blockedUnconfirmedSpeakerShots.map((item) => (
+                  <div key={item.shotId} className="flex items-center justify-between gap-2">
+                    <span className="truncate">{item.shotTitle}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        close();
+                        selectShot(item.shotId);
+                        void setStage("storyboard");
+                      }}
+                      className="aivora-pressable text-[var(--accent-primary-text)] hover:underline shrink-0 cursor-pointer font-medium"
+                    >
+                      去确认说话人
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
         {plan && !plan.canRun && !isRunning && (
           <div className="rounded-xl bg-[var(--accent-amber-soft)] border border-[var(--accent-amber-border)] p-3 text-[12px] text-[var(--accent-amber-ink)] flex items-start gap-2">

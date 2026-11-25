@@ -63,6 +63,29 @@ export class GenerationJobQueue {
     return listJobRows(this.projects, projectId);
   }
 
+  getConfiguredRoutingDisplay(kind: "image" | "video" | "speech"): {
+    providerLabel: string;
+    modelId: string;
+  } {
+    const capability: CapabilityKey =
+      kind === "speech" ? "tts" : kind === "video" ? "video" : "image";
+    const snapshot = this.globalConfig.getSnapshot();
+    const binding = snapshot.routing[capability];
+    if (!binding) return { providerLabel: "未配置模型", modelId: "" };
+    if (binding.source === "oauth") {
+      const acc = snapshot.oauthAccounts.find((a) => a.providerId === binding.sourceId);
+      if (acc && acc.status === "connected") {
+        return { providerLabel: acc.displayName, modelId: binding.modelId };
+      }
+      return { providerLabel: "未配置模型", modelId: "" };
+    }
+    const provider = snapshot.providers.find((p) => p.id === binding.sourceId);
+    if (provider && provider.enabled && provider.hasSecret) {
+      return { providerLabel: provider.name, modelId: binding.modelId };
+    }
+    return { providerLabel: "未配置模型", modelId: "" };
+  }
+
   preparePlan(input: {
     projectId: string;
     shotId: string;
@@ -141,8 +164,17 @@ export class GenerationJobQueue {
       }
     }
 
-    if (shot && input.kind === "speech" && !shot.dialogue.trim() && !shot.subtitle.trim()) {
-      blockingReason = "当前镜头没有台词或字幕文本，请先填写台词。";
+    if (shot && input.kind === "speech") {
+      const speechText = shot.dialogue.trim() || shot.subtitle.trim();
+      if (!speechText) {
+        blockingReason = "当前镜头没有台词文本，请先填写台词。";
+      } else if (shot.speakerStatus === "unconfirmed") {
+        blockingReason =
+          "当前镜头说话人为「待确认」，为防错配声线扣费已拦截配音；请先在分镜右侧确认说话人角色。";
+      } else if (!shot.speaker.trim()) {
+        blockingReason =
+          "当前镜头尚未指定说话人，为防错配默认声线扣费已拦截配音；请先指定说话人角色或「旁白」。";
+      }
     }
 
     const promptPreview =

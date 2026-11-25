@@ -1,6 +1,17 @@
 import { z } from "zod";
-import { CameraMoveSchema, ShotScaleSchema, type Job } from "./domain";
+import {
+  CameraMoveSchema,
+  ShotScaleSchema,
+  SourceSpanSchema,
+  SpeakerStatusSchema,
+  VideoPlanModeSchema,
+  type Job,
+} from "./domain";
 import type { CapabilityKey, OAuthProviderId } from "./provider";
+import {
+  ScriptReviewReportSchema,
+  SkillStepTraceSchema,
+} from "./story-pipeline";
 
 export const DirectorProposedAssetSchema = z.object({
   kind: z.enum(["character", "scene", "prop"]).catch("character"),
@@ -17,22 +28,34 @@ export const DirectorProposedShotSchema = z.object({
   visualPrompt: z.string().trim().min(1),
   dialogue: z.string().default(""),
   speaker: z.string().default(""),
+  speakerAssetId: z.string().nullable().optional(),
+  speakerStatus: SpeakerStatusSchema.optional(),
   subtitle: z.string().default(""),
   sourceExcerpt: z.string().default(""),
+  sourceSpan: SourceSpanSchema.nullable().optional(),
+  keyBeat: z.boolean().optional(),
+  keyBeatReason: z.string().optional(),
+  videoPlanMode: VideoPlanModeSchema.optional(),
   characters: z.array(z.string()).default([]),
 });
 export type DirectorProposedShot = z.infer<typeof DirectorProposedShotSchema>;
 
 export const DirectorProposedSceneSchema = z.object({
   title: z.string().trim().min(1).max(120),
+  locationName: z.string().optional(),
   summary: z.string().default(""),
-  shots: z.array(DirectorProposedShotSchema).min(1).max(40),
+  paragraphStart: z.number().int().min(0).optional(),
+  paragraphEnd: z.number().int().min(0).optional(),
+  shots: z.array(DirectorProposedShotSchema).min(1),
 });
 export type DirectorProposedScene = z.infer<typeof DirectorProposedSceneSchema>;
 
 export const DirectorGroundingReportSchema = z.object({
   ok: z.boolean(),
   totalShots: z.number().int().min(0),
+  paidVideoShotCount: z.number().int().min(0).optional(),
+  softTargetShotsPerScene: z.number().int().min(1).optional(),
+  keyBeatCount: z.number().int().min(0).optional(),
   mergedFromCount: z.number().int().min(0).default(0),
   scriptDialogueCount: z.number().int().min(0),
   matchedDialogueCount: z.number().int().min(0),
@@ -49,9 +72,13 @@ export type DirectorGroundingReport = z.infer<typeof DirectorGroundingReportSche
 export const DirectorProposalSchema = z.object({
   sourceMode: z.enum(["ai", "offline_preview"]).default("ai"),
   providerSummary: z.string().default(""),
+  softTargetShotsPerScene: z.number().int().min(4).max(60).optional(),
   assets: z.array(DirectorProposedAssetSchema).default([]),
   scenes: z.array(DirectorProposedSceneSchema).min(1),
   grounding: DirectorGroundingReportSchema.optional(),
+  screenwriterTrace: SkillStepTraceSchema.optional(),
+  skillTrace: SkillStepTraceSchema.optional(),
+  reviewReport: ScriptReviewReportSchema.optional(),
 });
 export type DirectorProposal = z.infer<typeof DirectorProposalSchema>;
 
@@ -88,12 +115,21 @@ export type GenerationPlan = {
 
 export type BatchGenerationMode = "speech" | "image" | "video";
 
+export type BlockedBatchShot = {
+  shotId: string;
+  shotTitle: string;
+  reason: string;
+};
+
 export type BatchGenerationPlan = {
   batchId: string;
   projectId: string;
   episodeId: string;
   mode: BatchGenerationMode;
   totalShotsInEpisode: number;
+  paidVideoShotsInEpisode?: number;
+  stillMotionSkippedCount?: number;
+  blockedUnconfirmedSpeakerShots?: BlockedBatchShot[];
   skippedReadyCount: number;
   plans: GenerationPlan[];
   providerLabel: string;

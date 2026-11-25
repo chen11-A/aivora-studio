@@ -4,60 +4,60 @@ import type {
   BatchGenerationMode,
   BatchGenerationPlan,
   BatchProgressSnapshot,
-  DirectorProposal,
   GenerationPlan,
 } from "@shared/types/jobs";
 import type { OAuthProviderId } from "@shared/types/provider";
 import { getDesktopClient } from "../lib/desktop-client";
-import { useStudioStore } from "./useStudioStore";
+import {
+  createStoryPipelineActions,
+  type StoryPipelineActions,
+  type StoryPipelineStateSlice,
+} from "./story-pipeline-actions";
+import { flushPendingSaves, useStudioStore } from "./useStudioStore";
 
-interface AiGenerationStore {
-  jobs: Job[];
-  jobDrawerOpen: boolean;
-  pendingPlan: GenerationPlan | null;
-  runningJob: boolean;
-  directorLoading: boolean;
-  directorProposal: DirectorProposal | null;
-  lastUndoToken: string | null;
-  oauthBusyId: OAuthProviderId | null;
-  testingProviderId: string | null;
-  fetchingProviderId: string | null;
-  batchModalOpen: boolean;
-  batchMode: BatchGenerationMode;
-  pendingBatchPlan: BatchGenerationPlan | null;
-  batchProgress: BatchProgressSnapshot | null;
+type AiGenerationStore = StoryPipelineStateSlice &
+  StoryPipelineActions & {
+    jobs: Job[];
+    jobDrawerOpen: boolean;
+    pendingPlan: GenerationPlan | null;
+    runningJob: boolean;
+    oauthBusyId: OAuthProviderId | null;
+    testingProviderId: string | null;
+    fetchingProviderId: string | null;
+    batchModalOpen: boolean;
+    batchMode: BatchGenerationMode;
+    pendingBatchPlan: BatchGenerationPlan | null;
+    batchProgress: BatchProgressSnapshot | null;
 
-  setJobDrawerOpen: (open: boolean) => void;
-  closePendingPlan: () => void;
-  closeDirectorProposal: () => void;
-  refreshJobs: () => Promise<void>;
-  syncDirectorUndoState: () => Promise<void>;
+    setJobDrawerOpen: (open: boolean) => void;
+    closePendingPlan: () => void;
+    refreshJobs: () => Promise<void>;
 
-  startOAuthLogin: (providerId: OAuthProviderId) => Promise<void>;
-  disconnectOAuth: (providerId: OAuthProviderId) => Promise<void>;
-  updateOAuthModels: (providerId: OAuthProviderId, models: string[]) => Promise<void>;
-  testProvider: (providerId: string) => Promise<void>;
-  fetchProviderModels: (providerId: string) => Promise<void>;
+    startOAuthLogin: (providerId: OAuthProviderId) => Promise<void>;
+    disconnectOAuth: (providerId: OAuthProviderId) => Promise<void>;
+    updateOAuthModels: (providerId: OAuthProviderId, models: string[]) => Promise<void>;
+    testProvider: (providerId: string) => Promise<void>;
+    fetchProviderModels: (providerId: string) => Promise<void>;
 
-  proposeDirector: () => Promise<void>;
-  applyDirector: () => Promise<void>;
-  undoDirector: () => Promise<void>;
+    openGenerationConfirm: (shotId: string, kind: "image" | "video" | "speech") => Promise<void>;
+    openAssetPortraitConfirm: (assetId: string) => Promise<void>;
+    confirmRunPendingPlan: () => Promise<void>;
+    recoverJob: (jobId: string, remoteTaskId?: string) => Promise<void>;
 
-  openGenerationConfirm: (shotId: string, kind: "image" | "video" | "speech") => Promise<void>;
-  openAssetPortraitConfirm: (assetId: string) => Promise<void>;
-  confirmRunPendingPlan: () => Promise<void>;
-  recoverJob: (jobId: string, remoteTaskId?: string) => Promise<void>;
-
-  openBatchModal: (mode?: BatchGenerationMode) => Promise<void>;
-  closeBatchModal: () => void;
-  selectBatchMode: (mode: BatchGenerationMode) => Promise<void>;
-  startBatchRun: () => Promise<void>;
-  pauseBatchRun: () => Promise<void>;
-  pollBatchProgress: () => Promise<void>;
-}
+    openBatchModal: (mode?: BatchGenerationMode) => Promise<void>;
+    closeBatchModal: () => void;
+    selectBatchMode: (mode: BatchGenerationMode) => Promise<void>;
+    startBatchRun: () => Promise<void>;
+    pauseBatchRun: () => Promise<void>;
+    pollBatchProgress: () => Promise<void>;
+  };
 
 function showToast(message: string) {
   useStudioStore.getState().showToast(message, 3600);
+}
+
+async function flushEdits() {
+  await flushPendingSaves();
 }
 
 async function syncModelCenter() {
@@ -75,6 +75,13 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
     runningJob: false,
     directorLoading: false,
     directorProposal: null,
+    softTargetShotsPerScene: 16,
+    screenwriterOpen: false,
+    screenwriterProjectId: null,
+    screenwriterOutline: null,
+    liveReviewReport: null,
+    actionPolishLoadingShotId: null,
+    actionPolishProposal: null,
     lastUndoToken: null,
     oauthBusyId: null,
     testingProviderId: null,
@@ -84,15 +91,15 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
     pendingBatchPlan: null,
     batchProgress: null,
 
+    ...createStoryPipelineActions<AiGenerationStore>(client, set, get),
+
     setJobDrawerOpen(open) {
       set({ jobDrawerOpen: open });
       if (open) void get().refreshJobs();
     },
+
     closePendingPlan() {
       set({ pendingPlan: null });
-    },
-    closeDirectorProposal() {
-      set({ directorProposal: null });
     },
 
     async refreshJobs() {
@@ -100,17 +107,6 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
       if (!ws) return;
       const jobs = await client.listProjectJobs(ws.project.id);
       set({ jobs });
-    },
-
-    async syncDirectorUndoState() {
-      const { workspace, activeEpisodeId } = useStudioStore.getState();
-      const epId = activeEpisodeId ?? workspace?.episodes[0]?.id;
-      if (!workspace || !epId) {
-        set({ lastUndoToken: null });
-        return;
-      }
-      const res = await client.getDirectorUndoState({ projectId: workspace.project.id, episodeId: epId });
-      set({ lastUndoToken: res.undoToken });
     },
 
     async startOAuthLogin(providerId) {
@@ -158,52 +154,8 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
       }
     },
 
-    async proposeDirector() {
-      const { workspace, activeEpisodeId } = useStudioStore.getState();
-      const epId = activeEpisodeId ?? workspace?.episodes[0]?.id;
-      if (!workspace || !epId) return;
-      set({ directorLoading: true });
-      try {
-        const res = await client.proposeDirectorSplit({ projectId: workspace.project.id, episodeId: epId });
-        if (res.ok && res.proposal) set({ directorProposal: res.proposal });
-        showToast(res.message);
-      } finally {
-        set({ directorLoading: false });
-      }
-    },
-
-    async applyDirector() {
-      const { workspace, activeEpisodeId } = useStudioStore.getState();
-      const epId = activeEpisodeId ?? workspace?.episodes[0]?.id;
-      const proposal = get().directorProposal;
-      if (!workspace || !epId || !proposal) return;
-      const res = await client.applyDirectorProposal({
-        projectId: workspace.project.id,
-        episodeId: epId,
-        proposal,
-      });
-      if (res.ok && res.workspace) {
-        const firstShot =
-          res.workspace.shots.find((s) => s.episodeId === epId)?.id ?? res.workspace.shots[0]?.id ?? null;
-        useStudioStore.setState({ workspace: res.workspace, activeShotId: firstShot, saveState: "saved" });
-        set({ directorProposal: null, lastUndoToken: res.undoToken ?? null });
-      }
-      showToast(res.message);
-    },
-
-    async undoDirector() {
-      const { workspace } = useStudioStore.getState();
-      const token = get().lastUndoToken;
-      if (!workspace || !token) return;
-      const res = await client.undoDirectorApply({ projectId: workspace.project.id, undoToken: token });
-      if (res.ok && res.workspace) {
-        useStudioStore.setState({ workspace: res.workspace, saveState: "saved" });
-        set({ lastUndoToken: null });
-      }
-      showToast(res.message);
-    },
-
     async openGenerationConfirm(shotId, kind) {
+      await flushEdits();
       const ws = useStudioStore.getState().workspace;
       if (!ws) return;
       const plan = await client.prepareGenerationPlan({ projectId: ws.project.id, shotId, kind });
@@ -211,6 +163,7 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
     },
 
     async openAssetPortraitConfirm(assetId) {
+      await flushEdits();
       const ws = useStudioStore.getState().workspace;
       if (!ws) return;
       const plan = await client.prepareGenerationPlan({
@@ -253,6 +206,9 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
     },
 
     async openBatchModal(mode = "image") {
+      if (!get().batchProgress?.running) {
+        set({ batchProgress: null });
+      }
       set({ batchModalOpen: true, batchMode: mode });
       await get().selectBatchMode(mode);
       await get().pollBatchProgress();
@@ -263,8 +219,12 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
     },
 
     async selectBatchMode(mode) {
+      await flushEdits();
       const { workspace, activeEpisodeId } = useStudioStore.getState();
       const epId = activeEpisodeId ?? workspace?.episodes[0]?.id;
+      if (!get().batchProgress?.running) {
+        set({ batchProgress: null });
+      }
       set({ batchMode: mode });
       if (!workspace || !epId) return;
       const plan = await client.prepareBatchPlan({ projectId: workspace.project.id, episodeId: epId, mode });
@@ -296,7 +256,7 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
       if (!ws) return;
       const prevRunning = get().batchProgress?.running ?? false;
       const snap = await client.getBatchProgress(ws.project.id);
-      set({ batchProgress: snap });
+      set({ batchProgress: snap && (snap.running || prevRunning) ? snap : null });
       if (snap && (snap.running || prevRunning)) {
         const freshWs = await client.openProject(ws.project.id);
         useStudioStore.setState({ workspace: freshWs, saveState: "saved" });

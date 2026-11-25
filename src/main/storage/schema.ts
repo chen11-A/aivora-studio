@@ -65,7 +65,13 @@ CREATE TABLE IF NOT EXISTS shots (
   negative_prompt TEXT NOT NULL DEFAULT '',
   dialogue TEXT NOT NULL DEFAULT '',
   speaker TEXT NOT NULL DEFAULT '',
+  speaker_asset_id TEXT,
+  speaker_status TEXT NOT NULL DEFAULT 'none',
   subtitle TEXT NOT NULL DEFAULT '',
+  source_span_json TEXT,
+  key_beat INTEGER NOT NULL DEFAULT 0,
+  key_beat_reason TEXT NOT NULL DEFAULT '',
+  video_plan_mode TEXT NOT NULL DEFAULT 'paid_video',
   character_asset_ids_json TEXT NOT NULL DEFAULT '[]',
   selected_image_take_id TEXT,
   selected_video_take_id TEXT,
@@ -165,12 +171,46 @@ export function initProjectSchema(db: SqliteDriver): void {
   if (!shotCols.has("trim_out_sec")) {
     db.exec(`ALTER TABLE shots ADD COLUMN trim_out_sec REAL NOT NULL DEFAULT 0`);
   }
+  if (!shotCols.has("speaker_asset_id")) {
+    db.exec(`ALTER TABLE shots ADD COLUMN speaker_asset_id TEXT`);
+  }
+  if (!shotCols.has("speaker_status")) {
+    db.exec(`ALTER TABLE shots ADD COLUMN speaker_status TEXT NOT NULL DEFAULT 'none'`);
+  }
+  if (!shotCols.has("source_span_json")) {
+    db.exec(`ALTER TABLE shots ADD COLUMN source_span_json TEXT`);
+  }
+  if (!shotCols.has("key_beat")) {
+    db.exec(`ALTER TABLE shots ADD COLUMN key_beat INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!shotCols.has("key_beat_reason")) {
+    db.exec(`ALTER TABLE shots ADD COLUMN key_beat_reason TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!shotCols.has("video_plan_mode")) {
+    db.exec(`ALTER TABLE shots ADD COLUMN video_plan_mode TEXT NOT NULL DEFAULT 'paid_video'`);
+  }
   const assetCols = new Set(
     db.all<{ name: string }>(`PRAGMA table_info(assets)`).map((c) => c.name),
   );
   if (!assetCols.has("candidate_paths_json")) {
     db.exec(`ALTER TABLE assets ADD COLUMN candidate_paths_json TEXT NOT NULL DEFAULT '[]'`);
   }
+  // Idempotent v1.7 -> v1.8 backfill so migrated projects accurately surface unconfirmed/confirmed speakers
+  db.exec(`
+    UPDATE shots
+    SET speaker_status = 'unconfirmed'
+    WHERE TRIM(dialogue) != '' AND TRIM(speaker) = '' AND speaker_status = 'none';
+    UPDATE shots
+    SET speaker_status = 'confirmed'
+    WHERE TRIM(speaker) != '' AND speaker_status = 'none';
+    UPDATE shots
+    SET speaker_asset_id = (
+      SELECT id FROM assets
+      WHERE assets.kind = 'character' AND TRIM(assets.name) = TRIM(shots.speaker)
+      LIMIT 1
+    )
+    WHERE speaker_asset_id IS NULL AND TRIM(speaker) != '';
+  `);
 }
 
 export function initGlobalSchema(db: SqliteDriver): void {

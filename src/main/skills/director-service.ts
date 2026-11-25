@@ -1,32 +1,42 @@
-import { randomUUID } from "node:crypto";
 import type { ProjectWorkspace } from "../../shared/types/domain";
-import { DirectorProposalSchema, type DirectorProposal } from "../../shared/types/jobs";
+import type { DirectorProposal, DirectorProposedAsset, DirectorProposedScene } from "../../shared/types/jobs";
+import type {
+  ActionPolishProposal,
+  ScreenwriterOutlineProposal,
+  ScreenwriterSceneDraft,
+  ScriptReviewReport,
+} from "../../shared/types/story-pipeline";
 import type { OAuthManager } from "../auth/auth-manager";
 import { completeChatGptResponsesText } from "../auth/chatgpt-oauth";
 import { GROK_API } from "../auth/grok-oauth";
 import { runGeminiDirectorChat } from "../providers/gemini-official-adapter";
 import { runOpenAiChatCompletion } from "../providers/openai-compat-adapter";
 import type { GlobalConfigStore } from "../storage/global-store";
+import { getLatestDirectorUndoToken } from "../storage/project-maintenance";
 import type { ProjectStore } from "../storage/project-store";
 import {
-  matchProposedShotsToExisting,
-  resolveMergedSubtitle,
-  type FlatProposedShot,
-} from "../../shared/shot-matcher";
+  ACTION_POLISH_SYSTEM_PROMPT,
+  buildActionPolishUserPrompt,
+  buildOfflineActionPolish,
+  parseActionPolishJson,
+} from "./action-polish";
 import {
-  deleteDirectorUndoSnapshot,
-  getLatestDirectorUndoToken,
-  loadDirectorUndoSnapshot,
-  saveDirectorUndoSnapshot,
-  type PersistedDirectorUndoSnapshot,
-} from "../storage/project-maintenance";
-import { finalizeDirectorProposal } from "./director-grounding";
+  applyDirectorProposalToDb,
+  applyScreenwriterOutlineToDb,
+  undoDirectorApplyInDb,
+} from "./director-apply";
+import { finalizeDirectorProposal, MAX_SHOTS_PER_SCENE } from "./director-grounding";
 import {
+  alignShotSourceSpan,
   buildDirectorUserPrompt,
   buildOfflineDirectorProposal,
+  DIRECTOR_SKILL_VERSION,
   DIRECTOR_SYSTEM_PROMPT,
   parseDirectorProposalJson,
+  sanitizeDirectorProposal,
 } from "./director-prompt";
+import { buildScreenwriterOutline, splitNovelParagraphs } from "./screenwriter-outline";
+import { reviewProposalAgainstScript, reviewWorkspaceEpisode } from "./script-reviewer";
 
 export class DirectorService {
   constructor(
@@ -42,105 +52,349 @@ export class DirectorService {
     );
   }
 
+  /**
+   * Step 1 (`screenwriter-outline@1.0.0`): Pre-splits a long novel or episode text
+   * into ordered episodes & scenes with exact paragraph spans and canonical cast/scene bible.
+   */
+  proposeScreenwriterOutline(input: {
+    projectId: string;
+    rawText: string;
+    defaultTitle?: string;
+  }): { ok: boolean; outline?: ScreenwriterOutlineProposal; message: string } {
+    const ws = this.projects.openProject(input.projectId);
+    if (!input.rawText.trim()) {
+      return { ok: false, message: "请先粘贴小说原文或剧本正文" };
+    }
+    const outline = buildScreenwriterOutline({
+      rawText: input.rawText,
+      defaultTitle: input.defaultTitle,
+      existingAssets: ws.assets,
+    });
+    return {
+      ok: true,
+      outline,
+      message: `编剧预分场已就绪：${outline.skillTrace.outputSummary}`,
+    };
+  }
+
+  applyScreenwriterOutline(input: {
+    projectId: string;
+    outline: ScreenwriterOutlineProposal;
+    replaceEmptyFirstEpisode?: boolean;
+    replaceEpisodeId?: string | null;
+  }): { ok: boolean; workspace?: ProjectWorkspace; createdEpisodeIds: string[]; message: string } {
+    return applyScreenwriterOutlineToDb(this.projects, input);
+  }
+
+  private async runConfiguredTextModel(
+    systemPrompt: string,
+    userPrompt: string,
+  ): Promise<{ ok: true; rawText: string; providerSummary: string } | { ok: false; message: string }> {
+    const snap = this.globalConfig.getSnapshot();
+    const binding = snap.routing.script;
+    if (!binding) {
+      return { ok: false, message: "未配置剧本模型" };
+    }
+    if (binding.source === "oauth") {
+      const token = await this.oauth.getValidAccessToken(
+        binding.sourceId as "chatgpt-web" | "grok-web",
+      );
+      if (binding.sourceId === "chatgpt-web") {
+        const rawText = await completeChatGptResponsesText(
+          {
+            model: binding.modelId,
+            text: userPrompt,
+            instructions: systemPrompt,
+            accessToken: token,
+          },
+          this.fetcher,
+        );
+        return { ok: true, rawText, providerSummary: `ChatGPT 网页账号 · ${binding.modelId}` };
+      }
+      const rawText = await runOpenAiChatCompletion(
+        {
+          baseUrl: GROK_API,
+          apiKey: token,
+          modelId: binding.modelId,
+          systemPrompt,
+          userPrompt,
+        },
+        this.fetcher,
+      );
+      return { ok: true, rawText, providerSummary: `Grok (xAI) · ${binding.modelId}` };
+    }
+
+    const creds = this.globalConfig.getProviderCredentials(binding.sourceId);
+    if (!creds || !creds.apiKey) {
+      return { ok: false, message: "所选剧本厂家缺少可用 API Key，请在模型中心补全" };
+    }
+    const rawText =
+      creds.view.protocol === "gemini-official"
+        ? await runGeminiDirectorChat(
+            {
+              baseUrl: creds.view.baseUrl,
+              apiKey: creds.apiKey,
+              modelId: binding.modelId,
+              systemPrompt,
+              userPrompt,
+            },
+            this.fetcher,
+          )
+        : await runOpenAiChatCompletion(
+            {
+              baseUrl: creds.view.baseUrl,
+              apiKey: creds.apiKey,
+              modelId: binding.modelId,
+              systemPrompt,
+              userPrompt,
+            },
+            this.fetcher,
+          );
+    return { ok: true, rawText, providerSummary: `${creds.view.name} · ${binding.modelId}` };
+  }
+
+  /**
+   * 3-Step Lightweight Chain (`分集编剧 → 导演分镜 → 原文审片`):
+   * Runs per-scene generation for long episodes so 40-shot single-scene failures never wipe out a chapter.
+   */
   async proposeSplit(input: {
     projectId: string;
     episodeId: string;
+    softTargetShotsPerScene?: number;
+    sceneDrafts?: ScreenwriterSceneDraft[];
   }): Promise<{ ok: boolean; proposal?: DirectorProposal; message: string }> {
     const ws = this.projects.openProject(input.projectId);
     const ep = ws.episodes.find((e) => e.id === input.episodeId);
     if (!ep) return { ok: false, message: "找不到指定分集" };
     if (!ep.scriptText.trim()) return { ok: false, message: "当前分集剧本为空，请先写剧本或粘贴小说" };
 
+    const softTarget = Math.max(4, Math.min(40, input.softTargetShotsPerScene ?? MAX_SHOTS_PER_SCENE));
+    const paragraphs = splitNovelParagraphs(ep.scriptText);
+    const savedEpisodeScenes = ws.scenes
+      .filter((sc) => sc.episodeId === ep.id)
+      .sort((a, b) => a.orderIndex - b.orderIndex);
+    const hasValidSavedPartition =
+      savedEpisodeScenes.length > 0 &&
+      paragraphs.length > 0 &&
+      savedEpisodeScenes[0]!.paragraphStart === 0 &&
+      savedEpisodeScenes[savedEpisodeScenes.length - 1]!.paragraphEnd === paragraphs.length - 1 &&
+      savedEpisodeScenes.every((sc, idx) =>
+        sc.paragraphEnd >= sc.paragraphStart &&
+        (idx === 0 || sc.paragraphStart === savedEpisodeScenes[idx - 1]!.paragraphEnd + 1),
+      );
+    const persistedSceneDrafts: ScreenwriterSceneDraft[] | undefined =
+      input.sceneDrafts && input.sceneDrafts.length > 0
+        ? input.sceneDrafts
+        : hasValidSavedPartition
+          ? savedEpisodeScenes.map((sc) => ({
+              id: sc.id,
+              title: sc.title,
+              locationName:
+                ws.assets.find((a) => a.id === sc.locationAssetId)?.name ?? "",
+              summary: sc.summary,
+              paragraphStart: sc.paragraphStart,
+              paragraphEnd: sc.paragraphEnd,
+              charCount: paragraphs
+                .slice(sc.paragraphStart, sc.paragraphEnd + 1)
+                .reduce((acc, p) => acc + p.replace(/\s+/g, "").length, 0),
+              estimatedShots: Math.max(1, sc.paragraphEnd - sc.paragraphStart + 1),
+              warnings: [],
+            }))
+          : undefined;
+
     const snap = this.globalConfig.getSnapshot();
     const binding = snap.routing.script;
-    const knownCharacters = ws.assets
-      .filter((a) => a.kind === "character" || a.kind === "scene")
-      .map((a) => a.name);
-    const userPrompt = buildDirectorUserPrompt({
-      episodeTitle: ep.title,
-      scriptText: ep.scriptText,
-      aspectRatio: ws.project.aspectRatio,
-      knownCharacters,
-    });
 
     if (!binding) {
-      const proposal = buildOfflineDirectorProposal(ep.title, ep.scriptText);
+      const proposal = buildOfflineDirectorProposal(ep.title, ep.scriptText, {
+        existingAssets: ws.assets,
+        softTargetShotsPerScene: softTarget,
+        sceneDrafts: persistedSceneDrafts,
+      });
       return {
         ok: true,
         proposal,
-        message: "已生成离线结构拆镜提案（在模型中心配置「剧本拆镜」模型后将调用真实 AI 导演）",
+        message: "已生成三步离线拆镜提案（编剧分场 → 导演分镜 → 原文审片；配置剧本模型后将调用真实 AI）",
       };
     }
 
-    try {
-      let rawText: string;
-      let providerSummary: string;
+    const outline = buildScreenwriterOutline({
+      rawText: ep.scriptText,
+      defaultTitle: ep.title,
+      existingAssets: ws.assets,
+    });
+    const sceneDrafts =
+      persistedSceneDrafts && persistedSceneDrafts.length > 0
+        ? persistedSceneDrafts
+        : outline.episodes.flatMap((e) => e.scenes);
 
-      if (binding.source === "oauth") {
-        const token = await this.oauth.getValidAccessToken(
-          binding.sourceId as "chatgpt-web" | "grok-web",
-        );
-        if (binding.sourceId === "chatgpt-web") {
-          rawText = await completeChatGptResponsesText(
-            {
-              model: binding.modelId,
-              text: userPrompt,
-              instructions: DIRECTOR_SYSTEM_PROMPT,
-              accessToken: token,
-            },
-            this.fetcher,
-          );
-          providerSummary = `ChatGPT 网页账号 · ${binding.modelId}`;
-        } else {
-          rawText = await runOpenAiChatCompletion(
-            {
-              baseUrl: GROK_API,
-              apiKey: token,
-              modelId: binding.modelId,
-              systemPrompt: DIRECTOR_SYSTEM_PROMPT,
-              userPrompt,
-            },
-            this.fetcher,
-          );
-          providerSummary = `Grok (xAI) · ${binding.modelId}`;
+    const knownCharacters = [
+      ...new Set([
+        ...ws.assets.filter((a) => a.kind === "character").map((a) => a.name),
+        ...outline.assets.filter((a) => a.kind === "character").map((a) => a.name),
+      ]),
+    ];
+    const knownScenes = [
+      ...new Set([
+        ...ws.assets.filter((a) => a.kind === "scene").map((a) => a.name),
+        ...outline.assets.filter((a) => a.kind === "scene").map((a) => a.name),
+      ]),
+    ];
+
+    const hasCustomOrSavedDrafts = Boolean(persistedSceneDrafts && persistedSceneDrafts.length > 0);
+    const effectiveScreenwriterTrace = hasCustomOrSavedDrafts
+      ? {
+          ...outline.skillTrace,
+          outputSummary: `1 集 · ${sceneDrafts.length} 场（沿用已确认场次边界）`,
         }
+      : outline.skillTrace;
+
+    try {
+      const shouldChunkByScene =
+        sceneDrafts.length > 1 && (hasCustomOrSavedDrafts || ep.scriptText.length > 1600);
+      let providerSummary = "";
+      const collectedScenes: DirectorProposedScene[] = [];
+      const collectedAssets: DirectorProposedAsset[] = outline.assets.map((a) => ({
+        kind: a.kind,
+        name: a.name,
+        description: a.description,
+      }));
+
+      if (!shouldChunkByScene) {
+        const userPrompt = buildDirectorUserPrompt({
+          episodeTitle: ep.title,
+          scriptText: ep.scriptText,
+          aspectRatio: ws.project.aspectRatio,
+          knownCharacters,
+          knownScenes,
+          sceneRangeLabel: `${ep.title}（第 1–${paragraphs.length} 段）`,
+          softTargetShotsPerScene: softTarget,
+        });
+        const aiRes = await this.runConfiguredTextModel(DIRECTOR_SYSTEM_PROMPT, userPrompt);
+        if (!aiRes.ok) return { ok: false, message: aiRes.message };
+        providerSummary = aiRes.providerSummary;
+        const parsed = parseDirectorProposalJson(aiRes.rawText, providerSummary);
+        for (const sc of parsed.scenes) {
+          collectedScenes.push({
+            ...sc,
+            shots: sc.shots.map((sh) => ({
+              ...sh,
+              sourceSpan: alignShotSourceSpan(sh, paragraphs, 0, Math.max(0, paragraphs.length - 1)),
+            })),
+          });
+        }
+        collectedAssets.push(...parsed.assets);
       } else {
-        const creds = this.globalConfig.getProviderCredentials(binding.sourceId);
-        if (!creds || !creds.apiKey) {
-          return { ok: false, message: "所选剧本厂家缺少可用 API Key，请在模型中心补全" };
+        for (let i = 0; i < sceneDrafts.length; i++) {
+          const scDraft = sceneDrafts[i]!;
+          const chunkParas = paragraphs.slice(scDraft.paragraphStart, scDraft.paragraphEnd + 1);
+          const hasBody = chunkParas.some(
+            (p) => !/^第[零一二三四五六七八九十百千万0-9]+[章回卷节篇场幕]/.test(p),
+          );
+          if (!hasBody) continue;
+          const sliceText = chunkParas.join("\n");
+          const rangeLabel = `第 ${i + 1}/${sceneDrafts.length} 场「${scDraft.title}」（原文第 ${scDraft.paragraphStart + 1}–${scDraft.paragraphEnd + 1} 段）`;
+          try {
+            const userPrompt = buildDirectorUserPrompt({
+              episodeTitle: ep.title,
+              scriptText: sliceText,
+              aspectRatio: ws.project.aspectRatio,
+              knownCharacters,
+              knownScenes,
+              sceneRangeLabel: rangeLabel,
+              softTargetShotsPerScene: softTarget,
+            });
+            const aiRes = await this.runConfiguredTextModel(DIRECTOR_SYSTEM_PROMPT, userPrompt);
+            if (!aiRes.ok) return { ok: false, message: aiRes.message };
+            providerSummary = aiRes.providerSummary;
+            const parsed = parseDirectorProposalJson(aiRes.rawText, providerSummary);
+            // Flatten multi-scene AI output back into this single disjoint scDraft interval to preserve exact partition invariants
+            const mergedShots = parsed.scenes.flatMap((sc) =>
+              sc.shots.map((sh) => ({
+                ...sh,
+                sourceSpan: alignShotSourceSpan(
+                  sh,
+                  paragraphs,
+                  scDraft.paragraphStart,
+                  scDraft.paragraphEnd,
+                ),
+              })),
+            );
+            if (mergedShots.length > 0) {
+              collectedScenes.push({
+                title: parsed.scenes[0]?.title || scDraft.title,
+                locationName: parsed.scenes[0]?.locationName ?? scDraft.locationName,
+                summary: parsed.scenes[0]?.summary || scDraft.summary,
+                paragraphStart: scDraft.paragraphStart,
+                paragraphEnd: scDraft.paragraphEnd,
+                shots: mergedShots,
+              });
+            }
+            collectedAssets.push(...parsed.assets);
+          } catch (scErr) {
+            const detail = scErr instanceof Error ? scErr.message : "返回格式异常";
+            return {
+              ok: false,
+              message: `逐场拆镜在 ${rangeLabel} 失败（${detail}）。建议在「长小说预分场」中将该场拆小后重试，不影响其他场次原文。`,
+            };
+          }
         }
-        rawText =
-          creds.view.protocol === "gemini-official"
-            ? await runGeminiDirectorChat(
-                {
-                  baseUrl: creds.view.baseUrl,
-                  apiKey: creds.apiKey,
-                  modelId: binding.modelId,
-                  systemPrompt: DIRECTOR_SYSTEM_PROMPT,
-                  userPrompt,
-                },
-                this.fetcher,
-              )
-            : await runOpenAiChatCompletion(
-                {
-                  baseUrl: creds.view.baseUrl,
-                  apiKey: creds.apiKey,
-                  modelId: binding.modelId,
-                  systemPrompt: DIRECTOR_SYSTEM_PROMPT,
-                  userPrompt,
-                },
-                this.fetcher,
-              );
-        providerSummary = `${creds.view.name} · ${binding.modelId}`;
       }
 
-      const rawProposal = parseDirectorProposalJson(rawText, providerSummary);
-      const proposal = finalizeDirectorProposal(rawProposal, ep.scriptText);
-      const shotCount = proposal.scenes.reduce((n, s) => n + s.shots.length, 0);
+      if (collectedScenes.length === 0) {
+        return {
+          ok: false,
+          message: "当前分集仅有章节/场次标题，缺少正文段落，请补充正文后再执行拆镜。",
+        };
+      }
+
+      // Deduplicate assets by kind+name
+      const dedupAssets: DirectorProposedAsset[] = [];
+      const seenAsset = new Set<string>();
+      for (const a of collectedAssets) {
+        const key = `${a.kind}:${a.name.trim()}`;
+        if (!a.name.trim() || seenAsset.has(key)) continue;
+        seenAsset.add(key);
+        dedupAssets.push(a);
+      }
+
+      const rawProposal: DirectorProposal = {
+        sourceMode: "ai",
+        providerSummary,
+        softTargetShotsPerScene: softTarget,
+        assets: dedupAssets,
+        scenes: collectedScenes,
+      };
+      const sanitized = sanitizeDirectorProposal(rawProposal, ep.scriptText, ws.assets);
+      const finalized = finalizeDirectorProposal(sanitized, ep.scriptText, softTarget);
+      const allShots = finalized.scenes.flatMap((s) => s.shots);
+      const paidCount = allShots.filter((s) => (s.videoPlanMode ?? "paid_video") === "paid_video").length;
+      const withTraces: DirectorProposal = {
+        ...finalized,
+        screenwriterTrace: effectiveScreenwriterTrace,
+        skillTrace: {
+          skillId: "director-split",
+          skillName: "导演分镜",
+          skillVersion: DIRECTOR_SKILL_VERSION,
+          sourceMode: "ai",
+          providerSummary,
+          inputRangeLabel: `${ep.title} · ${finalized.scenes.length} 场（共 ${paragraphs.length} 段）`,
+          outputSummary: `剪辑 ${allShots.length} 镜（需付费视频 ${paidCount} 镜 · 静帧推拉 ${allShots.length - paidCount} 镜 · 软目标 ${softTarget} 镜/场）`,
+          warnings: finalized.grounding?.warnings ?? [],
+          executedAt: new Date().toISOString(),
+        },
+      };
+      const reviewReport = reviewProposalAgainstScript({
+        proposal: withTraces,
+        scriptText: ep.scriptText,
+        existingAssets: ws.assets,
+        episodeTitle: ep.title,
+      });
+      const proposal: DirectorProposal = { ...withTraces, reviewReport };
       return {
         ok: true,
         proposal,
-        message: `导演拆镜提案已就绪（${proposal.scenes.length} 场 · ${shotCount} 镜 · ${proposal.grounding?.summary ?? ""}）`,
+        message: `三步提案已就绪（${proposal.scenes.length} 场 · ${allShots.length} 镜 · ${reviewReport.summary}）`,
       };
     } catch (err) {
       return {
@@ -155,301 +409,63 @@ export class DirectorService {
     episodeId: string;
     proposal: DirectorProposal;
   }): { ok: boolean; workspace?: ProjectWorkspace; undoToken?: string; message: string } {
-    const valid = DirectorProposalSchema.parse(input.proposal);
-    const before = this.projects.openProject(input.projectId);
-    const undoToken = `undo_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-    const prevShots = before.shots
-      .filter((s) => s.episodeId === input.episodeId)
-      .sort((a, b) => a.orderIndex - b.orderIndex);
-    const prevShotIds = new Set(prevShots.map((s) => s.id));
-    const createdAssetIds: string[] = [];
-
-    const now = new Date().toISOString();
-    const assetNameToId = new Map<string, string>();
-    for (const a of before.assets) {
-      if (a.kind === "character" || a.kind === "scene" || a.kind === "prop") {
-        assetNameToId.set(a.name.trim(), a.id);
-      }
-    }
-
-    // Collect proposed assets + any character names referenced on shots
-    const candidateAssets = [...valid.assets];
-    for (const sc of valid.scenes) {
-      for (const sh of sc.shots) {
-        for (const cName of sh.characters) {
-          const clean = cName.trim();
-          if (clean && !candidateAssets.some((a) => a.name.trim() === clean)) {
-            candidateAssets.push({ kind: "character", name: clean, description: "" });
-          }
-        }
-      }
-    }
-
-    for (const item of candidateAssets) {
-      const cleanName = item.name.trim();
-      if (!cleanName || assetNameToId.has(cleanName)) continue;
-      const created = this.projects.createAsset({
-        projectId: input.projectId,
-        kind: item.kind,
-        name: cleanName,
-        description: item.description,
-      });
-      assetNameToId.set(cleanName, created.id);
-      createdAssetIds.push(created.id);
-    }
-
-    const undoSnapshot: PersistedDirectorUndoSnapshot = {
-      projectId: input.projectId,
-      episodeId: input.episodeId,
-      createdAssetIds,
-      scenes: before.scenes.filter((s) => s.episodeId === input.episodeId),
-      shots: prevShots,
-      takes: before.takes.filter((t) => prevShotIds.has(t.shotId)),
-    };
-    this.projects.withProjectDb(input.projectId, (db) => {
-      saveDirectorUndoSnapshot(db, undoToken, undoSnapshot);
-    });
-
-    let preservedShotsCount = 0;
-
-    // Content-anchored shot alignment (dialogue / coreTitle / visualPrompt / sourceExcerpt / speaker)
-    // Ensures inserting a shot before Shot 1, deleting a middle shot, or reordering shots never
-    // shifts an existing shot's selected video take or hand-edited subtitle onto the wrong shot.
-    const flatProposed: FlatProposedShot[] = [];
-    valid.scenes.forEach((sc, scIdx) => {
-      for (const sh of sc.shots) {
-        flatProposed.push({ flatIndex: flatProposed.length, sceneIndex: scIdx, shot: sh });
-      }
-    });
-    const matchedByFlatIndex = matchProposedShotsToExisting(flatProposed, prevShots);
-
-    this.projects.withProjectDb(input.projectId, (db) => {
-      db.transaction(() => {
-        const prevScenes = before.scenes
-          .filter((s) => s.episodeId === input.episodeId)
-          .sort((a, b) => a.orderIndex - b.orderIndex);
-        const keptSceneIds = new Set<string>();
-        const keptShotIds = new Set<string>();
-
-        let globalShotIdx = 0;
-        valid.scenes.forEach((sc, scIdx) => {
-          const existingScene = prevScenes[scIdx];
-          const scId = existingScene?.id ?? `sc_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
-          keptSceneIds.add(scId);
-
-          if (existingScene) {
-            db.run(
-              `UPDATE scenes SET order_index = ?, title = ?, summary = ? WHERE id = ?`,
-              scIdx,
-              sc.title,
-              sc.summary,
-              scId,
-            );
-          } else {
-            db.run(
-              `INSERT INTO scenes (id, episode_id, order_index, title, summary) VALUES (?, ?, ?, ?, ?)`,
-              scId,
-              input.episodeId,
-              scIdx,
-              sc.title,
-              sc.summary,
-            );
-          }
-
-          for (const sh of sc.shots) {
-            const idx = globalShotIdx++;
-            const existingShot = matchedByFlatIndex.get(idx);
-            const charIds = sh.characters
-              .map((name) => assetNameToId.get(name.trim()))
-              .filter((id): id is string => Boolean(id));
-
-            if (existingShot) {
-              // Content-matched shot: preserve shot ID, all existing takes, selected takes, trim window, and hand-edited subtitle!
-              keptShotIds.add(existingShot.id);
-              preservedShotsCount += 1;
-              const mergedSubtitle = resolveMergedSubtitle(sh, existingShot);
-              const hasActiveTrim = existingShot.trimOutSec > existingShot.trimInSec + 0.2;
-              const mergedDurationSec = hasActiveTrim ? existingShot.durationSec : sh.durationSec;
-              const mergedCharIds =
-                charIds.length > 0 ? charIds : existingShot.characterAssetIds;
-              db.run(
-                `UPDATE shots SET
-                   scene_id = ?, order_index = ?, title = ?, scale = ?, camera_move = ?,
-                   duration_sec = ?, visual_prompt = ?, dialogue = ?, speaker = ?,
-                   subtitle = ?, character_asset_ids_json = ?, updated_at = ?
-                 WHERE id = ?`,
-                scId,
-                idx,
-                sh.title,
-                sh.scale,
-                sh.cameraMove,
-                mergedDurationSec,
-                sh.visualPrompt,
-                sh.dialogue,
-                sh.speaker,
-                mergedSubtitle,
-                JSON.stringify(mergedCharIds),
-                now,
-                existingShot.id,
-              );
-            } else {
-              const shId = `sh_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
-              keptShotIds.add(shId);
-              db.run(
-                `INSERT INTO shots (
-                   id, scene_id, episode_id, order_index, title, scale, camera_move, duration_sec,
-                   visual_prompt, negative_prompt, dialogue, speaker, subtitle, character_asset_ids_json, updated_at
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)`,
-                shId,
-                scId,
-                input.episodeId,
-                idx,
-                sh.title,
-                sh.scale,
-                sh.cameraMove,
-                sh.durationSec,
-                sh.visualPrompt,
-                sh.dialogue,
-                sh.speaker,
-                sh.subtitle || sh.dialogue,
-                JSON.stringify(charIds),
-                now,
-              );
-            }
-          }
-        });
-
-        for (const oldShot of prevShots) {
-          if (!keptShotIds.has(oldShot.id)) {
-            db.run(`DELETE FROM shots WHERE id = ?`, oldShot.id);
-          }
-        }
-        for (const oldScene of prevScenes) {
-          if (!keptSceneIds.has(oldScene.id)) {
-            db.run(`DELETE FROM scenes WHERE id = ?`, oldScene.id);
-          }
-        }
-
-        db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
-      });
-    });
-
-    const fresh = this.projects.openProject(input.projectId);
-    const assetNote = createdAssetIds.length > 0 ? `，自动建档 ${createdAssetIds.length} 个新角色/场景` : "";
-    const preserveNote =
-      preservedShotsCount > 0 ? `，按内容对齐无损保留 ${preservedShotsCount} 镜已有版本与手修字幕` : "";
-    return {
-      ok: true,
-      workspace: fresh,
-      undoToken,
-      message: `已增量合入导演拆镜提案${preserveNote}${assetNote}（随时可一键撤销）`,
-    };
+    return applyDirectorProposalToDb(this.projects, input);
   }
 
   undoApply(input: {
     projectId: string;
     undoToken: string;
   }): { ok: boolean; workspace?: ProjectWorkspace; message: string } {
-    const snap = this.projects.withProjectDb(input.projectId, (db) =>
-      loadDirectorUndoSnapshot(db, input.undoToken),
-    );
-    if (!snap || snap.projectId !== input.projectId) {
-      return { ok: false, message: "撤销快照已失效或不存在" };
-    }
+    return undoDirectorApplyInDb(this.projects, input);
+  }
 
-    const postApplyTakes = this.projects.withProjectDb(input.projectId, (db) => {
-      const snapTakeIds = new Set(snap.takes.map((t) => t.id));
-      const currentTakes = db.all<{ id: string; shot_id: string; title: string }>(
-        `SELECT t.id, t.shot_id, s.title
-         FROM takes t
-         JOIN shots s ON t.shot_id = s.id
-         WHERE s.episode_id = ?`,
-        snap.episodeId,
-      );
-      return currentTakes.filter((t) => !snapTakeIds.has(t.id));
-    });
-    if (postApplyTakes.length > 0) {
-      const affectedTitles = [...new Set(postApplyTakes.map((t) => t.title))].slice(0, 3).join("、");
-      const suffix = new Set(postApplyTakes.map((t) => t.shot_id)).size > 3 ? "等" : "";
-      return {
-        ok: false,
-        message: `检测到拆镜后已有镜头新增了版本（${affectedTitles}${suffix}，共 ${postApplyTakes.length} 个新版本），为防止丢失新素材已阻止整集回滚；请直接保留当前版本或在分镜页微调镜头。`,
-      };
-    }
-
-    const now = new Date().toISOString();
-    this.projects.withProjectDb(input.projectId, (db) => {
-      db.transaction(() => {
-        const otherEpisodeShots = db.all<{ character_asset_ids_json: string | null }>(
-          `SELECT character_asset_ids_json FROM shots WHERE episode_id != ?`,
-          snap.episodeId,
-        );
-        const referencedElsewhere = new Set<string>();
-        for (const row of otherEpisodeShots) {
-          try {
-            const parsed = JSON.parse(String(row.character_asset_ids_json ?? "[]")) as unknown;
-            if (Array.isArray(parsed)) {
-              for (const id of parsed) {
-                if (typeof id === "string") referencedElsewhere.add(id);
-              }
-            }
-          } catch {
-            // ignore malformed JSON
-          }
-        }
-        for (const assetId of snap.createdAssetIds) {
-          if (referencedElsewhere.has(assetId)) continue;
-          const row = db.get<{ locked_ref: number; media_path: string | null }>(
-            `SELECT locked_ref, media_path FROM assets WHERE id = ?`,
-            assetId,
-          );
-          if (!row) continue;
-          const mediaPath = row.media_path ? String(row.media_path).toLowerCase() : "";
-          const hasCustomRaster = Boolean(mediaPath) && !mediaPath.endsWith(".svg");
-          if (Number(row.locked_ref) === 1 || hasCustomRaster) continue;
-          db.run(`DELETE FROM assets WHERE id = ?`, assetId);
-        }
-        db.run(`DELETE FROM shots WHERE episode_id = ?`, snap.episodeId);
-        db.run(`DELETE FROM scenes WHERE episode_id = ?`, snap.episodeId);
-        for (const sc of snap.scenes) {
-          db.run(
-            `INSERT INTO scenes (id, episode_id, order_index, title, location_asset_id, summary, paragraph_start, paragraph_end)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            sc.id, sc.episodeId, sc.orderIndex, sc.title, sc.locationAssetId,
-            sc.summary, sc.paragraphStart, sc.paragraphEnd,
-          );
-        }
-        for (const sh of snap.shots) {
-          db.run(
-            `INSERT INTO shots (
-               id, scene_id, episode_id, order_index, title, scale, camera_move, duration_sec,
-               trim_in_sec, trim_out_sec, visual_prompt, negative_prompt, dialogue, speaker, subtitle, character_asset_ids_json,
-               selected_image_take_id, selected_video_take_id, selected_speech_take_id, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            sh.id, sh.sceneId, sh.episodeId, sh.orderIndex, sh.title, sh.scale, sh.cameraMove,
-            sh.durationSec, sh.trimInSec ?? 0, sh.trimOutSec ?? 0, sh.visualPrompt, sh.negativePrompt,
-            sh.dialogue, sh.speaker, sh.subtitle, JSON.stringify(sh.characterAssetIds),
-            sh.selectedImageTakeId, sh.selectedVideoTakeId, sh.selectedSpeechTakeId, now,
-          );
-        }
-        for (const tk of snap.takes) {
-          db.run(
-            `INSERT INTO takes (
-               id, shot_id, kind, version_number, media_path, media_sha256,
-               prompt_snapshot, provider_info, is_selected, duration_sec, created_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            tk.id, tk.shotId, tk.kind, tk.versionNumber, tk.mediaPath, tk.mediaSha256,
-            tk.promptSnapshot, tk.providerInfo, tk.isSelected ? 1 : 0, tk.durationSec, tk.createdAt,
-          );
-        }
-        deleteDirectorUndoSnapshot(db, input.undoToken);
-        db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
+  reviewEpisode(input: {
+    projectId: string;
+    episodeId: string;
+    softTargetShotsPerScene?: number;
+  }): { ok: boolean; report?: ScriptReviewReport; message: string } {
+    try {
+      const ws = this.projects.openProject(input.projectId);
+      const report = reviewWorkspaceEpisode({
+        workspace: ws,
+        episodeId: input.episodeId,
+        softTargetShotsPerScene: input.softTargetShotsPerScene,
       });
-    });
-    return {
-      ok: true,
-      workspace: this.projects.openProject(input.projectId),
-      message: "已撤销本次导演拆镜，恢复原镜头表与历史版本",
-    };
+      return { ok: true, report, message: report.summary };
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : "原文审片失败" };
+    }
+  }
+
+  /**
+   * On-demand single-shot action refinement (proposal-only, never mutates shot without confirmation).
+   */
+  async proposeActionPolish(input: {
+    projectId: string;
+    shotId: string;
+  }): Promise<{ ok: boolean; proposal?: ActionPolishProposal; message: string }> {
+    const ws = this.projects.openProject(input.projectId);
+    const shot = ws.shots.find((s) => s.id === input.shotId);
+    if (!shot) return { ok: false, message: "镜头不存在" };
+
+    const snap = this.globalConfig.getSnapshot();
+    if (!snap.routing.script) {
+      const proposal = buildOfflineActionPolish(shot, ws.assets);
+      return { ok: true, proposal, message: "已生成动作三拍精修建议（确认后采纳）" };
+    }
+
+    try {
+      const userPrompt = buildActionPolishUserPrompt(shot, ws.assets);
+      const aiRes = await this.runConfiguredTextModel(ACTION_POLISH_SYSTEM_PROMPT, userPrompt);
+      if (!aiRes.ok) {
+        const fallback = buildOfflineActionPolish(shot, ws.assets);
+        return { ok: true, proposal: fallback, message: `${aiRes.message}，已切换本地动作精修建议` };
+      }
+      const proposal = parseActionPolishJson(aiRes.rawText, shot, aiRes.providerSummary);
+      return { ok: true, proposal, message: "已生成 AI 动作精修提案（确认后采纳）" };
+    } catch {
+      const fallback = buildOfflineActionPolish(shot, ws.assets);
+      return { ok: true, proposal: fallback, message: "AI 精修解析失败，已回退本地三拍动作建议" };
+    }
   }
 }

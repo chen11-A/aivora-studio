@@ -230,8 +230,19 @@ export function StoryboardStage() {
                       <div className="text-[11px] font-medium text-[var(--text-primary)] truncate">
                         {shot.title}
                       </div>
-                      <div className="text-[10px] text-[var(--text-muted)] truncate">
-                        {shot.scale} · {shot.cameraMove}
+                      <div className="text-[10px] text-[var(--text-muted)] truncate flex items-center gap-1">
+                        <span>
+                          {shot.scale} · {shot.cameraMove}
+                        </span>
+                        {shot.keyBeat && (
+                          <span className="text-[var(--accent-success-text)] font-medium">· 关键</span>
+                        )}
+                        {shot.videoPlanMode === "still_motion" && (
+                          <span className="opacity-80">· 静帧</span>
+                        )}
+                        {shot.speakerStatus === "unconfirmed" && (
+                          <span className="text-[var(--accent-amber-text)] font-medium">· 待定说话人</span>
+                        )}
                       </div>
                     </div>
                   </>

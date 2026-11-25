@@ -390,8 +390,28 @@ export function registerIpcHandlers(deps: {
     };
   });
 
-  handle(IPC_CHANNELS.DIRECTOR_PROPOSE, (input: { projectId: string; episodeId: string }) =>
-    deps.director.proposeSplit(input),
+  handle(
+    IPC_CHANNELS.SCREENWRITER_PROPOSE_OUTLINE,
+    (input: { projectId: string; rawText: string; defaultTitle?: string }) =>
+      deps.director.proposeScreenwriterOutline(input),
+  );
+  handle(
+    IPC_CHANNELS.SCREENWRITER_APPLY_OUTLINE,
+    (input: {
+      projectId: string;
+      outline: import("../../shared/types/story-pipeline").ScreenwriterOutlineProposal;
+      replaceEmptyFirstEpisode?: boolean;
+      replaceEpisodeId?: string | null;
+    }) => deps.director.applyScreenwriterOutline(input),
+  );
+  handle(
+    IPC_CHANNELS.DIRECTOR_PROPOSE,
+    (input: {
+      projectId: string;
+      episodeId: string;
+      softTargetShotsPerScene?: number;
+      sceneDrafts?: import("../../shared/types/story-pipeline").ScreenwriterSceneDraft[];
+    }) => deps.director.proposeSplit(input),
   );
   handle(
     IPC_CHANNELS.DIRECTOR_APPLY,
@@ -406,6 +426,15 @@ export function registerIpcHandlers(deps: {
     (input: { projectId: string; episodeId: string }) => ({
       undoToken: deps.director.getLatestUndoToken(input.projectId, input.episodeId),
     }),
+  );
+  handle(
+    IPC_CHANNELS.SCRIPT_REVIEW_EPISODE,
+    (input: { projectId: string; episodeId: string; softTargetShotsPerScene?: number }) =>
+      deps.director.reviewEpisode(input),
+  );
+  handle(
+    IPC_CHANNELS.ACTION_POLISH_PROPOSE,
+    (input: { projectId: string; shotId: string }) => deps.director.proposeActionPolish(input),
   );
 
   handle(

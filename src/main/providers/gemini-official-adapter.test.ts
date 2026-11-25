@@ -279,7 +279,12 @@ describe("Google Gemini Official All-in-One Adapter", () => {
     });
     const epId = ws.episodes[0]!.id;
     const shotId = ws.shots[0]!.id;
-    projects.updateShot({ projectId: ws.project.id, shotId, dialogue: "这家店居然还开着。" });
+    projects.updateShot({
+      projectId: ws.project.id,
+      shotId,
+      speaker: "林晚",
+      dialogue: "这家店居然还开着。",
+    });
 
     // A. Director split via Gemini Interactions API
     const split = await director.proposeSplit({ projectId: ws.project.id, episodeId: epId });

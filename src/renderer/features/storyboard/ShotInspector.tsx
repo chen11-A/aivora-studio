@@ -6,6 +6,8 @@ import { CollapsibleRegion } from "../../components/ui/CollapsibleRegion";
 import { ConfirmInlineAction } from "../../components/ui/ConfirmInlineAction";
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
+import { ShotActionPolishBox } from "./ShotActionPolishBox";
+import { ShotSpeakerWarning } from "./ShotSpeakerWarning";
 
 const SCALES: ShotScale[] = ["远景", "全景", "中景", "近景", "特写"];
 const MOVES: CameraMove[] = ["固定", "缓推", "缓拉", "横摇", "跟拍", "微摇"];
@@ -55,23 +57,37 @@ export function ShotInspector(props: {
       ? currentShot.characterAssetIds.filter((id) => id !== asset.id)
       : [...currentShot.characterAssetIds, asset.id];
     const shouldAutoSpeaker =
-      !exists && asset.kind === "character" && !currentShot.speaker.trim() && Boolean(currentShot.dialogue.trim());
+      !exists &&
+      asset.kind === "character" &&
+      Boolean(currentShot.dialogue.trim()) &&
+      (!currentShot.speaker.trim() || currentShot.speakerStatus === "unconfirmed");
     editShot({
       shotId: currentShot.id,
       characterAssetIds: next,
-      ...(shouldAutoSpeaker ? { speaker: asset.name } : {}),
+      ...(shouldAutoSpeaker
+        ? { speaker: asset.name, speakerAssetId: asset.id, speakerStatus: "confirmed" as const }
+        : {}),
     });
   }
 
   function handleSpeakerChange(nextSpeaker: string) {
     if (!currentShot) return;
+    const trimmed = nextSpeaker.trim();
     const matchedChar = castAssets.find(
-      (a) => a.kind === "character" && a.name.trim() === nextSpeaker.trim(),
+      (a) => a.kind === "character" && a.name.trim() === trimmed,
     );
     const needBind = matchedChar && !currentShot.characterAssetIds.includes(matchedChar.id);
     editShot({
       shotId: currentShot.id,
       speaker: nextSpeaker,
+      speakerAssetId: matchedChar?.id ?? null,
+      speakerStatus: !currentShot.dialogue.trim()
+        ? trimmed
+          ? "confirmed"
+          : "none"
+        : trimmed
+          ? "confirmed"
+          : "unconfirmed",
       ...(needBind ? { characterAssetIds: [...currentShot.characterAssetIds, matchedChar.id] } : {}),
     });
   }
@@ -79,9 +95,18 @@ export function ShotInspector(props: {
   function handleDialogueChange(nextDialogue: string) {
     if (!currentShot) return;
     const shouldSyncSub = !currentShot.subtitle.trim() || currentShot.subtitle === currentShot.dialogue;
+    const hasSp = Boolean(currentShot.speaker.trim() || currentShot.speakerAssetId);
+    const nextSpeakerStatus = !nextDialogue.trim()
+      ? hasSp
+        ? ("confirmed" as const)
+        : ("none" as const)
+      : hasSp
+        ? ("confirmed" as const)
+        : ("unconfirmed" as const);
     editShot({
       shotId: currentShot.id,
       dialogue: nextDialogue,
+      speakerStatus: nextSpeakerStatus,
       ...(shouldSyncSub ? { subtitle: nextDialogue } : {}),
     });
   }
@@ -97,7 +122,21 @@ export function ShotInspector(props: {
     ? Math.min(15, Number(Math.max(1, Math.ceil(measuredSpeechSec * 2) / 2).toFixed(1)))
     : null;
   const hasDialogueOrSpeech = Boolean(currentShot?.dialogue.trim() || speechSrc);
+  const needsSpeakerConfirm = Boolean(
+    currentShot &&
+      (currentShot.speakerStatus === "unconfirmed" ||
+        (currentShot.dialogue.trim() && !currentShot.speaker.trim())),
+  );
   const characterAssets = castAssets.filter((a) => a.kind === "character");
+  const hasUnlinkedCustomSpeaker = Boolean(
+    currentShot &&
+      !needsSpeakerConfirm &&
+      currentShot.dialogue.trim() &&
+      currentShot.speaker.trim() &&
+      currentShot.speaker.trim() !== "旁白" &&
+      characterAssets.length > 0 &&
+      !characterAssets.some((c) => c.name.trim() === currentShot.speaker.trim()),
+  );
   const isFirst = shotIndex <= 0;
   const isLast = shotIndex >= epShotsCount - 1;
 
@@ -167,6 +206,8 @@ export function ShotInspector(props: {
             />
           </div>
 
+          <ShotActionPolishBox currentShot={currentShot} />
+
           {castAssets.length > 0 && (
             <div className="flex flex-col gap-1">
               <label className="text-[11px] text-[var(--text-secondary)]">本镜出场角色 / 场景</label>
@@ -220,6 +261,14 @@ export function ShotInspector(props: {
               />
             </div>
           </div>
+
+          <ShotSpeakerWarning
+            currentShot={currentShot}
+            characterAssets={characterAssets}
+            needsSpeakerConfirm={needsSpeakerConfirm}
+            hasUnlinkedCustomSpeaker={hasUnlinkedCustomSpeaker}
+            onSelectSpeaker={handleSpeakerChange}
+          />
 
           {/* Progressive Speech Controls: quiet import link when silent, full card when dialogue/speech exists */}
           {!hasDialogueOrSpeech && (
