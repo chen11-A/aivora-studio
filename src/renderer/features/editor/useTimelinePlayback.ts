@@ -107,6 +107,8 @@ export function useTimelinePlayback(shots: Shot[]) {
     setPlaying(true);
   };
 
+  const pause = () => setPlaying(false);
+
   const resetToStart = () => {
     setPlaying(false);
     setPlayheadSec(0);
@@ -123,6 +125,7 @@ export function useTimelinePlayback(shots: Shot[]) {
     offsetInShotSec,
     sourceVideoTimeSec: activeSegment ? activeSegment.trimInSec + offsetInShotSec : 0,
     togglePlay,
+    pause,
     seekToTime,
     seekToShot,
     resetToStart,

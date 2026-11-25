@@ -20,6 +20,7 @@ export function useStoryboardHotkeys(params: {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || isTypingElement(e.target)) return;
+      if (document.querySelector('[role="dialog"]')) return;
       if (!currentShot) return;
 
       if (e.key === "ArrowUp" || e.key === "ArrowDown") {

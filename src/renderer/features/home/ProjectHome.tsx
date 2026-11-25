@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
+  AlertTriangle,
   ArchiveRestore,
   Clapperboard,
   Clock,
@@ -9,8 +10,10 @@ import {
   Smartphone,
   Sparkles,
   Trash2,
+  X,
 } from "lucide-react";
-import type { AspectRatio } from "@shared/types/domain";
+import type { AspectRatio, ProjectSummary } from "@shared/types/domain";
+import { ModalShell } from "../../components/ui/OverlayShell";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useStudioStore } from "../../store/useStudioStore";
 
@@ -23,6 +26,10 @@ export function ProjectHome() {
   const importArchive = useStudioStore((s) => s.importArchive);
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<ProjectSummary | null>(null);
+  const lastDeleteRef = useRef<ProjectSummary | null>(null);
+  if (pendingDelete) lastDeleteRef.current = pendingDelete;
+  const displayDelete = pendingDelete ?? lastDeleteRef.current;
   const [name, setName] = useState("");
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>("16:9");
   const [stylePreset, setStylePreset] = useState("胶片电影感 · 温暖写实");
@@ -48,17 +55,26 @@ export function ProjectHome() {
     }
   }
 
+  async function handleConfirmDelete() {
+    if (!pendingDelete) return;
+    const id = pendingDelete.id;
+    setPendingDelete(null);
+    await deleteProject(id);
+  }
+
   return (
-    <div className="h-full w-full panel-scroll px-8 py-7" data-testid="project-home">
+    <div className="h-full w-full panel-scroll px-5 sm:px-8 py-6 sm:py-7" data-testid="project-home">
       <div className="max-w-[1160px] mx-auto flex flex-col gap-6">
-        <section className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-[#252b37]">
+        <section className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-[var(--border-subtle)]">
           <div>
-            <h1 className="text-[22px] font-semibold tracking-tight text-[#f3f5f9]">我的漫剧与短剧作品</h1>
-            <p className="text-[13px] text-[#a4aec0] mt-1">
-              每部作品独立保存在本地文件夹（SQLite + 原始素材），支持中文路径、随时拷贝备份。
+            <h1 className="text-[22px] font-semibold tracking-tight text-[var(--text-primary)]">
+              我的漫剧与短剧作品
+            </h1>
+            <p className="text-[13px] text-[var(--text-secondary)] mt-1">
+              每部作品独立保存在本机文件夹，支持中文路径，随时一键打包备份与迁移。
             </p>
           </div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               className="btn-secondary"
@@ -74,7 +90,7 @@ export function ProjectHome() {
               data-testid="home-open-demo"
               onClick={() => void openDemoProject()}
             >
-              <Sparkles className="w-3.5 h-3.5 text-[#f59e0b]" />
+              <Sparkles className="w-3.5 h-3.5 text-[var(--accent-amber-text)]" />
               <span>打开示例《晚照书店》</span>
             </button>
             <button
@@ -90,23 +106,23 @@ export function ProjectHome() {
         </section>
 
         {projects.length === 0 ? (
-          <section className="rounded-xl border border-dashed border-[#343d4e] bg-[#14171e] px-8 py-14 text-center flex flex-col items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-[#1b2029] border border-[#252b37] flex items-center justify-center">
-              <Clapperboard className="w-6 h-6 text-[#60a5fa]" />
+          <section className="rounded-2xl border border-dashed border-[var(--border-strong)] bg-[var(--bg-surface)] px-8 py-14 text-center flex flex-col items-center gap-4">
+            <div className="w-12 h-12 rounded-xl bg-[var(--accent-primary-soft)] border border-[var(--accent-primary-border)] flex items-center justify-center">
+              <Clapperboard className="w-6 h-6 text-[var(--accent-primary-text)]" />
             </div>
             <div>
-              <h2 className="text-[16px] font-semibold text-[#f3f5f9]">还没有本地作品</h2>
-              <p className="text-[13px] text-[#a4aec0] mt-1 max-w-md">
-                可以直接新建一部 16:9 横屏或 9:16 竖屏短剧，或一键打开内置示例《晚照书店》体验完整四步流程。
+              <h2 className="text-[16px] font-semibold text-[var(--text-primary)]">还没有本地作品</h2>
+              <p className="text-[13px] text-[var(--text-secondary)] mt-1 max-w-md">
+                可以直接新建一部 16:9 横屏或 9:16 竖屏短剧，或先打开示例《晚照书店》体验从剧本到导出的完整四步。
               </p>
             </div>
-            <div className="flex items-center gap-3 mt-1">
+            <div className="flex flex-wrap items-center justify-center gap-2.5 mt-1">
               <button type="button" className="btn-primary" onClick={() => setCreateOpen(true)}>
                 <FolderPlus className="w-3.5 h-3.5" />
                 <span>新建第一部作品</span>
               </button>
               <button type="button" className="btn-secondary" onClick={() => void openDemoProject()}>
-                <Sparkles className="w-3.5 h-3.5 text-[#f59e0b]" />
+                <Sparkles className="w-3.5 h-3.5 text-[var(--accent-amber-text)]" />
                 <span>体验《晚照书店》</span>
               </button>
             </div>
@@ -123,37 +139,37 @@ export function ProjectHome() {
                 <article
                   key={item.id}
                   data-testid={`project-card-${item.id}`}
-                  className="group rounded-xl overflow-hidden bg-[#14171e] border border-[#252b37] hover:border-[#3b82f6]/60 transition-colors flex flex-col"
+                  className="aivora-card group rounded-xl overflow-hidden flex flex-col"
                 >
                   <button
                     type="button"
                     onClick={() => void openProject(item.id)}
                     className="text-left cursor-pointer flex flex-col flex-1"
                   >
-                    <div className="aspect-video w-full bg-[#0e1015] overflow-hidden relative">
+                    <div className="aspect-video w-full bg-[var(--bg-inset)] overflow-hidden relative">
                       {coverSrc ? (
                         <img
                           src={coverSrc}
                           alt={item.name}
-                          className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
+                          className="w-full h-full object-cover transition-transform duration-[var(--dur-base)] ease-[var(--ease-out)] group-hover:scale-[1.03]"
                         />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center text-[#768196]">
+                        <div className="w-full h-full flex items-center justify-center text-[var(--text-muted)]">
                           <Film className="w-8 h-8" />
                         </div>
                       )}
-                      <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded bg-black/65 backdrop-blur-sm border border-white/10 text-[11px] font-medium text-[#f3f5f9]">
+                      <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md bg-[var(--bg-overlay-chip)] backdrop-blur-sm border border-white/15 text-[11px] font-medium text-white tabular-nums">
                         {item.aspectRatio}
                       </span>
                     </div>
                     <div className="p-3.5 flex flex-col gap-1.5">
-                      <h3 className="text-[14px] font-semibold text-[#f3f5f9] truncate">
+                      <h3 className="text-[14px] font-semibold text-[var(--text-primary)] truncate">
                         {item.name}
                       </h3>
-                      <p className="text-[12px] text-[#a4aec0] truncate">
+                      <p className="text-[12px] text-[var(--text-secondary)] truncate">
                         {item.stylePreset || "默认电影画风"}
                       </p>
-                      <div className="flex items-center justify-between text-[11px] text-[#768196] pt-1">
+                      <div className="flex items-center justify-between text-[11px] text-[var(--text-muted)] pt-1 tabular-nums">
                         <span>
                           {item.episodeCount} 集 · {item.shotCount} 镜头
                         </span>
@@ -164,14 +180,18 @@ export function ProjectHome() {
                       </div>
                     </div>
                   </button>
-                  <div className="px-3.5 py-2 border-t border-[#252b37] bg-[#11141a] flex items-center justify-between">
-                    <span className="text-[11px] text-[#768196] truncate max-w-[200px]" title={item.dirPath}>
+                  <div className="px-3.5 py-2 border-t border-[var(--border-subtle)] bg-[var(--bg-inset)] flex items-center justify-between gap-2">
+                    <span
+                      className="text-[11px] text-[var(--text-muted)] truncate min-w-0"
+                      title={item.dirPath}
+                    >
                       {item.dirPath}
                     </span>
                     <button
                       type="button"
-                      onClick={() => void deleteProject(item.id)}
-                      className="text-[#768196] hover:text-[#f87171] p-1 rounded cursor-pointer"
+                      data-testid={`delete-project-${item.id}`}
+                      onClick={() => setPendingDelete(item)}
+                      className="aivora-pressable text-[var(--text-muted)] hover:text-[var(--accent-danger-text)] hover:bg-[var(--accent-danger-soft)] p-1 rounded-md cursor-pointer shrink-0"
                       title="删除本地作品"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -184,108 +204,150 @@ export function ProjectHome() {
         )}
       </div>
 
-      {createOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div
-            role="dialog"
-            aria-label="新建作品"
-            className="w-full max-w-[460px] rounded-xl bg-[#14171e] border border-[#343d4e] shadow-2xl p-5 flex flex-col gap-4"
+      <ModalShell
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        ariaLabel="新建作品"
+        maxWidthClass="max-w-[460px]"
+        className="p-5 flex flex-col gap-4"
+      >
+        <div className="flex items-center justify-between">
+          <h2 className="text-[16px] font-semibold text-[var(--text-primary)]">新建短剧作品</h2>
+          <button
+            type="button"
+            aria-label="关闭"
+            className="aivora-pressable p-1 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] cursor-pointer"
+            onClick={() => setCreateOpen(false)}
           >
-            <div className="flex items-center justify-between">
-              <h2 className="text-[16px] font-semibold text-[#f3f5f9]">新建短剧作品</h2>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void handleCreate();
+          }}
+        >
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[12px] text-[var(--text-secondary)]">作品名称</label>
+            <input
+              className="input-field"
+              data-testid="new-project-name"
+              placeholder="例如：晚照书店 第一季"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoFocus
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[12px] text-[var(--text-secondary)]">画幅比例</label>
+            <div className="grid grid-cols-2 gap-2.5">
               <button
                 type="button"
-                className="text-[#768196] hover:text-[#f3f5f9] text-[12px] cursor-pointer"
-                onClick={() => setCreateOpen(false)}
+                onClick={() => setAspectRatio("16:9")}
+                className={`aivora-pressable flex items-center gap-2 p-2.5 rounded-lg border text-left cursor-pointer ${
+                  aspectRatio === "16:9"
+                    ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary)] text-[var(--text-primary)]"
+                    : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
+                }`}
               >
-                关闭
-              </button>
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[12px] text-[#a4aec0]">作品名称（支持中文与空格）</label>
-              <input
-                className="input-field"
-                data-testid="new-project-name"
-                placeholder="例如：晚照书店 第一季"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                autoFocus
-              />
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[12px] text-[#a4aec0]">默认画幅</label>
-              <div className="grid grid-cols-2 gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setAspectRatio("16:9")}
-                  className={`flex items-center gap-2 p-2.5 rounded-lg border text-left cursor-pointer ${
-                    aspectRatio === "16:9"
-                      ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]"
-                      : "bg-[#0f1218] border-[#252b37] text-[#a4aec0]"
-                  }`}
-                >
-                  <Monitor className="w-4 h-4 shrink-0" />
-                  <div>
-                    <div className="text-[12px] font-semibold">16:9 横屏（默认）</div>
-                    <div className="text-[11px] text-[#768196]">B站 / 电影叙事</div>
-                  </div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAspectRatio("9:16")}
-                  className={`flex items-center gap-2 p-2.5 rounded-lg border text-left cursor-pointer ${
-                    aspectRatio === "9:16"
-                      ? "bg-[#3b82f6]/15 border-[#3b82f6] text-[#f3f5f9]"
-                      : "bg-[#0f1218] border-[#252b37] text-[#a4aec0]"
-                  }`}
-                >
-                  <Smartphone className="w-4 h-4 shrink-0" />
-                  <div>
-                    <div className="text-[12px] font-semibold">9:16 竖屏</div>
-                    <div className="text-[11px] text-[#768196]">抖音 / 红果短剧</div>
-                  </div>
-                </button>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[12px] text-[#a4aec0]">视觉画风预设</label>
-              <input
-                className="input-field"
-                value={stylePreset}
-                onChange={(e) => setStylePreset(e.target.value)}
-              />
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[12px] text-[#a4aec0]">初始剧本 / 小说片段（可选）</label>
-              <textarea
-                className="input-field resize-none h-24"
-                placeholder="可直接粘贴一段小说或故事大纲，稍后在剧本页一键让导演 AI 拆镜…"
-                value={initialScript}
-                onChange={(e) => setInitialScript(e.target.value)}
-              />
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-1">
-              <button type="button" className="btn-secondary" onClick={() => setCreateOpen(false)}>
-                取消
+                <Monitor className="w-4 h-4 shrink-0" />
+                <div>
+                  <div className="text-[12px] font-semibold">16:9 横屏</div>
+                  <div className="text-[11px] text-[var(--text-muted)]">B站 / 电影叙事</div>
+                </div>
               </button>
               <button
                 type="button"
-                className="btn-primary"
-                data-testid="confirm-create-project"
-                disabled={!name.trim() || submitting}
-                onClick={() => void handleCreate()}
+                onClick={() => setAspectRatio("9:16")}
+                className={`aivora-pressable flex items-center gap-2 p-2.5 rounded-lg border text-left cursor-pointer ${
+                  aspectRatio === "9:16"
+                    ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary)] text-[var(--text-primary)]"
+                    : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
+                }`}
               >
-                {submitting ? "创建中…" : "创建并进入工作台"}
+                <Smartphone className="w-4 h-4 shrink-0" />
+                <div>
+                  <div className="text-[12px] font-semibold">9:16 竖屏</div>
+                  <div className="text-[11px] text-[var(--text-muted)]">抖音 / 红果短剧</div>
+                </div>
               </button>
             </div>
           </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[12px] text-[var(--text-secondary)]">整体画风</label>
+            <input
+              className="input-field"
+              value={stylePreset}
+              onChange={(e) => setStylePreset(e.target.value)}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[12px] text-[var(--text-secondary)]">剧本或小说片段（可选）</label>
+            <textarea
+              className="input-field resize-none h-24"
+              placeholder="粘贴一段故事，进入后即可一键拆镜…"
+              value={initialScript}
+              onChange={(e) => setInitialScript(e.target.value)}
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button type="button" className="btn-secondary" onClick={() => setCreateOpen(false)}>
+              取消
+            </button>
+            <button
+              type="submit"
+              className="btn-primary"
+              data-testid="confirm-create-project"
+              disabled={!name.trim() || submitting}
+            >
+              {submitting ? "创建中…" : "创建并进入工作台"}
+            </button>
+          </div>
+        </form>
+      </ModalShell>
+
+      <ModalShell
+        open={Boolean(pendingDelete)}
+        onClose={() => setPendingDelete(null)}
+        ariaLabel="确认删除作品"
+        testId="delete-project-confirm-modal"
+        maxWidthClass="max-w-[420px]"
+        className="p-5 flex flex-col gap-4"
+      >
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-xl bg-[var(--accent-danger-soft)] border border-[var(--accent-danger-border)] flex items-center justify-center shrink-0">
+            <AlertTriangle className="w-4 h-4 text-[var(--accent-danger-text)]" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-[15px] font-semibold text-[var(--text-primary)]">
+              确认删除作品「{displayDelete?.name}」？
+            </h2>
+            <p className="text-[12px] text-[var(--text-secondary)] mt-1 leading-relaxed">
+              该操作会移除本机作品文件夹中的剧本、分镜与素材，删除后无法恢复。如需留底，建议先进入作品导出备份包。
+            </p>
+          </div>
         </div>
-      )}
+        <div className="flex items-center justify-end gap-2">
+          <button type="button" className="btn-secondary" autoFocus onClick={() => setPendingDelete(null)}>
+            取消
+          </button>
+          <button
+            type="button"
+            data-testid="confirm-delete-project"
+            className="btn-danger"
+            onClick={() => void handleConfirmDelete()}
+          >
+            永久删除
+          </button>
+        </div>
+      </ModalShell>
     </div>
   );
 }

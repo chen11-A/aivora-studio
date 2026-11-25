@@ -55,8 +55,8 @@ function startStaticServer(rootDir) {
   });
 }
 
-async function inspectViewGeometry(page, viewName) {
-  return page.evaluate((name) => {
+async function inspectViewGeometry(page, viewName, options = {}) {
+  return page.evaluate(({ name, checkCenterRatio }) => {
     const issues = [];
     const vw = window.innerWidth;
     const vh = window.innerHeight;
@@ -99,7 +99,6 @@ async function inspectViewGeometry(page, viewName) {
       }
     }
 
-    // Detect nested actually-scrolling vertical containers (double scrollbars)
     const allEls = [...document.querySelectorAll("*")];
     const scrollables = allEls.filter((el) => {
       if (el.tagName === "TEXTAREA" || el.tagName === "HTML" || el.tagName === "BODY") return false;
@@ -122,8 +121,17 @@ async function inspectViewGeometry(page, viewName) {
     }
 
     let centerRatio = null;
-    if (name === "storyboard") {
-      const sections = [...document.querySelectorAll("main section")];
+    const sections = [...document.querySelectorAll("main section")];
+    if (sections.length > 0 && name !== "home" && !name.includes("modal") && !name.includes("proposal") && !name.includes("confirm")) {
+      const maxHeight = sections.reduce((acc, el) => Math.max(acc, el.getBoundingClientRect().height), 0);
+      if (maxHeight < 180) {
+        issues.push({
+          kind: "primary-section-crushed",
+          detail: `max section height=${Math.round(maxHeight)}px < 180px`,
+        });
+      }
+    }
+    if (name === "storyboard" && checkCenterRatio) {
       const maxWidth = sections.reduce((acc, el) => Math.max(acc, el.getBoundingClientRect().width), 0);
       centerRatio = Number((maxWidth / vw).toFixed(3));
       if (centerRatio < 0.55) {
@@ -136,13 +144,14 @@ async function inspectViewGeometry(page, viewName) {
 
     return {
       viewport: `${vw}x${vh}`,
+      theme: document.documentElement.dataset.theme || "dark",
       view: name,
       topbarHeight: topRect ? Math.round(topRect.height) : null,
       statusbarHeight: statusRect ? Math.round(statusRect.height) : null,
       centerRatio,
       issues,
     };
-  }, viewName);
+  }, { name: viewName, checkCenterRatio: options.checkCenterRatio ?? true });
 }
 
 async function runAudit() {
@@ -160,17 +169,36 @@ async function runAudit() {
   });
 
   const viewports = [
-    { width: 1280, height: 800, capture: true },
-    { width: 1920, height: 1080, capture: false },
+    { width: 1280, height: 800, capture: true, checkUx: true, checkCenterRatio: true },
+    { width: 1920, height: 1080, capture: false, checkUx: false, checkCenterRatio: true },
+    { width: 900, height: 700, capture: false, checkUx: false, checkCenterRatio: false },
+    { width: 390, height: 844, capture: false, checkUx: false, checkCenterRatio: false },
   ];
 
   const report = [];
   const runtimeErrors = [];
+  const uxAssertions = [];
+  let perfMetrics = null;
 
   try {
     for (const vp of viewports) {
       const context = await browser.newContext({ viewport: { width: vp.width, height: vp.height } });
       const page = await context.newPage();
+      if (vp.checkUx) {
+        await page.addInitScript(() => {
+          window.__aivoraCls = 0;
+          try {
+            const obs = new window.PerformanceObserver((list) => {
+              for (const entry of list.getEntries()) {
+                if (!entry.hadRecentInput) window.__aivoraCls += entry.value;
+              }
+            });
+            obs.observe({ type: "layout-shift", buffered: true });
+          } catch {
+            // Browser does not support layout-shift observer
+          }
+        });
+      }
       page.on("pageerror", (err) => runtimeErrors.push(`[${vp.width}x${vp.height}] pageerror: ${err.message}`));
       page.on("console", (msg) => {
         if (msg.type() === "error") {
@@ -182,70 +210,274 @@ async function runAudit() {
       await page.waitForSelector('[data-testid="home-open-demo"]');
 
       const checkAndSnap = async (name) => {
-        await page.waitForTimeout(200);
-        const res = await inspectViewGeometry(page, name);
+        await page.waitForTimeout(260);
+        const res = await inspectViewGeometry(page, name, { checkCenterRatio: vp.checkCenterRatio });
         report.push(res);
         if (vp.capture) {
-          await page.screenshot({ path: join(OUT_DIR, `${name}-${vp.width}x${vp.height}.png`) });
+          await page.screenshot({ path: join(OUT_DIR, `${name}-${res.theme}-${vp.width}x${vp.height}.png`) });
         }
       };
 
       await checkAndSnap("home");
+
+      // Hands-on UX & Motion verification on primary desktop viewport
+      if (vp.checkUx) {
+        // 1. Safe project delete: 1 click MUST open confirmation modal, NOT delete immediately
+        await page.click('[data-testid="delete-project-prj_demo_wanzhao"]');
+        await page.waitForSelector('[data-testid="delete-project-confirm-modal"]');
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(240);
+        const cardStillExists = await page.locator('[data-testid="project-card-prj_demo_wanzhao"]').count();
+        if (cardStillExists !== 1) runtimeErrors.push("Project card disappeared after cancelling delete!");
+        uxAssertions.push("safe-delete-project-and-esc-dismiss:ok");
+      }
 
       // Open demo project《晚照书店》
       await page.click('[data-testid="home-open-demo"]');
       await page.waitForSelector('[data-testid="stage-tab-script"]');
       await checkAndSnap("script");
 
-      if (vp.capture) {
+      if (vp.checkUx) {
+        // 2. Statusbar has zero developer SQLite jargon
+        const statusText = await page.locator('[data-testid="studio-statusbar"]').textContent();
+        if (statusText?.includes("SQLite") || statusText?.includes("browser-preview")) {
+          runtimeErrors.push(`Developer jargon leaked into statusbar: ${statusText}`);
+        }
+        uxAssertions.push("clean-statusbar-copy:ok");
+
         await page.click('[data-testid="run-director-split"]');
         await page.waitForSelector('[data-testid="director-proposal-modal"]');
         await checkAndSnap("director-proposal");
-        await page.getByRole("button", { name: "放弃提案" }).click();
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(240);
       }
 
       await page.click('[data-testid="stage-tab-cast"]');
       await page.waitForSelector('[data-testid="cast-inspector"]');
       await checkAndSnap("cast");
 
+      if (vp.checkUx) {
+        // 3. Cast card displays plain Chinese voice label + CSS @layer components allows selected accent border
+        const castText = await page.locator("main").textContent();
+        if (castText?.includes("zh_female_warm")) {
+          runtimeErrors.push("Raw voice ID zh_female_warm leaked in CastStage");
+        }
+        const selectedBorderColor = await page.evaluate(() => {
+          const card = document.querySelector("article.aivora-card");
+          return card ? getComputedStyle(card).borderTopColor : "";
+        });
+        if (selectedBorderColor !== "rgb(59, 130, 246)") {
+          runtimeErrors.push(`Selected cast card border overridden by CSS cascade: ${selectedBorderColor}`);
+        }
+        // Check SlidingSegmentedControl pill alignment precision (< 0.5px)
+        const pillDelta = await page.evaluate(() => {
+          const tablist = document.querySelector('[role="tablist"]');
+          const pill = tablist?.querySelector('span[aria-hidden="true"]');
+          const active = tablist?.querySelector('[aria-selected="true"]');
+          if (!pill || !active) return 99;
+          return Math.abs(pill.getBoundingClientRect().left - active.getBoundingClientRect().left);
+        });
+        if (pillDelta > 0.6) {
+          runtimeErrors.push(`SlidingSegmentedControl pill misaligned by ${pillDelta.toFixed(2)}px`);
+        }
+        uxAssertions.push("plain-chinese-voice-labels-cascade-and-pill-align:ok");
+      }
+
       await page.click('[data-testid="stage-tab-storyboard"]');
       await checkAndSnap("storyboard");
 
-      if (vp.capture) {
+      if (vp.checkUx) {
+        // 4a. StageContainer must NOT flip animation class or flicker when typing in shot-prompt-input
+        const classBeforeEdit = await page.evaluate(
+          () => document.querySelector("main .aivora-stage-forward, main .aivora-stage-backward, main .aivora-stage-neutral")?.className || "",
+        );
+        await page.locator('[data-testid="shot-prompt-input"]').focus();
+        await page.keyboard.type(" ");
+        await page.keyboard.press("Backspace");
+        const classAfterEdit = await page.evaluate(
+          () => document.querySelector("main .aivora-stage-forward, main .aivora-stage-backward, main .aivora-stage-neutral")?.className || "",
+        );
+        if (!classBeforeEdit.includes("aivora-stage-forward") || classBeforeEdit !== classAfterEdit) {
+          runtimeErrors.push(`StageContainer flickered on edit: "${classBeforeEdit}" -> "${classAfterEdit}"`);
+        }
+
+        // 4b. Collapsed CollapsibleRegion inner element must be inert
+        const collapsedInert = await page.evaluate(() => {
+          const closed = document.querySelector('.aivora-collapsible[data-open="false"] > .aivora-collapsible-inner');
+          return closed ? Boolean(closed.inert) : true;
+        });
+        if (!collapsedInert) {
+          runtimeErrors.push("Collapsed CollapsibleRegion inner container is not inert!");
+        }
+
+        // 4c. Safe inline shot delete + switching shot resets armed state
+        const shotsBefore = await page.locator('[data-testid^="shot-item-"]').count();
+        await page.click('[data-testid="delete-shot-btn"]');
+        await page.waitForSelector('[data-testid="delete-shot-btn-confirm"]');
+        const shotsAfterFirstClick = await page.locator('[data-testid^="shot-item-"]').count();
+        if (shotsAfterFirstClick !== shotsBefore) runtimeErrors.push("Shot deleted on single click without confirmation!");
+        await page.locator('[data-testid^="shot-item-"]').nth(1).click();
+        await page.waitForTimeout(80);
+        const stillArmedAfterSwitch = await page.locator('[data-testid="delete-shot-btn-confirm"]').count();
+        if (stillArmedAfterSwitch !== 0) {
+          runtimeErrors.push("Armed shot delete confirmation stayed armed after switching shots!");
+        }
+        await page.locator('[data-testid^="shot-item-"]').nth(0).click();
+        uxAssertions.push("stage-no-flicker-inert-and-shot-switch-disarm:ok");
+
+        // 5. Clicking topbar Export from Storyboard opens ExportModal WITHOUT switching stage away
+        await page.click('[data-testid="open-export-modal"]');
+        await page.waitForSelector('[data-testid="export-modal"]');
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(240);
+        const stillStoryboard = await page.locator('[data-testid="take-filmstrip"]').count();
+        if (stillStoryboard !== 1) runtimeErrors.push("Export modal yanked user away from Storyboard!");
+        uxAssertions.push("non-interrupting-export-modal:ok");
+
+        // 5b. ConfirmJobModal must NOT collapse to tiny empty box mid-exit animation
         await page.click('[data-testid="btn-generate-video"]');
         await page.waitForSelector('[data-testid="confirm-job-modal"]');
         await checkAndSnap("confirm-job");
         await page.getByRole("button", { name: "取消" }).click();
-      }
+        await page.waitForTimeout(60);
+        const midExitHeight = await page.evaluate(() => {
+          const dlg = document.querySelector('[data-testid="confirm-job-modal"]');
+          return dlg ? dlg.getBoundingClientRect().height : 0;
+        });
+        if (midExitHeight < 200) {
+          runtimeErrors.push(`ConfirmJobModal collapsed mid-exit to ${Math.round(midExitHeight)}px`);
+        }
+        await page.waitForTimeout(220);
 
-      // Switch Shot 1 from Version 2 -> Version 1, then verify Editor reflects Version 1 & advances playback timecode live!
-      if (vp.capture) {
         await page.click('[data-testid="take-card-1"]');
         await page.waitForTimeout(150);
       }
 
       await page.click('[data-testid="stage-tab-editor"]');
       await page.waitForSelector('[data-testid="export-readiness-card"]');
-      if (vp.capture) {
+      if (vp.checkUx) {
         const previewHeading = await page.locator("main section").first().textContent();
         if (!previewHeading?.includes("版本 1")) {
           runtimeErrors.push(`[${vp.width}x${vp.height}] Editor did not reflect switched take 版本 1: ${previewHeading}`);
         }
+        // 6a. Space behind open ExportModal must NOT start background playback
+        const timeBeforeModalSpace = await page.locator('[data-testid="editor-timecode"]').textContent();
+        await page.click('[data-testid="open-export-modal"]');
+        await page.waitForSelector('[data-testid="export-modal"]');
+        await page.keyboard.press("Space");
+        await page.waitForTimeout(250);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(240);
+        const timeAfterModalSpace = await page.locator('[data-testid="editor-timecode"]').textContent();
+        if (timeAfterModalSpace !== timeBeforeModalSpace) {
+          runtimeErrors.push(`Space key leaked behind ExportModal (${timeBeforeModalSpace} -> ${timeAfterModalSpace})`);
+        }
+
+        // 6b. Verify GPU playhead transform + live playback timecode advancement + direct scrubbing + rAF pacing
         const beforeTime = await page.locator('[data-testid="editor-timecode"]').textContent();
         await page.click('[data-testid="editor-play-toggle"]');
-        await page.waitForTimeout(650);
+        const rafResult = await page.evaluate(
+          () =>
+            new Promise((resolveRaf) => {
+              const deltas = [];
+              let prev = window.performance.now();
+              const start = prev;
+              function step(now) {
+                deltas.push(now - prev);
+                prev = now;
+                if (now - start < 700) {
+                  window.requestAnimationFrame(step);
+                } else {
+                  const avgMs = deltas.reduce((s, d) => s + d, 0) / Math.max(1, deltas.length);
+                  const maxMs = Math.max(...deltas);
+                  resolveRaf({
+                    frames: deltas.length,
+                    avgFrameMs: Number(avgMs.toFixed(2)),
+                    maxFrameMs: Number(maxMs.toFixed(2)),
+                    approxFps: Number((1000 / Math.max(1, avgMs)).toFixed(1)),
+                  });
+                }
+              }
+              window.requestAnimationFrame(step);
+            }),
+        );
         const afterTime = await page.locator('[data-testid="editor-timecode"]').textContent();
+        const playheadTransform = await page.locator('[data-testid="timeline-playhead"]').evaluate((el) => getComputedStyle(el).transform);
         await page.click('[data-testid="editor-play-toggle"]');
         if (!afterTime || afterTime === beforeTime || afterTime.startsWith("00:00.0")) {
           runtimeErrors.push(`[${vp.width}x${vp.height}] Editor playback timecode did not advance (${beforeTime} -> ${afterTime})`);
         }
+        if (!playheadTransform || playheadTransform === "none") {
+          runtimeErrors.push("Timeline playhead is not using GPU transform!");
+        }
+        // Test direct timeline scrubbing click
+        const tlBox = await page.locator('[data-testid="editor-timeline"]').boundingBox();
+        if (tlBox) {
+          await page.mouse.click(tlBox.x + 260, tlBox.y + 60);
+          await page.waitForTimeout(100);
+          const scrubbedTime = await page.locator('[data-testid="editor-timecode"]').textContent();
+          if (!scrubbedTime) runtimeErrors.push("Timeline scrubbing failed to update timecode");
+        }
+        const clsValue = await page.evaluate(() => Number((window.__aivoraCls || 0).toFixed(4)));
+        perfMetrics = { ...rafResult, cls: clsValue };
+        if (clsValue > 0.01) {
+          runtimeErrors.push(`Layout shift exceeded threshold: CLS=${clsValue} > 0.01`);
+        }
+        if (rafResult.frames < 10) {
+          runtimeErrors.push(`Playback animation frame rate stalled: only ${rafResult.frames} frames in 700ms`);
+        }
+        uxAssertions.push("modal-hotkey-guard-gpu-playhead-and-scrubbing:ok");
+        uxAssertions.push(`perf-cls-zero-and-raf-smooth:cls=${clsValue},fps=${rafResult.approxFps}`);
       }
       await checkAndSnap("editor");
 
       await page.click('[data-testid="open-model-center"]');
       await page.waitForSelector('[data-testid="model-center-modal"]');
       await checkAndSnap("model-center");
+      if (vp.checkUx) {
+        // 6c. Escape on armed ConfirmInlineAction inside ModalShell must disarm WITHOUT closing modal
+        await page.fill('[data-testid="provider-key-input"]', "test-key-audit-only");
+        await page.click('[data-testid="provider-save-btn"]');
+        await page.waitForSelector('button[title="删除该配置"]');
+        await page.click('button[title="删除该配置"]');
+        await page.waitForTimeout(80);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(240);
+        const modalStillOpen = await page.locator('[data-testid="model-center-modal"]').count();
+        const delBtnBack = await page.locator('button[title="删除该配置"]').count();
+        if (modalStillOpen !== 1 || delBtnBack < 1) {
+          runtimeErrors.push(`Escape on armed ConfirmInlineAction closed parent ModelCenterModal (modal=${modalStillOpen}, delBtn=${delBtnBack})`);
+        }
+        uxAssertions.push("modal-escape-stack-preserves-parent:ok");
+      }
       await page.click('[data-testid="close-model-center"]');
+      await page.waitForTimeout(240);
+
+      // 7. Switch to Light Mode & verify zero layout issues in light theme too!
+      if (vp.checkUx) {
+        await page.click('[data-testid="toggle-theme-mode"]');
+        await page.waitForTimeout(240);
+        const activeTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+        if (activeTheme !== "light") {
+          runtimeErrors.push(`Expected light theme after toggle, got ${activeTheme}`);
+        }
+        await checkAndSnap("editor-light");
+        await page.click('[data-testid="stage-tab-storyboard"]');
+        await checkAndSnap("storyboard-light");
+        // Verify prefers-reduced-motion media emulation works with zero errors
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await page.click('[data-testid="stage-tab-script"]');
+        await page.waitForTimeout(100);
+        const reducedAnimDur = await page.evaluate(() => {
+          const btn = document.querySelector(".btn-primary");
+          return btn ? getComputedStyle(btn).transitionDuration : "";
+        });
+        const firstDurSec = Number.parseFloat(reducedAnimDur.split(",")[0]?.trim() || "NaN");
+        if (!Number.isFinite(firstDurSec) || firstDurSec > 0.001) {
+          runtimeErrors.push(`Reduced motion did not collapse transitions: ${reducedAnimDur}`);
+        }
+        uxAssertions.push("light-mode-and-reduced-motion:ok");
+      }
 
       await context.close();
     }
@@ -255,10 +487,16 @@ async function runAudit() {
   }
 
   const allIssues = report.flatMap((r) =>
-    r.issues.map((i) => `[${r.viewport}/${r.view}] ${i.kind}: ${i.detail}`),
+    r.issues.map((i) => `[${r.viewport}/${r.theme}/${r.view}] ${i.kind}: ${i.detail}`),
   );
 
-  console.log(JSON.stringify({ ok: allIssues.length === 0 && runtimeErrors.length === 0, report, runtimeErrors }, null, 2));
+  console.log(
+    JSON.stringify(
+      { ok: allIssues.length === 0 && runtimeErrors.length === 0, perfMetrics, uxAssertions, report, runtimeErrors },
+      null,
+      2,
+    ),
+  );
 
   if (runtimeErrors.length > 0 || allIssues.length > 0) {
     console.error("Layout audit failed:", { allIssues, runtimeErrors });

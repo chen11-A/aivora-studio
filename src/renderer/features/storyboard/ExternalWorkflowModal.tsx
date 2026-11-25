@@ -15,6 +15,7 @@ import type {
   ExternalDropScanResult,
   ExternalPackExportResult,
 } from "@shared/types/external-pack";
+import { ModalShell } from "../../components/ui/OverlayShell";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useStudioStore } from "../../store/useStudioStore";
 
@@ -40,26 +41,17 @@ export function ExternalWorkflowModal(props: {
     void getDesktopClient().getDownloadWatchState().then(setWatchState);
   }, [open]);
 
-  if (!open) return null;
   const client = getDesktopClient();
 
   function flashToast(msg: string) {
-    useStudioStore.setState({ toast: msg });
-    setTimeout(() => {
-      if (useStudioStore.getState().toast === msg) useStudioStore.setState({ toast: null });
-    }, 3600);
+    useStudioStore.getState().showToast(msg, 3600);
   }
 
   async function handleToggleWatch(nextEnabled: boolean) {
-    const updated = await client.configureDownloadWatch({
-      enabled: nextEnabled,
-      projectId,
-    });
+    const updated = await client.configureDownloadWatch({ enabled: nextEnabled, projectId });
     setWatchState(updated);
     flashToast(
-      updated.enabled
-        ? `已开启下载目录自动监听（${updated.folderDir}）`
-        : "已暂停下载目录自动监听",
+      updated.enabled ? `已开启下载目录监听（${updated.folderDir}）` : "已暂停下载目录监听",
     );
   }
 
@@ -134,214 +126,225 @@ export function ExternalWorkflowModal(props: {
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-5">
-      <div
-        role="dialog"
-        aria-label="网页外采辅助（Flow / 即梦 / 可灵网页版）"
-        data-testid="external-workflow-modal"
-        className="w-full max-w-[820px] max-h-[84vh] rounded-xl bg-[#14171e] border border-[#343d4e] shadow-2xl flex flex-col overflow-hidden"
-      >
-        <div className="h-12 px-5 border-b border-[#252b37] flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2">
-            <Package className="w-4 h-4 text-[#60a5fa]" />
-            <h2 className="text-[15px] font-semibold text-[#f3f5f9]">
-              网页外采辅助（Google Flow / 即梦 / 可灵网页版）
-            </h2>
+    <ModalShell
+      open={open}
+      onClose={onClose}
+      ariaLabel="网页外采辅助（Flow / 即梦 / 可灵网页版）"
+      testId="external-workflow-modal"
+      maxWidthClass="max-w-[820px]"
+      className="max-h-[84vh] flex flex-col"
+    >
+      <div className="h-12 px-5 border-b border-[var(--border-subtle)] flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-2">
+          <Package className="w-4 h-4 text-[var(--accent-primary-text)]" />
+          <h2 className="text-[15px] font-semibold text-[var(--text-primary)]">
+            网页外采辅助（Google Flow / 即梦 / 可灵网页版）
+          </h2>
+        </div>
+        <button
+          type="button"
+          aria-label="关闭"
+          onClick={onClose}
+          className="aivora-pressable p-1 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] cursor-pointer"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Auto-Watch Downloads Bar */}
+      <div className="px-5 py-2.5 bg-[var(--bg-inset)] border-b border-[var(--border-subtle)] flex items-center justify-between gap-3 flex-wrap shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <Radar
+            className={`w-4 h-4 shrink-0 ${
+              watchState?.enabled ? "text-[var(--accent-success-text)]" : "text-[var(--text-muted)]"
+            }`}
+          />
+          <div className="min-w-0">
+            <div className="text-[12px] font-medium text-[var(--text-primary)] flex items-center gap-2">
+              <span>下载目录自动监听</span>
+              <span
+                className={`px-1.5 py-0.5 rounded text-[10px] ${
+                  watchState?.enabled
+                    ? "bg-[var(--accent-success-soft)] text-[var(--accent-success-text)]"
+                    : "bg-[var(--bg-elevated)] text-[var(--text-muted)]"
+                }`}
+              >
+                {watchState?.enabled ? "监听中" : "已关闭"}
+              </span>
+            </div>
+            <div className="text-[11px] text-[var(--text-muted)] truncate">
+              目录：{watchState?.folderDir ?? "系统默认下载目录"}（自动跳过未下载完和重复文件）
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => void handlePickWatchDir()}
+            className="btn-secondary h-7 px-2.5 text-[11px]"
+          >
+            更换目录
+          </button>
+          <button
+            type="button"
+            data-testid="btn-toggle-download-watch"
+            onClick={() => void handleToggleWatch(!watchState?.enabled)}
+            className={
+              watchState?.enabled
+                ? "btn-secondary h-7 px-2.5 text-[11px]"
+                : "btn-primary h-7 px-2.5 text-[11px]"
+            }
+          >
+            {watchState?.enabled ? "关闭监听" : "开启监听"}
+          </button>
+        </div>
+      </div>
+
+      <div className="panel-scroll flex-1 p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Left Column */}
+        <section className="rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] p-4 flex flex-col gap-3">
+          <div className="flex items-center gap-2 text-[13px] font-semibold text-[var(--text-primary)] tabular-nums">
+            <FolderOutput className="w-4 h-4 text-[var(--accent-primary-text)]" />
+            <span>第一步：导出本集镜头包（{epShots.length} 镜）</span>
+          </div>
+          <p className="text-[12px] text-[var(--text-secondary)] leading-relaxed">
+            自动整理好编号首帧图、中英双语提示词总表，以及空的「回流放入这里」文件夹。
+          </p>
+          <div className="rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)] p-2.5 text-[11px] text-[var(--text-muted)] flex flex-col gap-1">
+            <span>• 仅导出已生成的首帧图，自动跳过空白占位板</span>
+            <span>• 网页端生成完 MP4 后按 01.mp4、02.mp4 存入回流目录</span>
+            <span>• 直接用网页会员额度，零额外接口费用</span>
           </div>
           <button
             type="button"
-            onClick={onClose}
-            className="p-1 rounded hover:bg-[#222834] text-[#a4aec0] cursor-pointer"
+            data-testid="btn-export-external-pack"
+            disabled={exporting || epShots.length === 0}
+            onClick={() => void handleExportPack()}
+            className="btn-primary justify-center"
           >
-            <X className="w-4 h-4" />
+            {exporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FolderOutput className="w-3.5 h-3.5" />}
+            <span>{exporting ? "正在导出…" : "选择目录并导出外采包"}</span>
           </button>
-        </div>
-
-        {/* Auto-Watch Downloads Bar */}
-        <div className="px-5 py-2.5 bg-[#0f1218] border-b border-[#252b37] flex items-center justify-between gap-3 flex-wrap shrink-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <Radar className={`w-4 h-4 shrink-0 ${watchState?.enabled ? "text-[#34d399]" : "text-[#768196]"}`} />
-            <div className="min-w-0">
-              <div className="text-[12px] font-medium text-[#f3f5f9] flex items-center gap-2">
-                <span>下载目录自动监听联动</span>
-                <span
-                  className={`px-1.5 py-0.5 rounded text-[10px] ${
-                    watchState?.enabled
-                      ? "bg-[#10b981]/15 text-[#34d399]"
-                      : "bg-[#1b2029] text-[#768196]"
-                  }`}
-                >
-                  {watchState?.enabled ? "监听中" : "已关闭"}
-                </span>
+          {exportRes?.ok && exportRes.outputDir && (
+            <div className="rounded-lg bg-[var(--accent-success-soft)] border border-[var(--accent-success-border)] p-3 flex flex-col gap-2">
+              <div className="flex items-center gap-1.5 text-[12px] text-[var(--accent-success-text)] font-medium">
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                <span>{exportRes.message}</span>
               </div>
-              <div className="text-[11px] text-[#768196] truncate">
-                监听路径：{watchState?.folderDir ?? "系统 Downloads"}（自动忽略未下完文件并去重）
-              </div>
+              <div className="text-[11px] text-[var(--text-secondary)] break-all">{exportRes.outputDir}</div>
+              <button
+                type="button"
+                onClick={() => void client.revealPathInFolder(exportRes.outputDir!)}
+                className="btn-secondary h-7 text-[11px] justify-center"
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+                <span>打开导出目录</span>
+              </button>
             </div>
+          )}
+        </section>
+
+        {/* Right Column */}
+        <section className="rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] p-4 flex flex-col gap-3 min-h-0">
+          <div className="flex items-center gap-2 text-[13px] font-semibold text-[var(--text-primary)]">
+            <FolderInput className="w-4 h-4 text-[var(--accent-success-text)]" />
+            <span>第二步：扫描回流目录并批量入镜</span>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => void handlePickWatchDir()}
-              className="btn-secondary h-7 px-2.5 text-[11px]"
-            >
-              更换监听目录
-            </button>
-            <button
-              type="button"
-              data-testid="btn-toggle-download-watch"
-              onClick={() => void handleToggleWatch(!watchState?.enabled)}
-              className={watchState?.enabled ? "btn-secondary h-7 px-2.5 text-[11px]" : "btn-primary h-7 px-2.5 text-[11px]"}
-            >
-              {watchState?.enabled ? "关闭监听" : "开启自动监听"}
-            </button>
-          </div>
-        </div>
+          <p className="text-[12px] text-[var(--text-secondary)] leading-relaxed">
+            自动识别 01.mp4 / 镜02.mp4 对应镜头并跳过重复文件，未编号文件也可手动指定。
+          </p>
+          <button
+            type="button"
+            data-testid="btn-scan-external-drop"
+            disabled={scanning}
+            onClick={() => void handleScanDrop()}
+            className="btn-secondary justify-center"
+          >
+            {scanning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FolderInput className="w-3.5 h-3.5" />}
+            <span>{scanning ? "扫描中…" : "选择回流文件夹并预览"}</span>
+          </button>
 
-        <div className="panel-scroll flex-1 p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Left Column: Export External Shot Pack */}
-          <section className="rounded-lg bg-[#0f1218] border border-[#252b37] p-4 flex flex-col gap-3">
-            <div className="flex items-center gap-2 text-[13px] font-semibold text-[#f3f5f9]">
-              <FolderOutput className="w-4 h-4 text-[#60a5fa]" />
-              <span>第一步：导出本集镜头包（{epShots.length} 镜）</span>
-            </div>
-            <p className="text-[12px] text-[#a4aec0] leading-relaxed">
-              一键导出编号整理好的「首帧图/」目录、「提示词总表.md/.txt」（含中文与 Flow 精简英文双版）以及空的「回流放入这里/」文件夹。
-            </p>
-            <div className="rounded bg-[#14171e] border border-[#252b37] p-2.5 text-[11px] text-[#768196] flex flex-col gap-1">
-              <span>• 仅复制已有真实光栅首帧，不会误把占位图当首帧导出</span>
-              <span>• 网页端生成完 MP4 后按 01.mp4、01_v2.mp4 存入回流目录</span>
-              <span>• 无封号风险，零额外 API 费用吃满会员积分</span>
-            </div>
-            <button
-              type="button"
-              data-testid="btn-export-external-pack"
-              disabled={exporting || epShots.length === 0}
-              onClick={() => void handleExportPack()}
-              className="btn-primary justify-center"
-            >
-              {exporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FolderOutput className="w-3.5 h-3.5" />}
-              <span>{exporting ? "正在导出…" : "选择目录并导出外采包"}</span>
-            </button>
-            {exportRes?.ok && exportRes.outputDir && (
-              <div className="rounded bg-[#10b981]/10 border border-[#10b981]/40 p-3 flex flex-col gap-2">
-                <div className="flex items-center gap-1.5 text-[12px] text-[#34d399] font-medium">
-                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                  <span>{exportRes.message}</span>
-                </div>
-                <div className="text-[11px] text-[#a4aec0] break-all">{exportRes.outputDir}</div>
-                <button
-                  type="button"
-                  onClick={() => void client.revealPathInFolder(exportRes.outputDir!)}
-                  className="btn-secondary h-7 text-[11px] justify-center"
-                >
-                  <FolderOpen className="w-3.5 h-3.5" />
-                  <span>打开导出目录</span>
-                </button>
+          {scanRes && (
+            <div className="flex flex-col gap-2 flex-1 min-h-0">
+              <div className="text-[11px] text-[var(--text-secondary)] flex items-center justify-between gap-2">
+                <span>{scanRes.message}</span>
+                {scanRes.ignoredTempCount > 0 && (
+                  <span className="text-[var(--accent-amber-text)]">
+                    已忽略 {scanRes.ignoredTempCount} 个未下载完文件
+                  </span>
+                )}
               </div>
-            )}
-          </section>
 
-          {/* Right Column: Scan & Batch Import Drop Folder */}
-          <section className="rounded-lg bg-[#0f1218] border border-[#252b37] p-4 flex flex-col gap-3 min-h-0">
-            <div className="flex items-center gap-2 text-[13px] font-semibold text-[#f3f5f9]">
-              <FolderInput className="w-4 h-4 text-[#34d399]" />
-              <span>第二步：扫描回流目录并批量入镜</span>
-            </div>
-            <p className="text-[12px] text-[#a4aec0] leading-relaxed">
-              自动按编号匹配 01.mp4 / 镜02_flow.mp4 / shot03.mp4，支持 SHA-256 去重与未命名文件下拉手动指定镜头。
-            </p>
-            <button
-              type="button"
-              data-testid="btn-scan-external-drop"
-              disabled={scanning}
-              onClick={() => void handleScanDrop()}
-              className="btn-secondary justify-center"
-            >
-              {scanning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FolderInput className="w-3.5 h-3.5" />}
-              <span>{scanning ? "扫描中…" : "选择回流文件夹并预览匹配"}</span>
-            </button>
-
-            {scanRes && (
-              <div className="flex flex-col gap-2 flex-1 min-h-0">
-                <div className="text-[11px] text-[#a4aec0] flex items-center justify-between gap-2">
-                  <span>{scanRes.message}</span>
-                  {scanRes.ignoredTempCount > 0 && (
-                    <span className="text-[#fbbf24]">已忽略 {scanRes.ignoredTempCount} 个未下完临时文件</span>
-                  )}
-                </div>
-
-                <div className="max-h-[210px] overflow-y-auto flex flex-col gap-1.5 pr-1">
-                  {scanRes.items.map((item) => (
-                    <div
-                      key={item.filePath}
-                      className="rounded bg-[#14171e] border border-[#252b37] px-2.5 py-2 flex flex-col gap-1"
-                    >
-                      <div className="flex items-center justify-between gap-2 text-[11px]">
-                        <span className="text-[#f3f5f9] font-medium truncate">{item.fileName}</span>
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[10px] shrink-0 ${
-                            item.isDuplicate
-                              ? "bg-[#1b2029] text-[#768196]"
-                              : manualBindings[item.filePath]
-                                ? "bg-[#10b981]/15 text-[#34d399]"
-                                : "bg-[#f59e0b]/15 text-[#fbbf24]"
-                          }`}
-                        >
-                          {item.isDuplicate
-                            ? "重复已跳过"
-                            : item.matchedShotId
-                              ? `自动匹配 #${item.detectedIndex}`
-                              : "请手动指定"}
-                        </span>
-                      </div>
-                      {!item.isDuplicate && (
-                        <select
-                          className="input-field h-7 px-2 text-[11px]"
-                          value={manualBindings[item.filePath] ?? ""}
-                          onChange={(e) =>
-                            setManualBindings((prev) => ({
-                              ...prev,
-                              [item.filePath]: e.target.value,
-                            }))
-                          }
-                        >
-                          <option value="">不导入此文件</option>
-                          {epShots.map((sh, idx) => (
-                            <option key={sh.id} value={sh.id}>
-                              镜 {String(idx + 1).padStart(2, "0")} · {sh.title}
-                            </option>
-                          ))}
-                        </select>
-                      )}
+              <div className="max-h-[210px] overflow-y-auto flex flex-col gap-1.5 pr-1">
+                {scanRes.items.map((item) => (
+                  <div
+                    key={item.filePath}
+                    className="rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)] px-2.5 py-2 flex flex-col gap-1"
+                  >
+                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                      <span className="text-[var(--text-primary)] font-medium truncate">{item.fileName}</span>
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] shrink-0 ${
+                          item.isDuplicate
+                            ? "bg-[var(--bg-elevated)] text-[var(--text-muted)]"
+                            : manualBindings[item.filePath]
+                              ? "bg-[var(--accent-success-soft)] text-[var(--accent-success-text)]"
+                              : "bg-[var(--accent-amber-soft)] text-[var(--accent-amber-text)]"
+                        }`}
+                      >
+                        {item.isDuplicate
+                          ? "重复已跳过"
+                          : item.matchedShotId
+                            ? `自动匹配 #${item.detectedIndex}`
+                            : "请手动指定"}
+                      </span>
                     </div>
-                  ))}
-                </div>
-
-                <label className="flex items-center gap-2 text-[11px] text-[#a4aec0] cursor-pointer pt-1">
-                  <input
-                    type="checkbox"
-                    checked={overwriteSelectedVideo}
-                    onChange={(e) => setOverwriteSelectedVideo(e.target.checked)}
-                  />
-                  <span>导入后直接切换为当前采用版本（默认仅自动选中尚无视频的镜头）</span>
-                </label>
-
-                <button
-                  type="button"
-                  data-testid="btn-commit-external-drop"
-                  disabled={committing || readyToCommit.length === 0}
-                  onClick={() => void handleCommitImport()}
-                  className="btn-primary justify-center"
-                >
-                  {committing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-                  <span>{committing ? "正在入库…" : `确认批量导入 ${readyToCommit.length} 个文件`}</span>
-                </button>
+                    {!item.isDuplicate && (
+                      <select
+                        className="input-field h-7 px-2 text-[11px]"
+                        value={manualBindings[item.filePath] ?? ""}
+                        onChange={(e) =>
+                          setManualBindings((prev) => ({
+                            ...prev,
+                            [item.filePath]: e.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">不导入此文件</option>
+                        {epShots.map((sh, idx) => (
+                          <option key={sh.id} value={sh.id}>
+                            镜 {String(idx + 1).padStart(2, "0")} · {sh.title}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                ))}
               </div>
-            )}
-          </section>
-        </div>
+
+              <label className="flex items-center gap-2 text-[11px] text-[var(--text-secondary)] cursor-pointer pt-1">
+                <input
+                  type="checkbox"
+                  checked={overwriteSelectedVideo}
+                  onChange={(e) => setOverwriteSelectedVideo(e.target.checked)}
+                />
+                <span>导入后立即设为当前使用版本（默认保留已有选定视频）</span>
+              </label>
+
+              <button
+                type="button"
+                data-testid="btn-commit-external-drop"
+                disabled={committing || readyToCommit.length === 0}
+                onClick={() => void handleCommitImport()}
+                className="btn-primary justify-center"
+              >
+                {committing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                <span>{committing ? "正在入库…" : `确认批量导入 ${readyToCommit.length} 个文件`}</span>
+              </button>
+            </div>
+          )}
+        </section>
       </div>
-    </div>
+    </ModalShell>
   );
 }

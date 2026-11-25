@@ -1,25 +1,13 @@
 import { create } from "zustand";
-import type {
-  ExportEpisodeResult,
-  ExportProgressEvent,
-  FfmpegStatus,
-} from "../../shared/ipc-contract";
-import type {
-  AssetKind,
-  CreateProjectInput,
-  ProjectSummary,
-  ProjectWorkspace,
-  StageId,
-  TakeKind,
-  UpdateAssetInput,
-  UpdateProjectSettingsInput,
-  UpdateShotInput,
-} from "../../shared/types/domain";
+import type { ExportEpisodeResult, ExportProgressEvent, FfmpegStatus } from "../../shared/ipc-contract";
+import type { AssetKind, CreateProjectInput, ProjectSummary, ProjectWorkspace, StageId, TakeKind, UpdateAssetInput, UpdateProjectSettingsInput, UpdateShotInput } from "../../shared/types/domain";
 import type { ModelCenterSnapshot, ModelRouting, SaveProviderConfigInput } from "../../shared/types/provider";
 import { getDesktopClient } from "../lib/desktop-client";
 import { createPersistenceQueue, type SaveState } from "../lib/persistence-queue";
+import { CAPABILITY_LABELS, computeAutoFillRouting } from "../lib/provider-auto-route";
 
 const queue = createPersistenceQueue();
+let toastSeq = 0;
 
 export async function flushPendingSaves(): Promise<boolean> {
   const res = await queue.flushAll();
@@ -59,6 +47,7 @@ interface StudioStore {
   toggleSidebar: () => void;
   setModelCenterOpen: (open: boolean) => void;
   setExportModalOpen: (open: boolean) => void;
+  showToast: (message: string, durationMs?: number) => void;
   clearToast: () => void;
 
   createEpisode: (title?: string) => Promise<void>;
@@ -91,11 +80,12 @@ interface StudioStore {
 export const useStudioStore = create<StudioStore>((set, get) => {
   const client = getDesktopClient();
 
-  const flashToast = (message: string) => {
+  const flashToast = (message: string, durationMs = 3400) => {
+    const id = ++toastSeq;
     set({ toast: message });
     setTimeout(() => {
-      if (get().toast === message) set({ toast: null });
-    }, 3200);
+      if (toastSeq === id) set({ toast: null });
+    }, durationMs);
   };
 
   const guardFlush = async (): Promise<boolean> => {
@@ -227,7 +217,12 @@ export const useStudioStore = create<StudioStore>((set, get) => {
       set({ exportModalOpen: open });
     },
 
+    showToast(message, durationMs) {
+      flashToast(message, durationMs);
+    },
+
     clearToast() {
+      ++toastSeq;
       set({ toast: null });
     },
 
@@ -475,9 +470,17 @@ export const useStudioStore = create<StudioStore>((set, get) => {
     },
 
     async saveProvider(input) {
-      await client.saveProviderConfig(input);
-      set({ modelCenter: await client.getModelCenter() });
-      flashToast(`已保存厂家「${input.name}」`);
+      const saved = await client.saveProviderConfig(input);
+      let mc = await client.getModelCenter();
+      const { next, filledCaps } = computeAutoFillRouting(mc.routing, saved);
+      if (filledCaps.length > 0) {
+        await client.updateModelRouting(next);
+        mc = await client.getModelCenter();
+        flashToast(`已保存「${saved.name}」，并自动设为${filledCaps.map((c) => CAPABILITY_LABELS[c]).join("、")}默认模型`);
+      } else {
+        flashToast(`已保存「${saved.name}」`);
+      }
+      set({ modelCenter: mc });
     },
 
     async deleteProvider(providerId) {
@@ -489,7 +492,7 @@ export const useStudioStore = create<StudioStore>((set, get) => {
     async updateRouting(routing) {
       await client.updateModelRouting(routing);
       set({ modelCenter: await client.getModelCenter() });
-      flashToast("默认模型路由已更新");
+      flashToast("默认模型已更新");
     },
   };
 });

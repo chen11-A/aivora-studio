@@ -57,12 +57,7 @@ interface AiGenerationStore {
 }
 
 function showToast(message: string) {
-  useStudioStore.setState({ toast: message });
-  setTimeout(() => {
-    if (useStudioStore.getState().toast === message) {
-      useStudioStore.setState({ toast: null });
-    }
-  }, 3600);
+  useStudioStore.getState().showToast(message, 3600);
 }
 
 async function syncModelCenter() {
@@ -230,11 +225,14 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
     async confirmRunPendingPlan() {
       const plan = get().pendingPlan;
       if (!plan || !plan.canRun || get().runningJob) return;
-      set({ runningJob: true, pendingPlan: null, jobDrawerOpen: true });
+      set({ runningJob: true, pendingPlan: null });
+      showToast(`已开始后台生成「${plan.shotTitle}」，你可以继续编辑其他镜头`);
       try {
         const res = await client.confirmAndRunJob(plan);
         const freshWs = await client.openProject(plan.projectId);
-        useStudioStore.setState({ workspace: freshWs, saveState: "saved" });
+        if (useStudioStore.getState().workspace?.project.id === plan.projectId) {
+          useStudioStore.setState({ workspace: freshWs, saveState: "saved" });
+        }
         await get().refreshJobs();
         showToast(res.message);
       } catch (err) {
