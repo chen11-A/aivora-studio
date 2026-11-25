@@ -391,7 +391,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
             </span>
             <span>{themeLabel}</span>
           </button>
-          <span className="tabular-nums">v1.9.1</span>
+          <span className="tabular-nums">v1.9.2</span>
         </div>
       </footer>
     </div>

@@ -37,6 +37,8 @@ function TraceBanner({ trace }: { trace: SkillStepTrace }) {
 
 export function DirectorProposalModal() {
   const proposal = useAiGenerationStore((s) => s.directorProposal);
+  const proposalTarget = useAiGenerationStore((s) => s.directorProposalTarget);
+  const directorLoading = useAiGenerationStore((s) => s.directorLoading);
   const close = useAiGenerationStore((s) => s.closeDirectorProposal);
   const apply = useAiGenerationStore((s) => s.applyDirector);
   const workspace = useStudioStore((s) => s.workspace);
@@ -52,10 +54,27 @@ export function DirectorProposalModal() {
     if (proposal) setTab("shots");
   }, [proposal]);
 
-  const epId = activeEpisodeId ?? workspace?.episodes[0]?.id ?? null;
+  const targetProjectId = proposalTarget?.projectId ?? activeProposal?.targetProjectId ?? null;
+  const targetEpId =
+    proposalTarget?.episodeId ??
+    activeProposal?.targetEpisodeId ??
+    activeEpisodeId ??
+    workspace?.episodes[0]?.id ??
+    null;
+  const targetEpTitle =
+    proposalTarget?.episodeTitle ??
+    activeProposal?.targetEpisodeTitle ??
+    workspace?.episodes.find((e) => e.id === targetEpId)?.title ??
+    "";
+  const isProjectMatch = !targetProjectId || !workspace || workspace.project.id === targetProjectId;
+  const isDifferentActiveEpisode = Boolean(
+    targetEpId && activeEpisodeId && targetEpId !== activeEpisodeId,
+  );
   const prevShots =
-    workspace && epId
-      ? workspace.shots.filter((s) => s.episodeId === epId).sort((a, b) => a.orderIndex - b.orderIndex)
+    workspace && targetEpId && isProjectMatch
+      ? workspace.shots
+          .filter((s) => s.episodeId === targetEpId)
+          .sort((a, b) => a.orderIndex - b.orderIndex)
       : [];
 
   const flatProposed: FlatProposedShot[] = [];
@@ -85,15 +104,17 @@ export function DirectorProposalModal() {
   const reviewIssues = activeProposal?.reviewReport?.issues ?? [];
 
   async function handleAccept() {
-    await apply();
-    await setStage("storyboard");
+    const applied = await apply();
+    if (applied) {
+      await setStage("storyboard");
+    }
   }
 
   let runningFlatIdx = 0;
 
   return (
     <ModalShell
-      open={Boolean(proposal)}
+      open={Boolean(proposal && isProjectMatch)}
       onClose={close}
       ariaLabel="三步拆镜提案预览"
       testId="director-proposal-modal"
@@ -106,7 +127,7 @@ export function DirectorProposalModal() {
             <div className="flex items-center gap-2 min-w-0">
               <Sparkles className="w-4 h-4 text-[var(--accent-primary-text)] shrink-0" />
               <h2 className="text-[15px] font-semibold text-[var(--text-primary)] truncate tabular-nums">
-                拆镜提案（{activeProposal.scenes.length} 场 · {totalShots} 剪辑镜 / {paidVideoShots} 付费视频镜 · {totalSec}s）
+                拆镜提案{targetEpTitle ? ` · ${targetEpTitle}` : ""}（{activeProposal.scenes.length} 场 · {totalShots} 剪辑镜 / {paidVideoShots} 付费视频镜 · {totalSec}s）
               </h2>
               <span
                 className={`px-2 py-0.5 rounded text-[11px] shrink-0 ${
@@ -129,6 +150,17 @@ export function DirectorProposalModal() {
           </div>
 
           <div className="px-5 py-2.5 bg-[var(--bg-inset)] border-b border-[var(--border-subtle)] flex flex-col gap-2">
+            {isDifferentActiveEpisode && (
+              <div
+                data-testid="director-proposal-episode-notice"
+                className="rounded-lg px-2.5 py-1.5 bg-[var(--accent-amber-soft)] border border-[var(--accent-amber-border)] text-[11px] text-[var(--accent-amber-ink)] flex items-center gap-1.5"
+              >
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-[var(--accent-amber-text)]" />
+                <span>
+                  此提案归属「{targetEpTitle || "原分集"}」，点击采纳将严格写入该分集并自动切回，不会覆盖你刚切到的分集。
+                </span>
+              </div>
+            )}
             <div className="flex flex-wrap items-center justify-between gap-2">
               <SlidingSegmentedControl<ProposalTab>
                 ariaLabel="三步提案视图切换"
@@ -409,17 +441,24 @@ export function DirectorProposalModal() {
           </div>
 
           <div className="h-14 px-5 border-t border-[var(--border-subtle)] flex items-center justify-end gap-2.5 shrink-0">
-            <button type="button" className="btn-secondary" onClick={close}>
+            <button type="button" className="btn-secondary" disabled={directorLoading} onClick={close}>
               放弃提案
             </button>
             <button
               type="button"
               data-testid="accept-director-proposal"
+              disabled={directorLoading}
               onClick={() => void handleAccept()}
               className="btn-primary"
             >
               <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>采纳提案并进入分镜</span>
+              <span>
+                {directorLoading
+                  ? "正在写入分镜…"
+                  : isDifferentActiveEpisode && targetEpTitle
+                    ? `采纳并写入「${targetEpTitle}」`
+                    : "采纳提案并进入分镜"}
+              </span>
             </button>
           </div>
         </>

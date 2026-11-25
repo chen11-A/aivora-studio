@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveConfirmedFirstFrameTake, resolveShotSpeechVoiceId } from "../../shared/media-selection";
 import type { Job } from "../../shared/types/domain";
-import type { GenerationPlan, JobExecutionResult } from "../../shared/types/jobs";
+import type { GenerationPlan, JobExecutionResult, LockedGenerationInput } from "../../shared/types/jobs";
 import type { CapabilityKey } from "../../shared/types/provider";
 import type { OAuthManager } from "../auth/auth-manager";
 import { GROK_API } from "../auth/grok-oauth";
@@ -30,9 +30,11 @@ import {
   type LockedProviderSnapshot,
 } from "./job-persistence";
 
+const MAX_PREPARED_PLAN_CACHE = 512;
+
 /**
  * Anti-Duplicate-Charge Job Queue:
- * 1. `preparePlan` produces an explicit confirmation summary with locked config snapshot (0 network calls).
+ * 1. `preparePlan` produces an explicit confirmation summary with locked config & input snapshot (0 network calls).
  * 2. `confirmAndRun` executes strictly against the locked snapshot; ambiguous network timeouts become `unknown`
  *    and NEVER auto-retry; failures NEVER overwrite a shot's currently selected take.
  * 3. `recoverUnknownJob` performs strictly GET-only status lookup by `remoteTaskId`.
@@ -40,6 +42,7 @@ import {
 export class GenerationJobQueue {
   private readonly activeJobIds = new Set<string>();
   private readonly activeInputHashes = new Set<string>();
+  private readonly preparedPlans = new Map<string, GenerationPlan>();
 
   constructor(
     private readonly projects: ProjectStore,
@@ -112,6 +115,8 @@ export class GenerationJobQueue {
           injectedRefs: [],
           primaryReferenceImageBase64: null,
           primaryReferenceImagePath: null,
+          primaryReferenceMediaPath: null,
+          primaryReferenceMediaSha256: null,
         };
 
     const capability: CapabilityKey =
@@ -159,7 +164,7 @@ export class GenerationJobQueue {
           protocol: provider.protocol,
           baseUrl: provider.baseUrl,
           modelId,
-          klingMode: prepared.primaryReferenceImageBase64 ? "image2video" : "text2video",
+          klingMode: prepared.primaryReferenceMediaPath ? "image2video" : "text2video",
         };
       }
     }
@@ -183,9 +188,28 @@ export class GenerationJobQueue {
         : prepared.finalPrompt;
     const speechVoice =
       shot && input.kind === "speech" ? resolveShotSpeechVoiceId(shot, ws.assets) : "";
+    const lockedInput: LockedGenerationInput = {
+      finalPrompt: promptPreview,
+      negativePrompt: shot ? shot.negativePrompt : "",
+      durationSec: shot ? shot.durationSec : 0,
+      aspectRatio: ws.project.aspectRatio,
+      firstFrameMediaPath: confirmedFirstFrame?.mediaPath ?? null,
+      referenceMediaPath:
+        input.kind === "speech" || isPortrait ? null : prepared.primaryReferenceMediaPath,
+      referenceMediaSha256:
+        input.kind === "speech" || isPortrait ? null : prepared.primaryReferenceMediaSha256,
+      speechVoice,
+    };
     const targetKey = input.assetId || input.shotId;
     const inputSha256 = createHash("sha256")
-      .update(`${targetKey}:${input.kind}:${modelId}:${speechVoice}:${promptPreview}`)
+      .update(
+        JSON.stringify({
+          targetKey,
+          kind: input.kind,
+          modelId,
+          ...lockedInput,
+        }),
+      )
       .digest("hex");
 
     if (!blockingReason && this.activeInputHashes.has(inputSha256)) {
@@ -204,7 +228,7 @@ export class GenerationJobQueue {
       upstreamDurationNote = `将发送至已配置的 ComfyUI 算力 Worker（按 ${shot.durationSec}s 渲染）`;
     }
 
-    return {
+    const plan: GenerationPlan = {
       planId: `pln_${randomUUID().replaceAll("-", "").slice(0, 10)}`,
       projectId: input.projectId,
       shotId: input.shotId,
@@ -223,13 +247,41 @@ export class GenerationJobQueue {
       idempotencyKey: `idem_${randomUUID().replaceAll("-", "").slice(0, 16)}`,
       inputSha256,
       providerSnapshotJson: lockedSnap ? JSON.stringify(lockedSnap) : "",
+      lockedInput,
       canRun: blockingReason === null,
       blockingReason,
     };
+    this.rememberPreparedPlan(plan);
+    return plan;
   }
 
-  async confirmAndRun(plan: GenerationPlan): Promise<JobExecutionResult> {
-    if (!plan.canRun || !plan.providerSnapshotJson) {
+  private rememberPreparedPlan(plan: GenerationPlan): void {
+    this.preparedPlans.set(plan.planId, structuredClone(plan));
+    if (this.preparedPlans.size > MAX_PREPARED_PLAN_CACHE) {
+      const oldestKey = this.preparedPlans.keys().next().value;
+      if (oldestKey) this.preparedPlans.delete(oldestKey);
+    }
+  }
+
+  private resolveAuthoritativePlan(plan: GenerationPlan): GenerationPlan {
+    const cached = this.preparedPlans.get(plan.planId);
+    if (
+      cached &&
+      cached.projectId === plan.projectId &&
+      cached.shotId === plan.shotId &&
+      (cached.assetId ?? null) === (plan.assetId ?? null) &&
+      cached.kind === plan.kind &&
+      cached.providerSnapshotJson === plan.providerSnapshotJson &&
+      cached.inputSha256 === plan.inputSha256
+    ) {
+      return structuredClone(cached);
+    }
+    return plan;
+  }
+
+  async confirmAndRun(rawPlan: GenerationPlan): Promise<JobExecutionResult> {
+    const plan = this.resolveAuthoritativePlan(rawPlan);
+    if (!plan.canRun || !plan.providerSnapshotJson || !plan.lockedInput) {
       throw new Error(plan.blockingReason || "任务配置不完整，无法开始生成");
     }
     if (this.activeInputHashes.has(plan.inputSha256)) {
@@ -237,6 +289,10 @@ export class GenerationJobQueue {
     }
     const snapshot = JSON.parse(plan.providerSnapshotJson) as LockedProviderSnapshot;
     const jobId = `job_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+
+    const ws = this.projects.openProject(plan.projectId);
+    const shotExists = plan.assetId ? true : ws.shots.some((s) => s.id === plan.shotId);
+    if (!shotExists) throw new Error("镜头不存在");
 
     insertRunningJobRow(this.projects, {
       jobId,
@@ -249,18 +305,13 @@ export class GenerationJobQueue {
       summaryText: `${plan.shotTitle} · ${snapshot.providerLabel} (${snapshot.modelId})`,
     });
 
-    const ws = this.projects.openProject(plan.projectId);
-    const shot = plan.assetId ? null : (ws.shots.find((s) => s.id === plan.shotId) ?? null);
-    if (!plan.assetId && !shot) throw new Error("镜头不存在");
-
     this.activeJobIds.add(jobId);
     this.activeInputHashes.add(plan.inputSha256);
     try {
       const creds = await resolveTrustedLockedSecrets(snapshot, this.globalConfig, this.oauth);
       const outcome = await dispatchGenerationJob({
         plan,
-        ws,
-        shot,
+        projectDir: ws.dirPath,
         snapshot,
         creds,
         fetcher: this.fetcher,
@@ -292,7 +343,7 @@ export class GenerationJobQueue {
           shotId: plan.shotId,
           kind: outcome.kind,
           media: outcome.media,
-          promptSnapshot: outcome.promptSnapshotOverride ?? plan.promptPreview,
+          promptSnapshot: outcome.promptSnapshotOverride ?? plan.lockedInput.finalPrompt,
           providerInfo: `${snapshot.providerLabel} · ${snapshot.modelId}`,
           durationSec,
         });

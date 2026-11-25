@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Asset, ProjectWorkspace, Shot } from "../../shared/types/domain";
 import type { InjectedRefSummary } from "../../shared/types/jobs";
 import { probeFfmpegStatus, runMediaBinary } from "../media/ffmpeg-locator";
@@ -12,6 +12,8 @@ export type PreparedPromptWithRefs = {
   injectedRefs: InjectedRefSummary[];
   primaryReferenceImageBase64: string | null;
   primaryReferenceImagePath: string | null;
+  primaryReferenceMediaPath: string | null;
+  primaryReferenceMediaSha256: string | null;
 };
 
 const RASTER_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
@@ -136,6 +138,8 @@ export function injectLockedReferences(
   // Extract primary raster reference image (prefer shot's own first-frame take for i2v, else first locked raster asset)
   let primaryReferenceImageBase64: string | null = null;
   let primaryReferenceImagePath: string | null = null;
+  let primaryReferenceMediaPath: string | null = null;
+  let primaryReferenceMediaSha256: string | null = null;
   const candidateRelPaths = [
     primaryTakeMediaPath ?? null,
     ...lockedAssets.map((a) => a.mediaPath),
@@ -145,8 +149,11 @@ export function injectLockedReferences(
     const abs = resolveConfinedMediaPath(projectDir, rel);
     if (!abs || !existsSync(abs)) continue;
     if (!RASTER_EXTS.has(path.extname(abs).toLowerCase())) continue;
+    const rawBytes = readFileSync(abs);
+    primaryReferenceMediaPath = rel;
+    primaryReferenceMediaSha256 = createHash("sha256").update(rawBytes).digest("hex");
     primaryReferenceImagePath = abs;
-    primaryReferenceImageBase64 = readFileSync(abs).toString("base64");
+    primaryReferenceImageBase64 = rawBytes.toString("base64");
     break;
   }
 
@@ -155,6 +162,8 @@ export function injectLockedReferences(
     injectedRefs,
     primaryReferenceImageBase64,
     primaryReferenceImagePath,
+    primaryReferenceMediaPath,
+    primaryReferenceMediaSha256,
   };
 }
 

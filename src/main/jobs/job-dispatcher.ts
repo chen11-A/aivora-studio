@@ -1,10 +1,8 @@
-import {
-  buildSpeechSnapshot,
-  resolveConfirmedFirstFrameTake,
-  resolveShotSpeechVoiceId,
-} from "../../shared/media-selection";
-import type { ProjectWorkspace, Shot } from "../../shared/types/domain";
-import type { GenerationPlan } from "../../shared/types/jobs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { buildSpeechSnapshot } from "../../shared/media-selection";
+import type { GenerationPlan, LockedGenerationInput } from "../../shared/types/jobs";
+import { resolveConfinedMediaPath } from "../media/media-protocol";
 import {
   downloadVerifiedComfyVideo,
   pollAndDownloadComfyWorkerVideo,
@@ -35,10 +33,7 @@ import {
   runOpenAiImageGeneration,
   runOpenAiSpeechSynthesis,
 } from "../providers/openai-compat-adapter";
-import {
-  injectLockedReferences,
-  prepareReferenceImageForUpload,
-} from "../providers/ref-image-injector";
+import { prepareReferenceImageForUpload } from "../providers/ref-image-injector";
 import {
   pollAndDownloadSeedanceVideo,
   querySeedanceVideoTask,
@@ -62,10 +57,29 @@ export type DispatchedJobOutcome =
       promptSnapshotOverride?: string;
     };
 
+async function loadLockedReferenceImage(
+  projectDir: string,
+  locked: LockedGenerationInput,
+): Promise<{ base64: string; mime: string; compressed: boolean } | null> {
+  if (!locked.referenceMediaPath) return null;
+  const absPath = resolveConfinedMediaPath(projectDir, locked.referenceMediaPath);
+  if (!absPath || !existsSync(absPath)) {
+    throw new Error(
+      "已确认的首帧或参考图文件已不存在，已拦截发送以避免降级为无参考图扣费，请重新确认后再生成。",
+    );
+  }
+  if (locked.referenceMediaSha256) {
+    const actualSha = createHash("sha256").update(readFileSync(absPath)).digest("hex");
+    if (actualSha !== locked.referenceMediaSha256) {
+      throw new Error("已确认的首帧或参考图文件内容已变化，已拦截发送，请重新确认后再生成。");
+    }
+  }
+  return prepareReferenceImageForUpload(absPath);
+}
+
 export async function dispatchGenerationJob(ctx: {
   plan: GenerationPlan;
-  ws: ProjectWorkspace;
-  shot: Shot | null;
+  projectDir: string;
   snapshot: LockedProviderSnapshot;
   creds: ResolvedCredentials;
   fetcher: typeof fetch;
@@ -77,7 +91,8 @@ export async function dispatchGenerationJob(ctx: {
     progress?: number;
   }) => void;
 }): Promise<DispatchedJobOutcome> {
-  const { plan, ws, shot, snapshot, creds, fetcher, pollIntervalMs, maxPollRounds, onUpdateJob } = ctx;
+  const { plan, projectDir, snapshot, creds, fetcher, pollIntervalMs, maxPollRounds, onUpdateJob } = ctx;
+  const locked = plan.lockedInput;
 
   // 1. Asset portrait candidate generation
   if (plan.assetId && plan.kind === "image") {
@@ -85,9 +100,9 @@ export async function dispatchGenerationJob(ctx: {
       baseUrl: creds.trustedBaseUrl,
       apiKey: creds.apiKey,
       modelId: snapshot.modelId,
-      prompt: plan.promptPreview,
-      aspectRatio: ws.project.aspectRatio,
-      projectDir: ws.dirPath,
+      prompt: locked.finalPrompt,
+      aspectRatio: locked.aspectRatio,
+      projectDir,
     };
     const media =
       snapshot.protocol === "gemini-official"
@@ -102,23 +117,19 @@ export async function dispatchGenerationJob(ctx: {
     };
   }
 
-  if (!shot) throw new Error("镜头不存在");
-
   // 2. Kling official async video
   if (plan.kind === "video" && snapshot.protocol === "kling-video") {
-    const firstFrame = resolveConfirmedFirstFrameTake(shot, ws.takes);
-    const prepared = injectLockedReferences(ws, ws.dirPath, shot, firstFrame?.mediaPath ?? null);
-    const refImg = await prepareReferenceImageForUpload(prepared.primaryReferenceImagePath);
+    const refImg = await loadLockedReferenceImage(projectDir, locked);
     const submitted = await submitKlingVideoTask(
       {
         baseUrl: creds.trustedBaseUrl,
         accessKey: creds.apiKey,
         secretKey: creds.secondaryKey ?? "",
         modelId: snapshot.modelId,
-        prompt: prepared.finalPrompt,
-        negativePrompt: shot.negativePrompt,
-        durationSec: shot.durationSec,
-        aspectRatio: ws.project.aspectRatio,
+        prompt: locked.finalPrompt,
+        negativePrompt: locked.negativePrompt,
+        durationSec: locked.durationSec,
+        aspectRatio: locked.aspectRatio,
         imageBase64: refImg?.base64 ?? null,
       },
       fetcher,
@@ -132,7 +143,7 @@ export async function dispatchGenerationJob(ctx: {
         secretKey: creds.secondaryKey ?? "",
         taskId: submitted.taskId,
         mode: submitted.mode,
-        projectDir: ws.dirPath,
+        projectDir,
         pollIntervalMs,
         maxPollRounds,
         onProgress: (progress) => onUpdateJob({ progress }),
@@ -144,17 +155,15 @@ export async function dispatchGenerationJob(ctx: {
 
   // 3. Volcengine Ark Seedance 2.0 / 2.5 official async video
   if (plan.kind === "video" && snapshot.protocol === "seedance-video") {
-    const firstFrame = resolveConfirmedFirstFrameTake(shot, ws.takes);
-    const prepared = injectLockedReferences(ws, ws.dirPath, shot, firstFrame?.mediaPath ?? null);
-    const refImg = await prepareReferenceImageForUpload(prepared.primaryReferenceImagePath);
+    const refImg = await loadLockedReferenceImage(projectDir, locked);
     const submitted = await submitSeedanceVideoTask(
       {
         baseUrl: creds.trustedBaseUrl,
         apiKey: creds.apiKey,
         modelId: snapshot.modelId,
-        prompt: prepared.finalPrompt,
-        durationSec: shot.durationSec,
-        aspectRatio: ws.project.aspectRatio,
+        prompt: locked.finalPrompt,
+        durationSec: locked.durationSec,
+        aspectRatio: locked.aspectRatio,
         imageBase64: refImg?.base64 ?? null,
         imageMime: refImg?.mime ?? "image/jpeg",
       },
@@ -166,7 +175,7 @@ export async function dispatchGenerationJob(ctx: {
         baseUrl: creds.trustedBaseUrl,
         apiKey: creds.apiKey,
         taskId: submitted.taskId,
-        projectDir: ws.dirPath,
+        projectDir,
         pollIntervalMs,
         maxPollRounds,
         onProgress: (progress) => onUpdateJob({ progress }),
@@ -178,16 +187,14 @@ export async function dispatchGenerationJob(ctx: {
 
   // 4. Google Gemini Official async video (Interactions API)
   if (plan.kind === "video" && snapshot.protocol === "gemini-official") {
-    const firstFrame = resolveConfirmedFirstFrameTake(shot, ws.takes);
-    const prepared = injectLockedReferences(ws, ws.dirPath, shot, firstFrame?.mediaPath ?? null);
-    const refImg = await prepareReferenceImageForUpload(prepared.primaryReferenceImagePath);
+    const refImg = await loadLockedReferenceImage(projectDir, locked);
     const submitted = await submitGeminiVideoTask(
       {
         baseUrl: creds.trustedBaseUrl,
         apiKey: creds.apiKey,
         modelId: snapshot.modelId,
-        prompt: prepared.finalPrompt,
-        aspectRatio: ws.project.aspectRatio,
+        prompt: locked.finalPrompt,
+        aspectRatio: locked.aspectRatio,
         imageBase64: refImg?.base64 ?? null,
         imageMime: refImg?.mime ?? "image/jpeg",
       },
@@ -199,7 +206,7 @@ export async function dispatchGenerationJob(ctx: {
         baseUrl: creds.trustedBaseUrl,
         apiKey: creds.apiKey,
         taskId: submitted.taskId,
-        projectDir: ws.dirPath,
+        projectDir,
         pollIntervalMs,
         maxPollRounds,
         onProgress: (progress) => onUpdateJob({ progress }),
@@ -211,18 +218,16 @@ export async function dispatchGenerationJob(ctx: {
 
   // 5. Google Colab / Local ComfyUI Worker async video
   if (plan.kind === "video" && snapshot.protocol === "comfy-worker") {
-    const firstFrame = resolveConfirmedFirstFrameTake(shot, ws.takes);
-    const prepared = injectLockedReferences(ws, ws.dirPath, shot, firstFrame?.mediaPath ?? null);
-    const refImg = await prepareReferenceImageForUpload(prepared.primaryReferenceImagePath);
+    const refImg = await loadLockedReferenceImage(projectDir, locked);
     const submitted = await submitComfyWorkerVideo(
       {
         baseUrl: creds.trustedBaseUrl,
         apiKey: creds.apiKey,
         modelId: snapshot.modelId,
-        prompt: prepared.finalPrompt,
-        negativePrompt: shot.negativePrompt,
-        durationSec: shot.durationSec,
-        aspectRatio: ws.project.aspectRatio,
+        prompt: locked.finalPrompt,
+        negativePrompt: locked.negativePrompt,
+        durationSec: locked.durationSec,
+        aspectRatio: locked.aspectRatio,
         imageBase64: refImg?.base64 ?? null,
       },
       fetcher,
@@ -233,7 +238,7 @@ export async function dispatchGenerationJob(ctx: {
         baseUrl: creds.trustedBaseUrl,
         apiKey: creds.apiKey,
         taskId: submitted.taskId,
-        projectDir: ws.dirPath,
+        projectDir,
         pollIntervalMs,
         maxPollRounds,
         onProgress: (progress) => onUpdateJob({ progress }),
@@ -245,17 +250,15 @@ export async function dispatchGenerationJob(ctx: {
 
   // 6. Grok OAuth async video
   if (plan.kind === "video" && snapshot.protocol === "oauth-grok") {
-    const firstFrame = resolveConfirmedFirstFrameTake(shot, ws.takes);
-    const prepared = injectLockedReferences(ws, ws.dirPath, shot, firstFrame?.mediaPath ?? null);
-    const refImg = await prepareReferenceImageForUpload(prepared.primaryReferenceImagePath);
+    const refImg = await loadLockedReferenceImage(projectDir, locked);
     const submitted = await submitGrokVideoTask(
       {
         baseUrl: creds.trustedBaseUrl,
         accessToken: creds.apiKey,
         modelId: snapshot.modelId,
-        prompt: prepared.finalPrompt,
-        durationSec: shot.durationSec,
-        aspectRatio: ws.project.aspectRatio,
+        prompt: locked.finalPrompt,
+        durationSec: locked.durationSec,
+        aspectRatio: locked.aspectRatio,
         imageBase64: refImg?.base64 ?? null,
       },
       fetcher,
@@ -266,7 +269,7 @@ export async function dispatchGenerationJob(ctx: {
         baseUrl: creds.trustedBaseUrl,
         accessToken: creds.apiKey,
         taskId: submitted.taskId,
-        projectDir: ws.dirPath,
+        projectDir,
         pollIntervalMs,
         maxPollRounds,
         onProgress: (progress) => onUpdateJob({ progress }),
@@ -278,8 +281,7 @@ export async function dispatchGenerationJob(ctx: {
 
   // 7. Shot first-frame image generation (Gemini Official, ComfyUI Worker, or OpenAI-compat)
   if (plan.kind === "image") {
-    const prepared = injectLockedReferences(ws, ws.dirPath, shot, null);
-    const refImg = await prepareReferenceImageForUpload(prepared.primaryReferenceImagePath);
+    const refImg = await loadLockedReferenceImage(projectDir, locked);
     const media =
       snapshot.protocol === "gemini-official"
         ? await runGeminiImageGeneration(
@@ -287,9 +289,9 @@ export async function dispatchGenerationJob(ctx: {
               baseUrl: creds.trustedBaseUrl,
               apiKey: creds.apiKey,
               modelId: snapshot.modelId,
-              prompt: plan.promptPreview,
-              aspectRatio: ws.project.aspectRatio,
-              projectDir: ws.dirPath,
+              prompt: locked.finalPrompt,
+              aspectRatio: locked.aspectRatio,
+              projectDir,
               referenceImageBase64: refImg?.base64 ?? null,
               referenceImageMime: refImg?.mime ?? "image/jpeg",
             },
@@ -301,10 +303,10 @@ export async function dispatchGenerationJob(ctx: {
                 baseUrl: creds.trustedBaseUrl,
                 apiKey: creds.apiKey,
                 modelId: snapshot.modelId,
-                prompt: plan.promptPreview,
-                negativePrompt: shot.negativePrompt,
-                aspectRatio: ws.project.aspectRatio,
-                projectDir: ws.dirPath,
+                prompt: locked.finalPrompt,
+                negativePrompt: locked.negativePrompt,
+                aspectRatio: locked.aspectRatio,
+                projectDir,
                 referenceImageBase64: refImg?.base64 ?? null,
               },
               fetcher,
@@ -314,9 +316,9 @@ export async function dispatchGenerationJob(ctx: {
                 baseUrl: creds.trustedBaseUrl,
                 apiKey: creds.apiKey,
                 modelId: snapshot.modelId,
-                prompt: plan.promptPreview,
-                aspectRatio: ws.project.aspectRatio,
-                projectDir: ws.dirPath,
+                prompt: locked.finalPrompt,
+                aspectRatio: locked.aspectRatio,
+                projectDir,
                 referenceImageBase64: refImg?.base64 ?? null,
               },
               fetcher,
@@ -326,14 +328,14 @@ export async function dispatchGenerationJob(ctx: {
 
   // 8. Speech TTS synthesis (Gemini Official or OpenAI-compat)
   if (plan.kind === "speech") {
-    const voice = resolveShotSpeechVoiceId(shot, ws.assets);
+    const voice = locked.speechVoice || "alloy";
     const ttsInput = {
       baseUrl: creds.trustedBaseUrl,
       apiKey: creds.apiKey,
       modelId: snapshot.modelId,
-      text: plan.promptPreview,
+      text: locked.finalPrompt,
       voice,
-      projectDir: ws.dirPath,
+      projectDir,
     };
     const media =
       snapshot.protocol === "gemini-official"
@@ -344,7 +346,7 @@ export async function dispatchGenerationJob(ctx: {
       kind: "speech",
       media,
       message: "对白配音生成成功，已绑定至当前镜头",
-      promptSnapshotOverride: buildSpeechSnapshot(plan.promptPreview, voice),
+      promptSnapshotOverride: buildSpeechSnapshot(locked.finalPrompt, voice),
     };
   }
 

@@ -1,5 +1,5 @@
 import type { ProjectWorkspace } from "../../shared/types/domain";
-import type { DirectorProposal } from "../../shared/types/jobs";
+import type { DirectorProposal, GenerationPlan } from "../../shared/types/jobs";
 import type {
   ActionPolishProposal,
   ScreenwriterOutlineProposal,
@@ -95,6 +95,9 @@ export function buildPreviewDirectorProposal(
   }));
   const paidCount = shots.filter((s) => s.videoPlanMode === "paid_video").length;
   return {
+    targetProjectId: ws?.project.id,
+    targetEpisodeId: episodeId,
+    targetEpisodeTitle: ep?.title || "第 1 集",
     sourceMode: "offline_preview",
     providerSummary: "预览模式 · 三步提案链",
     softTargetShotsPerScene: softTarget,
@@ -188,5 +191,57 @@ export function buildPreviewActionPolish(
     actionBeats: ["起势：建立空间与视线", "发力：突出动作与道具交互", "定格：保留反应余韵"],
     keyBeat: true,
     keyBeatReason: "核心动作精修镜",
+  };
+}
+
+export function buildPreviewGenerationPlan(
+  ws: ProjectWorkspace,
+  input: { projectId: string; shotId: string; assetId?: string; kind: "image" | "video" | "speech" },
+): GenerationPlan {
+  const shot = ws.shots.find((s) => s.id === input.shotId) ?? ws.shots[0]!;
+  const targetAsset = input.assetId ? ws.assets.find((a) => a.id === input.assetId) : null;
+  const locked = ws.assets
+    .filter((a) => a.lockedRef && (a.kind === "character" || a.kind === "scene" || a.kind === "prop"))
+    .map((a) => ({
+      assetId: a.id,
+      name: a.name,
+      kind: a.kind as "character" | "scene" | "prop",
+      mediaPath: a.mediaPath,
+      description: a.description,
+    }));
+  const promptPreview = targetAsset
+    ? `${targetAsset.name} · ${targetAsset.description}`
+    : shot.visualPrompt || shot.title;
+  return {
+    planId: `pln_${Date.now()}`,
+    projectId: input.projectId,
+    shotId: shot.id,
+    assetId: targetAsset?.id ?? null,
+    shotTitle: targetAsset ? `定妆候选 · ${targetAsset.name}` : shot.title,
+    kind: input.kind,
+    capability: input.kind === "speech" ? "tts" : input.kind,
+    providerLabel: "未配置模型",
+    protocol: "none",
+    modelId: "",
+    estimatedSec: input.kind === "video" ? 60 : 12,
+    promptPreview,
+    injectedRefs: targetAsset ? [] : locked,
+    firstFramePath: null,
+    upstreamDurationNote: null,
+    idempotencyKey: `idem_${Date.now()}`,
+    inputSha256: "preview",
+    providerSnapshotJson: "",
+    lockedInput: {
+      finalPrompt: promptPreview,
+      negativePrompt: shot.negativePrompt,
+      durationSec: shot.durationSec,
+      aspectRatio: ws.project.aspectRatio,
+      firstFrameMediaPath: null,
+      referenceMediaPath: null,
+      referenceMediaSha256: null,
+      speechVoice: "",
+    },
+    canRun: false,
+    blockingReason: "请先在「模型中心」配置对应环节的模型路由与密钥，再确认发起生成。",
   };
 }

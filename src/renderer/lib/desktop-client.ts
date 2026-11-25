@@ -10,6 +10,7 @@ import type { ModelCenterSnapshot, ModelRouting, ProviderConfigView } from "../.
 import {
   buildPreviewActionPolish,
   buildPreviewDirectorProposal,
+  buildPreviewGenerationPlan,
   buildPreviewOutline,
   buildPreviewReviewReport,
 } from "./browser-preview-story";
@@ -371,11 +372,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     proposeDirectorSplit: async ({ projectId, episodeId, softTargetShotsPerScene }) => ({
       ok: true,
       message: "已生成三步提案预览（编剧分场 → 导演分镜 → 原文审片）",
-      proposal: buildPreviewDirectorProposal(
-        workspaces.get(projectId),
-        episodeId,
-        softTargetShotsPerScene,
-      ),
+      proposal: buildPreviewDirectorProposal(workspaces.get(projectId), episodeId, softTargetShotsPerScene),
     }),
     applyDirectorProposal: async ({ projectId }) => ({
       ok: true,
@@ -405,42 +402,8 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
         message: "已生成单镜动作三拍精修建议（确认后采纳）",
       };
     },
-    prepareGenerationPlan: async ({ projectId, shotId, assetId, kind }) => {
-      const ws = workspaces.get(projectId)!;
-      const shot = ws.shots.find((s) => s.id === shotId) ?? ws.shots[0]!;
-      const targetAsset = assetId ? ws.assets.find((a) => a.id === assetId) : null;
-      const locked = ws.assets
-        .filter((a) => a.lockedRef && (a.kind === "character" || a.kind === "scene" || a.kind === "prop"))
-        .map((a) => ({
-          assetId: a.id,
-          name: a.name,
-          kind: a.kind as "character" | "scene" | "prop",
-          mediaPath: a.mediaPath,
-          description: a.description,
-        }));
-      return {
-        planId: `pln_${Date.now()}`,
-        projectId,
-        shotId: shot.id,
-        assetId: targetAsset?.id ?? null,
-        shotTitle: targetAsset ? `定妆候选 · ${targetAsset.name}` : shot.title,
-        kind,
-        capability: kind === "speech" ? "tts" : kind,
-        providerLabel: "未配置模型",
-        protocol: "none",
-        modelId: "",
-        estimatedSec: kind === "video" ? 60 : 12,
-        promptPreview: targetAsset ? `${targetAsset.name} · ${targetAsset.description}` : shot.visualPrompt || shot.title,
-        injectedRefs: targetAsset ? [] : locked,
-        firstFramePath: null,
-        upstreamDurationNote: null,
-        idempotencyKey: `idem_${Date.now()}`,
-        inputSha256: "preview",
-        providerSnapshotJson: "",
-        canRun: false,
-        blockingReason: "请先在「模型中心」配置对应环节的模型路由与密钥，再确认发起生成。",
-      };
-    },
+    prepareGenerationPlan: async (input) =>
+      buildPreviewGenerationPlan(workspaces.get(input.projectId)!, input),
     confirmAndRunJob: async () => {
       throw new Error("请在桌面端配置模型后发起真实生成");
     },
@@ -485,7 +448,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     cancelEpisodeExport: async () => ({ ok: false, message: "浏览器预览模式无导出任务" }),
     onFlushBeforeClose: () => () => undefined,
     notifyFlushComplete: () => undefined,
-    getAppInfo: async () => ({ version: "1.9.1", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "1.9.2", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
     resolveDroppedFilePath: () => null,
   };

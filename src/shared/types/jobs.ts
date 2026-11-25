@@ -5,6 +5,7 @@ import {
   SourceSpanSchema,
   SpeakerStatusSchema,
   VideoPlanModeSchema,
+  type AspectRatio,
   type Job,
 } from "./domain";
 import type { CapabilityKey, OAuthProviderId } from "./provider";
@@ -70,6 +71,9 @@ export const DirectorGroundingReportSchema = z.object({
 export type DirectorGroundingReport = z.infer<typeof DirectorGroundingReportSchema>;
 
 export const DirectorProposalSchema = z.object({
+  targetProjectId: z.string().optional(),
+  targetEpisodeId: z.string().optional(),
+  targetEpisodeTitle: z.string().optional(),
   sourceMode: z.enum(["ai", "offline_preview"]).default("ai"),
   providerSummary: z.string().default(""),
   softTargetShotsPerScene: z.number().int().min(4).max(60).optional(),
@@ -88,6 +92,17 @@ export type InjectedRefSummary = {
   kind: "character" | "scene" | "prop";
   mediaPath: string | null;
   description: string;
+};
+
+export type LockedGenerationInput = {
+  finalPrompt: string;
+  negativePrompt: string;
+  durationSec: number;
+  aspectRatio: AspectRatio;
+  firstFrameMediaPath: string | null;
+  referenceMediaPath: string | null;
+  referenceMediaSha256: string | null;
+  speechVoice: string;
 };
 
 export type GenerationPlan = {
@@ -109,6 +124,7 @@ export type GenerationPlan = {
   idempotencyKey: string;
   inputSha256: string;
   providerSnapshotJson: string;
+  lockedInput: LockedGenerationInput;
   canRun: boolean;
   blockingReason: string | null;
 };

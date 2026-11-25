@@ -42,14 +42,26 @@ export function ScriptStage() {
   const liveReviewReport = useAiGenerationStore((s) => s.liveReviewReport);
   const clearLiveReviewReport = useAiGenerationStore((s) => s.clearLiveReviewReport);
   const runLiveEpisodeReview = useAiGenerationStore((s) => s.runLiveEpisodeReview);
+  const directorProposalTarget = useAiGenerationStore((s) => s.directorProposalTarget);
+  const closeDirectorProposal = useAiGenerationStore((s) => s.closeDirectorProposal);
   const [reviewExpanded, setReviewExpanded] = useState(false);
 
   const projectId = workspace?.project.id ?? null;
   useEffect(() => {
     clearLiveReviewReport();
     setReviewExpanded(false);
+    if (directorProposalTarget && projectId && directorProposalTarget.projectId !== projectId) {
+      closeDirectorProposal();
+    }
     if (projectId) void syncDirectorUndoState();
-  }, [projectId, activeEpisodeId, syncDirectorUndoState, clearLiveReviewReport]);
+  }, [
+    projectId,
+    activeEpisodeId,
+    syncDirectorUndoState,
+    clearLiveReviewReport,
+    directorProposalTarget,
+    closeDirectorProposal,
+  ]);
 
   if (!workspace) return null;
   const episode = workspace.episodes.find((e) => e.id === activeEpisodeId) ?? workspace.episodes[0];

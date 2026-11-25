@@ -8,9 +8,16 @@ import type {
 import type { AivoraDesktopApi } from "@shared/ipc-contract";
 import { flushPendingSaves, useStudioStore } from "./useStudioStore";
 
+export type DirectorProposalTarget = {
+  projectId: string;
+  episodeId: string;
+  episodeTitle: string;
+};
+
 export type StoryPipelineStateSlice = {
   directorLoading: boolean;
   directorProposal: DirectorProposal | null;
+  directorProposalTarget: DirectorProposalTarget | null;
   softTargetShotsPerScene: number;
   screenwriterOpen: boolean;
   screenwriterProjectId: string | null;
@@ -34,7 +41,7 @@ export type StoryPipelineActions = {
     sceneDrafts?: ScreenwriterSceneDraft[];
     softTargetShotsPerScene?: number;
   }) => Promise<void>;
-  applyDirector: () => Promise<void>;
+  applyDirector: () => Promise<boolean>;
   undoDirector: () => Promise<void>;
   runLiveEpisodeReview: () => Promise<void>;
   clearLiveReviewReport: () => void;
@@ -69,12 +76,15 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
   set: (partial: Partial<T>) => void,
   get: () => T & StoryPipelineActions,
 ): StoryPipelineActions {
+  let directorReqSeq = 0;
+  let undoSyncSeq = 0;
+
   return {
     setSoftTargetShotsPerScene(target) {
       set({ softTargetShotsPerScene: Math.max(6, Math.min(40, target)) } as Partial<T>);
     },
     closeDirectorProposal() {
-      set({ directorProposal: null } as Partial<T>);
+      set({ directorProposal: null, directorProposalTarget: null } as Partial<T>);
     },
     closeScreenwriterOutline() {
       set({
@@ -100,8 +110,14 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
         set({ lastUndoToken: null } as Partial<T>);
         return;
       }
-      const res = await client.getDirectorUndoState({ projectId: workspace.project.id, episodeId: epId });
-      set({ lastUndoToken: res.undoToken } as Partial<T>);
+      const reqProjectId = workspace.project.id;
+      const seq = ++undoSyncSeq;
+      const res = await client.getDirectorUndoState({ projectId: reqProjectId, episodeId: epId });
+      const curState = useStudioStore.getState();
+      const curEpId = curState.activeEpisodeId ?? curState.workspace?.episodes[0]?.id;
+      if (seq === undoSyncSeq && curState.workspace?.project.id === reqProjectId && curEpId === epId) {
+        set({ lastUndoToken: res.undoToken } as Partial<T>);
+      }
     },
 
     async openScreenwriterModal(rawText) {
@@ -190,52 +206,108 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
     },
 
     async proposeDirector(options) {
-      await flushEdits();
       const { workspace, activeEpisodeId } = useStudioStore.getState();
       const epId = activeEpisodeId ?? workspace?.episodes[0]?.id;
       if (!workspace || !epId) return;
+      const reqProjectId = workspace.project.id;
+      const reqEpisodeTitle = workspace.episodes.find((e) => e.id === epId)?.title ?? "当前分集";
       const softTarget = options?.softTargetShotsPerScene ?? get().softTargetShotsPerScene;
+      const seq = ++directorReqSeq;
       set({ directorLoading: true } as Partial<T>);
       try {
+        await flushEdits();
         const res = await client.proposeDirectorSplit({
-          projectId: workspace.project.id,
+          projectId: reqProjectId,
           episodeId: epId,
           softTargetShotsPerScene: softTarget,
           sceneDrafts: options?.sceneDrafts,
         });
+        if (seq !== directorReqSeq) return;
+        const curState = useStudioStore.getState();
+        if (curState.workspace?.project.id !== reqProjectId) return;
         if (res.ok && res.proposal) {
-          set({ directorProposal: res.proposal } as Partial<T>);
+          const boundTarget: DirectorProposalTarget = {
+            projectId: res.proposal.targetProjectId || reqProjectId,
+            episodeId: res.proposal.targetEpisodeId || epId,
+            episodeTitle: res.proposal.targetEpisodeTitle || reqEpisodeTitle,
+          };
+          set({
+            directorProposal: res.proposal,
+            directorProposalTarget: boundTarget,
+          } as Partial<T>);
         }
         showToast(res.message);
       } catch (err) {
-        showToast(err instanceof Error ? err.message : "导演拆镜调用失败");
+        if (seq === directorReqSeq) {
+          showToast(err instanceof Error ? err.message : "导演拆镜调用失败");
+        }
       } finally {
-        set({ directorLoading: false } as Partial<T>);
+        if (seq === directorReqSeq) {
+          set({ directorLoading: false } as Partial<T>);
+        }
       }
     },
 
     async applyDirector() {
-      const { workspace, activeEpisodeId } = useStudioStore.getState();
-      const epId = activeEpisodeId ?? workspace?.episodes[0]?.id;
+      const { workspace } = useStudioStore.getState();
       const proposal = get().directorProposal;
-      if (!workspace || !epId || !proposal) return;
-      const res = await client.applyDirectorProposal({
-        projectId: workspace.project.id,
-        episodeId: epId,
-        proposal,
-      });
-      if (res.ok && res.workspace) {
-        const firstShot =
-          res.workspace.shots.find((s) => s.episodeId === epId)?.id ?? res.workspace.shots[0]?.id ?? null;
-        useStudioStore.setState({ workspace: res.workspace, activeShotId: firstShot, saveState: "saved" });
-        set({
-          directorProposal: null,
-          lastUndoToken: res.undoToken ?? null,
-          actionPolishProposal: null,
-        } as Partial<T>);
-        void get().runLiveEpisodeReview();
+      const storedTarget = get().directorProposalTarget;
+      if (!workspace || !proposal || get().directorLoading) return false;
+      const targetProjectId = storedTarget?.projectId ?? proposal.targetProjectId ?? null;
+      const targetEpisodeId = storedTarget?.episodeId ?? proposal.targetEpisodeId ?? null;
+      if (!targetProjectId || !targetEpisodeId) {
+        showToast("拆镜提案缺少目标分集信息，请重新生成后再采纳。");
+        return false;
       }
-      showToast(res.message);
+      if (workspace.project.id !== targetProjectId) {
+        set({ directorProposal: null, directorProposalTarget: null } as Partial<T>);
+        showToast("当前已切换到其他作品，已拦截旧提案写入以防覆盖。");
+        return false;
+      }
+      if (!workspace.episodes.some((e) => e.id === targetEpisodeId)) {
+        set({ directorProposal: null, directorProposalTarget: null } as Partial<T>);
+        showToast("提案对应的原分集已不存在，无法采纳。");
+        return false;
+      }
+      set({ directorLoading: true } as Partial<T>);
+      try {
+        await flushEdits();
+        const res = await client.applyDirectorProposal({
+          projectId: targetProjectId,
+          episodeId: targetEpisodeId,
+          proposal,
+        });
+        if (res.ok && res.workspace) {
+          if (useStudioStore.getState().workspace?.project.id === targetProjectId) {
+            const firstShot =
+              res.workspace.shots.find((s) => s.episodeId === targetEpisodeId)?.id ??
+              res.workspace.shots[0]?.id ??
+              null;
+            useStudioStore.setState({
+              workspace: res.workspace,
+              activeEpisodeId: targetEpisodeId,
+              activeShotId: firstShot,
+              saveState: "saved",
+            });
+          }
+          set({
+            directorProposal: null,
+            directorProposalTarget: null,
+            lastUndoToken: res.undoToken ?? null,
+            actionPolishProposal: null,
+          } as Partial<T>);
+          showToast(res.message);
+          void get().runLiveEpisodeReview();
+          return true;
+        }
+        showToast(res.message);
+        return false;
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : "采纳拆镜提案失败");
+        return false;
+      } finally {
+        set({ directorLoading: false } as Partial<T>);
+      }
     },
 
     async undoDirector() {

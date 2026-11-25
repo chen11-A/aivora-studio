@@ -164,7 +164,20 @@ export function applyDirectorProposalToDb(
   },
 ): { ok: boolean; workspace?: ProjectWorkspace; undoToken?: string; message: string } {
   const valid = DirectorProposalSchema.parse(input.proposal);
+  if (valid.targetProjectId && valid.targetProjectId !== input.projectId) {
+    return { ok: false, message: "拆镜提案与当前作品不一致，已拦截写入以防跨作品覆盖。" };
+  }
+  if (valid.targetEpisodeId && valid.targetEpisodeId !== input.episodeId) {
+    const label = valid.targetEpisodeTitle || valid.targetEpisodeId;
+    return {
+      ok: false,
+      message: `拆镜提案属于「${label}」，与当前目标分集不一致，已拦截写入以防分镜串集。`,
+    };
+  }
   const before = projects.openProject(input.projectId);
+  if (!before.episodes.some((e) => e.id === input.episodeId)) {
+    return { ok: false, message: "目标分集不存在，无法写入拆镜提案。" };
+  }
   const undoToken = `undo_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
   const prevShots = before.shots
     .filter((s) => s.episodeId === input.episodeId)

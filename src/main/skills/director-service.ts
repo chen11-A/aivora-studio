@@ -206,11 +206,16 @@ export class DirectorService {
     const binding = snap.routing.script;
 
     if (!binding) {
-      const proposal = buildOfflineDirectorProposal(ep.title, ep.scriptText, {
-        existingAssets: ws.assets,
-        softTargetShotsPerScene: softTarget,
-        sceneDrafts: persistedSceneDrafts,
-      });
+      const proposal: DirectorProposal = {
+        ...buildOfflineDirectorProposal(ep.title, ep.scriptText, {
+          existingAssets: ws.assets,
+          softTargetShotsPerScene: softTarget,
+          sceneDrafts: persistedSceneDrafts,
+        }),
+        targetProjectId: input.projectId,
+        targetEpisodeId: ep.id,
+        targetEpisodeTitle: ep.title,
+      };
       return {
         ok: true,
         proposal,
@@ -390,7 +395,13 @@ export class DirectorService {
         existingAssets: ws.assets,
         episodeTitle: ep.title,
       });
-      const proposal: DirectorProposal = { ...withTraces, reviewReport };
+      const proposal: DirectorProposal = {
+        ...withTraces,
+        targetProjectId: input.projectId,
+        targetEpisodeId: ep.id,
+        targetEpisodeTitle: ep.title,
+        reviewReport,
+      };
       return {
         ok: true,
         proposal,
