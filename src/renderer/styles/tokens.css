@@ -578,12 +578,24 @@ body,
 
     .aivora-storyboard-layout {
       grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: minmax(104px, 18%) minmax(260px, 1fr) minmax(160px, 32%);
+      grid-template-rows: 162px minmax(230px, 1fr) minmax(160px, 32%);
     }
 
     .aivora-storyboard-layout[data-collapsed="true"] {
       grid-template-columns: minmax(0, 1fr);
       grid-template-rows: 40px minmax(260px, 1fr) minmax(160px, 32%);
+    }
+
+    .aivora-shot-rail-list {
+      flex-direction: row !important;
+      overflow-x: auto !important;
+      overflow-y: hidden !important;
+      align-items: flex-start;
+    }
+
+    .aivora-shot-rail-item {
+      width: 118px !important;
+      flex-shrink: 0;
     }
 
     .aivora-editor-top {

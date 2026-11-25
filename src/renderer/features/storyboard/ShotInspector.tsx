@@ -144,7 +144,10 @@ export function ShotInspector(props: {
   return (
     <aside className="bg-[var(--bg-surface)] border-l border-[var(--border-subtle)] flex flex-col min-h-0 overflow-hidden">
       <div className="h-10 px-3.5 border-b border-[var(--border-subtle)] flex items-center justify-between gap-1.5 shrink-0">
-        <span className="text-[12px] font-semibold text-[var(--text-primary)] truncate">
+        <span
+          key={currentShot?.id ?? "none"}
+          className="aivora-panel-swap text-[12px] font-semibold text-[var(--text-primary)] truncate"
+        >
           {currentShot?.title ?? "镜头属性"}
         </span>
         {currentShot && epScene && (

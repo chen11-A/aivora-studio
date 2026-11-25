@@ -172,7 +172,7 @@ async function runAudit() {
     { width: 1280, height: 800, capture: true, checkUx: true, checkCenterRatio: true },
     { width: 1920, height: 1080, capture: false, checkUx: false, checkCenterRatio: true },
     { width: 900, height: 700, capture: false, checkUx: false, checkCenterRatio: false },
-    { width: 390, height: 844, capture: false, checkUx: false, checkCenterRatio: false },
+    { width: 390, height: 844, capture: true, checkUx: false, checkCenterRatio: false },
   ];
 
   const report = [];

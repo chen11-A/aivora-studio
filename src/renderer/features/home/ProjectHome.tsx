@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import type { AspectRatio, ProjectSummary } from "@shared/types/domain";
 import { ModalShell } from "../../components/ui/OverlayShell";
+import { SlidingSegmentedControl } from "../../components/ui/SlidingSegmentedControl";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useStudioStore } from "../../store/useStudioStore";
 
@@ -84,24 +85,28 @@ export function ProjectHome() {
               <ArchiveRestore className="w-3.5 h-3.5" />
               <span>导入备份包</span>
             </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              data-testid="home-open-demo"
-              onClick={() => void openDemoProject()}
-            >
-              <Sparkles className="w-3.5 h-3.5 text-[var(--accent-amber-text)]" />
-              <span>打开示例《晚照书店》</span>
-            </button>
-            <button
-              type="button"
-              className="btn-primary"
-              data-testid="home-new-project"
-              onClick={() => setCreateOpen(true)}
-            >
-              <FolderPlus className="w-3.5 h-3.5" />
-              <span>新建作品</span>
-            </button>
+            {projects.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  data-testid="home-open-demo"
+                  onClick={() => void openDemoProject()}
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-[var(--accent-amber-text)]" />
+                  <span>打开示例《晚照书店》</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  data-testid="home-new-project"
+                  onClick={() => setCreateOpen(true)}
+                >
+                  <FolderPlus className="w-3.5 h-3.5" />
+                  <span>新建作品</span>
+                </button>
+              </>
+            )}
           </div>
         </section>
 
@@ -117,11 +122,21 @@ export function ProjectHome() {
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-2.5 mt-1">
-              <button type="button" className="btn-primary" onClick={() => setCreateOpen(true)}>
+              <button
+                type="button"
+                className="btn-primary"
+                data-testid="home-new-project"
+                onClick={() => setCreateOpen(true)}
+              >
                 <FolderPlus className="w-3.5 h-3.5" />
                 <span>新建第一部作品</span>
               </button>
-              <button type="button" className="btn-secondary" onClick={() => void openDemoProject()}>
+              <button
+                type="button"
+                className="btn-secondary"
+                data-testid="home-open-demo"
+                onClick={() => void openDemoProject()}
+              >
                 <Sparkles className="w-3.5 h-3.5 text-[var(--accent-amber-text)]" />
                 <span>体验《晚照书店》</span>
               </button>
@@ -241,38 +256,38 @@ export function ProjectHome() {
 
           <div className="flex flex-col gap-1.5">
             <label className="text-[12px] text-[var(--text-secondary)]">画幅比例</label>
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => setAspectRatio("16:9")}
-                className={`aivora-pressable flex items-center gap-2 p-2.5 rounded-lg border text-left cursor-pointer ${
-                  aspectRatio === "16:9"
-                    ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary)] text-[var(--text-primary)]"
-                    : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
-                }`}
-              >
-                <Monitor className="w-4 h-4 shrink-0" />
-                <div>
-                  <div className="text-[12px] font-semibold">16:9 横屏</div>
-                  <div className="text-[11px] text-[var(--text-muted)]">B站 / 电影叙事</div>
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => setAspectRatio("9:16")}
-                className={`aivora-pressable flex items-center gap-2 p-2.5 rounded-lg border text-left cursor-pointer ${
-                  aspectRatio === "9:16"
-                    ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary)] text-[var(--text-primary)]"
-                    : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
-                }`}
-              >
-                <Smartphone className="w-4 h-4 shrink-0" />
-                <div>
-                  <div className="text-[12px] font-semibold">9:16 竖屏</div>
-                  <div className="text-[11px] text-[var(--text-muted)]">抖音 / 红果短剧</div>
-                </div>
-              </button>
-            </div>
+            <SlidingSegmentedControl<AspectRatio>
+              ariaLabel="新建作品画幅比例"
+              tone="surface"
+              fullWidth
+              value={aspectRatio}
+              onChange={setAspectRatio}
+              options={[
+                {
+                  id: "16:9",
+                  content: () => (
+                    <>
+                      <Monitor className="w-3.5 h-3.5 shrink-0" />
+                      <span className="tabular-nums">16:9 横屏</span>
+                    </>
+                  ),
+                },
+                {
+                  id: "9:16",
+                  content: () => (
+                    <>
+                      <Smartphone className="w-3.5 h-3.5 shrink-0" />
+                      <span className="tabular-nums">9:16 竖屏</span>
+                    </>
+                  ),
+                },
+              ]}
+            />
+            <span className="text-[11px] text-[var(--text-muted)]">
+              {aspectRatio === "16:9"
+                ? "横屏适合 B站、电影叙事与长剧集"
+                : "竖屏适合抖音、红果短剧与移动端传播"}
+            </span>
           </div>
 
           <div className="flex flex-col gap-1.5">

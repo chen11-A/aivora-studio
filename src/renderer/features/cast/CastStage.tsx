@@ -187,7 +187,7 @@ export function CastStage() {
                         />
                       )}
                       {dragActive && (
-                        <div className="absolute inset-0 bg-[var(--accent-primary)]/20 backdrop-blur-xs flex items-center justify-center">
+                        <div className="aivora-attention-in absolute inset-0 bg-[var(--accent-primary)]/20 backdrop-blur-xs flex items-center justify-center">
                           <span className="px-2.5 py-1 rounded-md bg-[var(--bg-overlay-chip)] border border-white/15 text-[12px] font-semibold text-white shadow-md">
                             松手更换定妆图
                           </span>
@@ -279,7 +279,7 @@ export function CastStage() {
                 if (dragOverId === "inspector") setDragOverId(null);
               }}
               onDrop={(e) => handleDropImage(selected.id, e)}
-              className={`rounded-xl overflow-hidden bg-[var(--bg-inset)] border border-[var(--border-subtle)] ${
+              className={`shrink-0 rounded-xl overflow-hidden bg-[var(--bg-inset)] border border-[var(--border-subtle)] ${
                 dragOverId === "inspector" ? "aivora-drop-active" : ""
               }`}
             >

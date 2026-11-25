@@ -22,6 +22,7 @@ export function EditorTimeline(props: {
   activeIndex: number | null;
   playheadSec: number;
   totalSec: number;
+  playing?: boolean;
   bgmAsset: Asset | null;
   bgmVolumeDb: number;
   onSeekTime: (sec: number) => void;
@@ -33,6 +34,7 @@ export function EditorTimeline(props: {
     activeIndex,
     playheadSec,
     totalSec,
+    playing = false,
     bgmAsset,
     bgmVolumeDb,
     onSeekTime,
@@ -129,7 +131,7 @@ export function EditorTimeline(props: {
           className={`relative flex flex-col gap-1.5 ${scrubbing ? "cursor-grabbing" : "cursor-pointer"}`}
           style={{ minWidth: `${trackTotalWidth + 80}px` }}
         >
-          {/* GPU-Composited Playhead (translate3d, zero layout reflow) */}
+          {/* GPU-Composited Playhead: 1:1 instant during scrub/playback, smooth spring glide on click jump */}
           {totalSec > 0 && (
             <div
               aria-hidden="true"
@@ -137,6 +139,7 @@ export function EditorTimeline(props: {
               className="pointer-events-none absolute top-0 bottom-0 left-0 w-0.5 bg-[var(--accent-danger)] z-20"
               style={{
                 transform: `translate3d(${LABEL_OFFSET_PX + playheadX}px, 0, 0)`,
+                transition: scrubbing || playing ? "none" : "transform var(--dur-fast) var(--ease-spring)",
                 willChange: "transform",
               }}
             >

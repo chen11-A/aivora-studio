@@ -148,6 +148,18 @@ export function StoryboardStage() {
             </span>
           )}
           <div className="flex items-center gap-1 shrink-0">
+            {!sidebarCollapsed && epScene && (
+              <button
+                type="button"
+                data-testid="add-shot-btn"
+                onClick={() => void createShot(epScene.id)}
+                className="aivora-pressable p-1 rounded-md hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer"
+                title="新增镜头"
+                aria-label="新增镜头"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            )}
             {!sidebarCollapsed && (
               <button
                 type="button"
@@ -174,7 +186,7 @@ export function StoryboardStage() {
           </div>
         </div>
 
-        <div className="panel-scroll flex-1 p-2 flex flex-col gap-1.5">
+        <div className="panel-scroll aivora-shot-rail-list flex-1 p-2 flex flex-col gap-1.5">
           {epShots.map((shot, idx) => {
             const take = resolveActiveVisualTake(shot, workspace.takes);
             const thumbSrc = resolveSrc(take?.mediaPath);
@@ -187,7 +199,7 @@ export function StoryboardStage() {
                 type="button"
                 data-testid={`shot-item-${idx}`}
                 onClick={() => selectShot(shot.id)}
-                className={`aivora-pressable w-full text-left rounded-lg overflow-hidden border cursor-pointer ${
+                className={`aivora-pressable aivora-shot-rail-item shrink-0 w-full text-left rounded-lg overflow-hidden border cursor-pointer ${
                   active
                     ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary)] ring-1 ring-[var(--ring-focus)]"
                     : "bg-[var(--bg-inset)] border-[var(--border-subtle)] hover:border-[var(--border-strong)]"
@@ -250,17 +262,6 @@ export function StoryboardStage() {
               </button>
             );
           })}
-          {!sidebarCollapsed && epScene && (
-            <button
-              type="button"
-              data-testid="add-shot-btn"
-              onClick={() => void createShot(epScene.id)}
-              className="btn-secondary w-full"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>新增镜头</span>
-            </button>
-          )}
         </div>
       </aside>
 
@@ -308,7 +309,7 @@ export function StoryboardStage() {
                 </div>
               )}
               {canvasDragOver && (
-                <div className="absolute inset-0 bg-[var(--accent-primary)]/20 backdrop-blur-xs flex items-center justify-center pointer-events-none">
+                <div className="aivora-attention-in absolute inset-0 bg-[var(--accent-primary)]/20 backdrop-blur-xs flex items-center justify-center pointer-events-none">
                   <span className="px-4 py-2 rounded-xl bg-[var(--bg-overlay-chip)] text-white text-[13px] font-semibold">
                     松手导入至「{currentShot.title}」（自动识别视频 / 图片 / 配音）
                   </span>

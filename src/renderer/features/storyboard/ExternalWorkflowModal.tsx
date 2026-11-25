@@ -160,16 +160,16 @@ export function ExternalWorkflowModal(props: {
             }`}
           />
           <div className="min-w-0">
-            <div className="text-[12px] font-medium text-[var(--text-primary)] flex items-center gap-2">
+            <div className="text-[12px] font-medium text-[var(--text-primary)] flex items-baseline gap-1.5">
               <span>下载目录自动监听</span>
               <span
-                className={`px-1.5 py-0.5 rounded text-[10px] ${
+                className={`text-[11px] font-normal ${
                   watchState?.enabled
-                    ? "bg-[var(--accent-success-soft)] text-[var(--accent-success-text)]"
-                    : "bg-[var(--bg-elevated)] text-[var(--text-muted)]"
+                    ? "text-[var(--accent-success-text)] font-medium"
+                    : "text-[var(--text-muted)]"
                 }`}
               >
-                {watchState?.enabled ? "监听中" : "已关闭"}
+                · {watchState?.enabled ? "监听中" : "已关闭"}
               </span>
             </div>
             <div className="text-[11px] text-[var(--text-muted)] truncate">
@@ -226,9 +226,9 @@ export function ExternalWorkflowModal(props: {
             <span>{exporting ? "正在导出…" : "选择目录并导出外采包"}</span>
           </button>
           {exportRes?.ok && exportRes.outputDir && (
-            <div className="rounded-lg bg-[var(--accent-success-soft)] border border-[var(--accent-success-border)] p-3 flex flex-col gap-2">
+            <div className="aivora-attention-in rounded-lg bg-[var(--accent-success-soft)] border border-[var(--accent-success-border)] p-3 flex flex-col gap-2">
               <div className="flex items-center gap-1.5 text-[12px] text-[var(--accent-success-text)] font-medium">
-                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0 aivora-icon-pop" />
                 <span>{exportRes.message}</span>
               </div>
               <div className="text-[11px] text-[var(--text-secondary)] break-all">{exportRes.outputDir}</div>
@@ -265,7 +265,7 @@ export function ExternalWorkflowModal(props: {
           </button>
 
           {scanRes && (
-            <div className="flex flex-col gap-2 flex-1 min-h-0">
+            <div className="aivora-attention-in flex flex-col gap-2 flex-1 min-h-0">
               <div className="text-[11px] text-[var(--text-secondary)] flex items-center justify-between gap-2">
                 <span>{scanRes.message}</span>
                 {scanRes.ignoredTempCount > 0 && (

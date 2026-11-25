@@ -1,33 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Monitor, Pause, Play, RotateCcw, Scissors, Smartphone, Subtitles } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Monitor, Pause, Play, RotateCcw, Scissors, Smartphone } from "lucide-react";
 import { evaluateEpisodeExportReadiness, isVideoMediaPath, resolveActiveVisualTake, resolveSelectedSpeechTake, resolveShotTrimWindow } from "@shared/media-selection";
-import type { SubtitleStyle } from "@shared/types/domain";
 import { SlidingSegmentedControl } from "../../components/ui/SlidingSegmentedControl";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useStudioStore } from "../../store/useStudioStore";
 import { BgmTrackControls } from "./BgmTrackControls";
 import { EditorTimeline } from "./EditorTimeline";
+import { SubtitleStylePicker, subtitlePreviewClass } from "./SubtitleStylePicker";
 import { useTimelinePlayback } from "./useTimelinePlayback";
-
-const SUB_STYLES: Array<{ id: SubtitleStyle; label: string }> = [
-  { id: "white", label: "经典白字黑边" },
-  { id: "yellow", label: "电影黄字" },
-  { id: "bar", label: "半透明底条" },
-  { id: "variety", label: "醒目粗描边" },
-];
 
 function fmtTime(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   const tenth = Math.floor((sec % 1) * 10);
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${tenth}`;
-}
-
-function subtitlePreviewClass(style: SubtitleStyle): string {
-  if (style === "yellow") return "bg-black/65 text-[#fde047] font-semibold";
-  if (style === "bar") return "bg-black/85 text-white px-4 py-1.5";
-  if (style === "variety") return "bg-black/72 text-white font-bold tracking-wide text-[14px]";
-  return "bg-black/75 text-white font-medium";
 }
 
 export function EditorStage() {
@@ -420,28 +406,10 @@ export function EditorStage() {
               </div>
             )}
 
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[11px] text-[var(--text-secondary)] flex items-center gap-1.5">
-                <Subtitles className="w-3.5 h-3.5 text-[var(--accent-amber-text)]" />
-                <span>字幕样式</span>
-              </label>
-              <div className="grid grid-cols-2 gap-1.5">
-                {SUB_STYLES.map((st) => (
-                  <button
-                    key={st.id}
-                    type="button"
-                    onClick={() => void updateProjectSettings({ subtitleStyle: st.id })}
-                    className={`aivora-pressable h-8 rounded-lg text-[11px] border cursor-pointer ${
-                      workspace.project.subtitleStyle === st.id
-                        ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary)] text-[var(--text-primary)] font-medium"
-                        : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
-                    }`}
-                  >
-                    {st.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <SubtitleStylePicker
+              value={workspace.project.subtitleStyle}
+              onChange={(subtitleStyle) => void updateProjectSettings({ subtitleStyle })}
+            />
 
             <BgmTrackControls
               projectId={workspace.project.id}
@@ -487,6 +455,7 @@ export function EditorStage() {
         activeIndex={playback.activeSegment?.index ?? null}
         playheadSec={playback.playheadSec}
         totalSec={playback.totalSec}
+        playing={playback.playing}
         bgmAsset={bgmAsset}
         bgmVolumeDb={workspace.project.bgmVolumeDb}
         onSeekTime={playback.seekToTime}

@@ -145,16 +145,17 @@ export function ModelCenterModal() {
               <h2 className="text-[15px] font-semibold text-[var(--text-primary)] truncate">
                 模型与账号中心
               </h2>
-              <span
-                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] shrink-0 ${
-                  snapshot.vaultAvailable
-                    ? "bg-[var(--accent-success-soft)] text-[var(--accent-success-text)]"
-                    : "bg-[var(--accent-danger-soft)] text-[var(--accent-danger-text)]"
-                }`}
-              >
-                <ShieldCheck className="w-3 h-3" />
-                {snapshot.vaultAvailable ? "本机安全加密保护中" : "加密库不可用（已停用密钥保存）"}
-              </span>
+              {snapshot.vaultAvailable ? (
+                <span className="inline-flex items-center gap-1 text-[11px] text-[var(--text-muted)] shrink-0">
+                  <ShieldCheck className="w-3.5 h-3.5 text-[var(--accent-success-text)]" />
+                  <span>本机安全加密</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-[var(--accent-danger-soft)] text-[var(--accent-danger-text)] shrink-0">
+                  <ShieldCheck className="w-3 h-3" />
+                  <span>加密库不可用（已停用密钥保存）</span>
+                </span>
+              )}
             </div>
             <button
               type="button"
@@ -339,20 +340,20 @@ export function ModelCenterModal() {
                     >
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-baseline gap-1.5">
                             <span className="text-[13px] font-semibold text-[var(--text-primary)]">
                               {acc.displayName}
                             </span>
                             <span
-                              className={`px-1.5 py-0.5 rounded text-[10px] ${
+                              className={`text-[11px] ${
                                 connected
-                                  ? "bg-[var(--accent-success-soft)] text-[var(--accent-success-text)]"
+                                  ? "text-[var(--accent-success-text)] font-medium"
                                   : acc.status === "expired"
-                                    ? "bg-[var(--accent-amber-soft)] text-[var(--accent-amber-text)]"
-                                    : "bg-[var(--bg-elevated)] text-[var(--text-muted)]"
+                                    ? "text-[var(--accent-amber-text)] font-medium"
+                                    : "text-[var(--text-muted)]"
                               }`}
                             >
-                              {connected ? "已登录" : acc.status === "expired" ? "已过期" : "未登录"}
+                              · {connected ? "已登录" : acc.status === "expired" ? "已过期" : "未登录"}
                             </span>
                           </div>
                           <div className="text-[11px] text-[var(--text-muted)] mt-0.5 truncate">
