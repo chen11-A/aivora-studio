@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { listVerifiedBackups } from "./backup-manager";
+import { ProjectStore } from "./project-store";
 import { initProjectSchema, PROJECT_SCHEMA_SQL } from "./schema";
 import { runV2SchemaMigrations, V2_MIGRATIONS } from "./schema-v2-migration";
 import { openSqlite } from "./sqlite-driver";
@@ -124,5 +125,40 @@ describe("schema-v2-migration backup-first incremental migration", () => {
     expect(bkpDb.integrityCheck()).toBe(true);
     bkpDb.close();
     db.close();
+  });
+
+  it("FIX-01: ProjectStore startup scanProjects() does NOT mutate legacy DB, and openProject() backs up pre-DDL legacy schema before migrating", () => {
+    const wsRoot = mkdtempSync(path.join(tmpdir(), "aivora-fix01-ws-"));
+    tempDirs.push(wsRoot);
+    const legacyDir = path.join(wsRoot, "旧工程_1_9_3");
+    mkdirSync(legacyDir, { recursive: true });
+    const legacyDb = createLegacyProjectDb(legacyDir);
+    legacyDb.close();
+
+    // 1. Constructing ProjectStore triggers scanProjects() -> MUST remain strictly read-only
+    const store = new ProjectStore(wsRoot);
+    const inspectAfterScan = openSqlite(path.join(legacyDir, "project.db"));
+    const hasMigAfterScan = inspectAfterScan.get<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`,
+    );
+    inspectAfterScan.close();
+    expect(hasMigAfterScan).toBeUndefined();
+    expect(listVerifiedBackups(legacyDir)).toHaveLength(0);
+
+    // 2. Opening the project triggers backup-BEFORE-DDL -> backup preserves legacy pre-migration schema!
+    const opened = store.openProject("prj_legacy");
+    expect(opened.project.id).toBe("prj_legacy");
+    const backups = listVerifiedBackups(legacyDir);
+    expect(backups).toHaveLength(1);
+    expect(backups[0]!.fileName).toContain("pre-v2-migrate");
+
+    const backupDb = openSqlite(backups[0]!.filePath);
+    expect(backupDb.integrityCheck()).toBe(true);
+    const backupHasV2Table = backupDb.get<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'budget_ledger'`,
+    );
+    expect(backupHasV2Table).toBeUndefined();
+    backupDb.close();
+    store.closeAll();
   });
 });

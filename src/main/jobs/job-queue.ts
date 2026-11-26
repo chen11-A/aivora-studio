@@ -23,7 +23,7 @@ import {
 } from "./job-dispatcher";
 import {
   getJobRow,
-  insertRunningJobRow,
+  insertRunningJobRowInDb,
   listJobRows,
   reconcileOrphanRunningJobs,
   recordAssetPortraitCandidateInDb,
@@ -164,47 +164,51 @@ export class GenerationJobQueue {
       throw new PlanDriftError(drift.reasons);
     }
 
-    // F16: Atomic budget reservation & approval/dispatch ID persistence BEFORE any network call
+    // F16 / FIX-03: Single BEGIN IMMEDIATE transaction reserves budget AND inserts running job atomically
     const quote = quotePaidAction({
       kind: plan.kind,
       durationSec: plan.lockedInput.durationSec,
       modelId: snapshot.modelId,
     });
     const ledgerEntry = this.projects.withProjectDb(plan.projectId, (db) =>
-      authorizeAndReserveBudget(db, {
-        projectId: plan.projectId,
-        jobId,
-        shotId: plan.assetId ? null : plan.shotId,
-        kind: plan.kind,
-        quotedCents: quote.quotedCents,
-        approvalId: plan.planId,
-        dispatchId: plan.idempotencyKey,
-        inputSha256: plan.inputSha256,
-        providerLabel: snapshot.providerLabel,
-        modelId: snapshot.modelId,
-        note: plan.shotTitle,
+      db.transaction(() => {
+        const entry = authorizeAndReserveBudget(db, {
+          projectId: plan.projectId,
+          jobId,
+          shotId: plan.assetId ? null : plan.shotId,
+          kind: plan.kind,
+          quotedCents: quote.quotedCents,
+          approvalId: plan.planId,
+          dispatchId: plan.idempotencyKey,
+          inputSha256: plan.inputSha256,
+          providerLabel: snapshot.providerLabel,
+          modelId: snapshot.modelId,
+          note: plan.shotTitle,
+        });
+        insertRunningJobRowInDb(db, {
+          jobId,
+          projectId: plan.projectId,
+          shotId: plan.assetId ? null : plan.shotId,
+          kind: plan.kind,
+          idempotencyKey: plan.idempotencyKey,
+          inputSha256: plan.inputSha256,
+          providerSnapshotJson: plan.providerSnapshotJson,
+          summaryText: `${plan.shotTitle} · ${snapshot.providerLabel} (${snapshot.modelId})`,
+        });
+        return entry;
       }),
     );
 
-    insertRunningJobRow(this.projects, {
-      jobId,
-      projectId: plan.projectId,
-      shotId: plan.assetId ? null : plan.shotId,
-      kind: plan.kind,
-      idempotencyKey: plan.idempotencyKey,
-      inputSha256: plan.inputSha256,
-      providerSnapshotJson: plan.providerSnapshotJson,
-      summaryText: `${plan.shotTitle} · ${snapshot.providerLabel} (${snapshot.modelId})`,
-    });
-
     this.activeJobIds.add(jobId);
     this.activeInputHashes.add(plan.inputSha256);
+    let dispatched = false;
     let remoteSucceeded = false;
     try {
       const creds = await resolveTrustedLockedSecrets(snapshot, this.globalConfig, this.oauth);
       this.projects.withProjectDb(plan.projectId, (db) =>
         markBudgetEntryDispatched(db, ledgerEntry.id),
       );
+      dispatched = true;
       const outcome = await dispatchGenerationJob({
         plan,
         projectDir: ws.dirPath,
@@ -266,11 +270,21 @@ export class GenerationJobQueue {
 
       throw new Error("未知的生成结果类型");
     } catch (err) {
-      const isAmbiguous = remoteSucceeded || err instanceof AmbiguousRemoteError;
       const rawMsg = err instanceof Error ? err.message : String(err);
+      const errName = err instanceof Error ? err.name : "";
+      const isPostDispatchTransportAmbiguity =
+        dispatched &&
+        (/AbortError|TimeoutError/i.test(errName) ||
+          /ECONNRESET|ETIMEDOUT|EPIPE|UND_ERR_|fetch failed|socket hang up|aborted|timed? ?out|超时/i.test(
+            rawMsg,
+          ));
+      const isAmbiguous =
+        remoteSucceeded || err instanceof AmbiguousRemoteError || isPostDispatchTransportAmbiguity;
       const msg = remoteSucceeded
         ? `远端生成已成功，但本地保存/入库失败，已转入 UNKNOWN 防重复扣费：${rawMsg}`
-        : rawMsg;
+        : isPostDispatchTransportAmbiguity && !(err instanceof AmbiguousRemoteError)
+          ? `请求已发出但网络中断/超时，结果未知（UNKNOWN），为防重复扣费已暂停自动重试：${rawMsg}`
+          : rawMsg;
       const remoteTaskId =
         err instanceof AmbiguousRemoteError && err.remoteTaskId ? err.remoteTaskId : undefined;
       const updated = updateJobRow(this.projects, plan.projectId, jobId, {

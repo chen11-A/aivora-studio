@@ -7,7 +7,7 @@ import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AspectRatio } from "../../shared/types/domain";
 import { probeFfmpegStatus, runMediaBinary } from "../media/ffmpeg-locator";
-import { fetchGeminiApi, fetchGeminiMediaBytes } from "./gemini-official-adapter";
+import { fetchGeminiApi, fetchGeminiMediaBytes } from "./gemini-http";
 import { AmbiguousRemoteError } from "./kling-adapter";
 import { checkModelPolicy } from "./model-registry";
 

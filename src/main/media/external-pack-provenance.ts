@@ -2,7 +2,28 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ProjectWorkspace, Shot } from "../../shared/types/domain";
-import { parseShotIndexFromFilename } from "./external-pack";
+
+/**
+ * Extracts a 1-based shot index from common external export / web download filenames:
+ * - `01.mp4`, `01_v2.mp4`, `01-林晚.mp4`
+ * - `镜01.mp4`, `镜头 02_flow.mp4`, `shot03.mp4`, `shot_4_v2.mp4`, `ep1_05.mp4`
+ */
+export function parseShotIndexFromFilename(fileName: string): number | null {
+  const base = path.basename(fileName, path.extname(fileName)).trim();
+  const patterns: RegExp[] = [
+    /^(\d{1,3})(?:[_\-\s.]|$)/i,
+    /^(?:镜头?|shot|scene|sc|clip)[_\-\s]*0*(\d{1,3})(?:[_\-\s.]|$)/i,
+    /^ep\d+[_\-\s]+(?:shot|镜)?0*(\d{1,3})(?:[_\-\s.]|$)/i,
+  ];
+  for (const re of patterns) {
+    const match = base.match(re);
+    if (match?.[1]) {
+      const idx = Number.parseInt(match[1], 10);
+      if (Number.isFinite(idx) && idx >= 1) return idx;
+    }
+  }
+  return null;
+}
 
 export type ExternalPackProvenanceState =
   | "planned"

@@ -393,4 +393,82 @@ describe("F16 atomic budget ledger, full-DB pending guard, and A/B/C crash recov
     projects.closeAll();
     globalConfig.close();
   });
+
+  it("FIX-03: marks post-dispatch ECONNRESET/AbortError as UNKNOWN + unknown_hold (never releasing budget) and reconciles orphan running jobs alongside budget_ledger", async () => {
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-fix03-"));
+    tempDirs.push(base);
+    const projects = new ProjectStore(path.join(base, "ws"));
+    const globalConfig = new GlobalConfigStore(path.join(base, "app"), mockVault);
+    const oauth = new OAuthManager(globalConfig, async () => undefined);
+    const ws = projects.createProject({ name: "FIX03网络中断测试", aspectRatio: "16:9" });
+    const shotId = ws.shots[0]!.id;
+
+    const imgProv = globalConfig.saveProvider({
+      name: "ImgProv",
+      protocol: "openai-image",
+      baseUrl: "https://api.img.test/v1",
+      models: ["gpt-image-1"],
+      apiKey: "sk-fix03",
+      enabled: true,
+    });
+    globalConfig.updateRouting({
+      script: null,
+      image: { source: "provider", sourceId: imgProv.id, modelId: "gpt-image-1" },
+      video: null,
+      tts: null,
+    });
+
+    const queue = new GenerationJobQueue(
+      projects,
+      globalConfig,
+      oauth,
+      async () => {
+        throw new Error("fetch failed: ECONNRESET");
+      },
+      1,
+      1,
+    );
+    const plan = queue.preparePlan({ projectId: ws.project.id, shotId, kind: "image" });
+    const res = await queue.confirmAndRun(plan);
+    expect(res.ok).toBe(false);
+    expect(res.job.status).toBe("unknown");
+    projects.withProjectDb(ws.project.id, (db) => {
+      const sum = getProjectBudgetSummary(db, ws.project.id);
+      expect(sum.unknownHoldCount).toBe(1);
+      expect(sum.unknownHoldCents).toBeGreaterThan(0);
+
+      // Seed an orphan crashed running job + reserved dispatched ledger entry -> listJobs() must reconcile BOTH!
+      const now = new Date().toISOString();
+      db.run(
+        `INSERT INTO jobs (id, project_id, shot_id, kind, status, idempotency_key, input_sha256, provider_snapshot, summary_text, progress, created_at, updated_at)
+         VALUES ('job_orphan_1', ?, ?, 'video', 'running', 'idem_orph', 'sha_orph', '{}', '崩溃孤儿', 30, ?, ?)`,
+        ws.project.id,
+        shotId,
+        now,
+        now,
+      );
+      const orphEntry = authorizeAndReserveBudget(db, {
+        projectId: ws.project.id,
+        jobId: "job_orphan_1",
+        shotId,
+        kind: "video",
+        quotedCents: 30,
+        inputSha256: "sha_orph_led",
+        providerLabel: "Kling",
+        modelId: "kling-v2",
+      });
+      markBudgetEntryDispatched(db, orphEntry.id);
+    });
+
+    const jobsAfterReconcile = queue.listJobs(ws.project.id);
+    expect(jobsAfterReconcile.find((j) => j.id === "job_orphan_1")?.status).toBe("unknown");
+    projects.withProjectDb(ws.project.id, (db) => {
+      const sum = getProjectBudgetSummary(db, ws.project.id);
+      expect(sum.reservedCents).toBe(0);
+      expect(sum.unknownHoldCount).toBe(2);
+    });
+
+    projects.closeAll();
+    globalConfig.close();
+  });
 });

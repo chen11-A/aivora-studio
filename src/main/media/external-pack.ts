@@ -26,9 +26,12 @@ import { resolveConfinedMediaPath } from "./media-protocol";
 import { probeFileDurationSec } from "./motion-filters";
 import {
   matchExternalDropWithProvenance,
+  parseShotIndexFromFilename,
   readExternalPackManifest,
   writeExternalPackManifest,
 } from "./external-pack-provenance";
+
+export { parseShotIndexFromFilename } from "./external-pack-provenance";
 
 const VIDEO_EXTS = new Set([".mp4", ".webm", ".mov", ".m4v", ".mkv"]);
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
@@ -44,28 +47,6 @@ function sanitizeSegment(raw: string, fallback: string): string {
     .replace(/^[._]+|[._]+$/g, "")
     .slice(0, 36);
   return cleaned || fallback;
-}
-
-/**
- * Extracts a 1-based shot index from common external export / web download filenames:
- * - `01.mp4`, `01_v2.mp4`, `01-林晚.mp4`
- * - `镜01.mp4`, `镜头 02_flow.mp4`, `shot03.mp4`, `shot_4_v2.mp4`, `ep1_05.mp4`
- */
-export function parseShotIndexFromFilename(fileName: string): number | null {
-  const base = path.basename(fileName, path.extname(fileName)).trim();
-  const patterns: RegExp[] = [
-    /^(\d{1,3})(?:[_\-\s.]|$)/i,
-    /^(?:镜头?|shot|scene|sc|clip)[_\-\s]*0*(\d{1,3})(?:[_\-\s.]|$)/i,
-    /^ep\d+[_\-\s]+(?:shot|镜)?0*(\d{1,3})(?:[_\-\s.]|$)/i,
-  ];
-  for (const re of patterns) {
-    const match = base.match(re);
-    if (match?.[1]) {
-      const idx = Number.parseInt(match[1], 10);
-      if (Number.isFinite(idx) && idx >= 1) return idx;
-    }
-  }
-  return null;
 }
 
 export function exportExternalShotPack(input: {

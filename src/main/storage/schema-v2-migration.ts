@@ -157,22 +157,66 @@ export type MigrationRunReport = {
   backupCreated: BackupEntry | null;
 };
 
+export function hasPendingV2Migrations(
+  db: SqliteDriver,
+  migrations: ReadonlyArray<{ version: string }> = V2_MIGRATIONS,
+): boolean {
+  const hasTable = Boolean(
+    db.get<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`,
+    ),
+  );
+  if (!hasTable) return migrations.length > 0;
+  const applied = new Set(
+    db.all<{ version: string }>(`SELECT version FROM schema_migrations`).map((r) => r.version),
+  );
+  return migrations.some((m) => !applied.has(m.version));
+}
+
+export function ensurePreMigrationBackupIfNeeded(
+  db: SqliteDriver,
+  projectDir?: string,
+  migrations: ReadonlyArray<{ version: string }> = V2_MIGRATIONS,
+): BackupEntry | null {
+  if (!projectDir || !existsSync(path.join(projectDir, "project.db"))) return null;
+  const hasProjectsTable = Boolean(
+    db.get<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'projects'`,
+    ),
+  );
+  if (!hasProjectsTable) return null;
+  const hasExistingData = Boolean(
+    db.get<{ c: number }>(`SELECT COUNT(*) AS c FROM projects`)?.c,
+  );
+  if (!hasExistingData) return null;
+  if (!hasPendingV2Migrations(db, migrations)) return null;
+  return createVerifiedRollingBackup(projectDir, db, {
+    keepCount: 3,
+    label: "pre-v2-migrate",
+  });
+}
+
 /**
  * Backup-first incremental v2 migration runner:
- * 1. Ensures `schema_migrations` tracking table exists.
- * 2. Detects pending migrations before mutating anything.
- * 3. If `projectDir` is provided and an existing `project.db` already holds project rows,
- *    creates a verified `VACUUM INTO` + `PRAGMA integrity_check` rolling backup BEFORE running DDL.
- * 4. Runs each pending migration inside a single IMMEDIATE transaction so any failure rolls back cleanly
+ * 1. Creates a verified `VACUUM INTO` + `PRAGMA integrity_check` rolling backup BEFORE running any DDL
+ *    (when `projectDir` holds an existing populated `project.db` and `backupAlreadyCreated` is false).
+ * 2. Ensures `schema_migrations` tracking table exists.
+ * 3. Runs each pending migration inside a single IMMEDIATE transaction so any failure rolls back cleanly
  *    without corrupting existing tables or deleting the pre-migration backup.
  */
 export function runV2SchemaMigrations(
   db: SqliteDriver,
   options?: {
     projectDir?: string;
+    backupAlreadyCreated?: boolean;
     migrations?: ReadonlyArray<{ version: string; description: string; apply: (db: SqliteDriver) => void }>;
   },
 ): MigrationRunReport {
+  const migrations = options?.migrations ?? V2_MIGRATIONS;
+  const backupCreated = options?.backupAlreadyCreated
+    ? null
+    : ensurePreMigrationBackupIfNeeded(db, options?.projectDir, migrations);
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version TEXT PRIMARY KEY,
@@ -184,23 +228,9 @@ export function runV2SchemaMigrations(
   const applied = new Set(
     db.all<{ version: string }>(`SELECT version FROM schema_migrations`).map((r) => r.version),
   );
-  const migrations = options?.migrations ?? V2_MIGRATIONS;
   const pending = migrations.filter((m) => !applied.has(m.version));
   if (pending.length === 0) {
-    return { appliedVersions: [], backupCreated: null };
-  }
-
-  let backupCreated: BackupEntry | null = null;
-  if (options?.projectDir && existsSync(path.join(options.projectDir, "project.db"))) {
-    const hasExistingData = Boolean(
-      db.get<{ c: number }>(`SELECT COUNT(*) AS c FROM projects`)?.c,
-    );
-    if (hasExistingData) {
-      backupCreated = createVerifiedRollingBackup(options.projectDir, db, {
-        keepCount: 3,
-        label: "pre-v2-migrate",
-      });
-    }
+    return { appliedVersions: [], backupCreated };
   }
 
   const appliedVersions: string[] = [];

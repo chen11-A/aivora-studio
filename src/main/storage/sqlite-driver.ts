@@ -43,6 +43,7 @@ export function openSqlite(dbPath: string, options: OpenSqliteOptions = {}): Sql
   }
 
   let inTransaction = false;
+  let savepointDepth = 0;
 
   return {
     engine: "node:sqlite",
@@ -66,7 +67,32 @@ export function openSqlite(dbPath: string, options: OpenSqliteOptions = {}): Sql
       return inTransaction;
     },
     transaction<T>(fn: () => T): T {
-      if (inTransaction) return fn();
+      if (inTransaction) {
+        // DB1 / FIX-04: Nested transaction uses SAVEPOINT so an inner throw caught by the outer tx
+        // rolls back cleanly without corrupting or leaving half-written state in the outer transaction.
+        savepointDepth += 1;
+        const sp = `sp_${savepointDepth}`;
+        db.exec(`SAVEPOINT ${sp};`);
+        let released = false;
+        try {
+          const res = fn();
+          db.exec(`RELEASE SAVEPOINT ${sp};`);
+          released = true;
+          return res;
+        } catch (error) {
+          if (!released) {
+            try {
+              db.exec(`ROLLBACK TO SAVEPOINT ${sp};`);
+              db.exec(`RELEASE SAVEPOINT ${sp};`);
+            } catch {
+              // Preserve primary error
+            }
+          }
+          throw error;
+        } finally {
+          savepointDepth = Math.max(0, savepointDepth - 1);
+        }
+      }
       // DB1: Only enter transaction state AFTER BEGIN IMMEDIATE succeeds so a busy lock
       // never poisons subsequent transactions into executing bare writes without rollback.
       db.exec("BEGIN IMMEDIATE;");
@@ -88,6 +114,7 @@ export function openSqlite(dbPath: string, options: OpenSqliteOptions = {}): Sql
         throw error;
       } finally {
         inTransaction = false;
+        savepointDepth = 0;
       }
     },
     vacuumInto(destinationPath: string) {

@@ -83,26 +83,71 @@ export function reconcileOrphanRunningJobs(
   activeJobIds: ReadonlySet<string>,
 ): number {
   const now = new Date().toISOString();
-  return projects.withProjectDb(projectId, (db) => {
-    const running = db.all<{ id: string }>(
-      `SELECT id FROM jobs WHERE status = 'running'`,
-    );
-    let reconciled = 0;
-    for (const row of running) {
-      if (activeJobIds.has(row.id)) continue;
-      db.run(
-        `UPDATE jobs
-         SET status = 'unknown',
-             error_message = COALESCE(error_message, '检测到上次运行中断，为防重复扣费已暂停自动重试；请凭任务号点击「查单找回」。'),
-             updated_at = ?
-         WHERE id = ? AND status = 'running'`,
-        now,
-        row.id,
+  return projects.withProjectDb(projectId, (db) =>
+    db.transaction(() => {
+      const running = db.all<{ id: string }>(
+        `SELECT id FROM jobs WHERE status = 'running'`,
       );
-      reconciled += 1;
-    }
-    return reconciled;
-  });
+      let reconciled = 0;
+      for (const row of running) {
+        if (activeJobIds.has(row.id)) continue;
+        db.run(
+          `UPDATE jobs
+           SET status = 'unknown',
+               error_message = COALESCE(error_message, '检测到上次运行中断，为防重复扣费已暂停自动重试；请凭任务号点击「查单找回」。'),
+               updated_at = ?
+           WHERE id = ? AND status = 'running'`,
+          now,
+          row.id,
+        );
+        db.run(
+          `UPDATE budget_ledger
+           SET status = CASE WHEN dispatched_to_network = 1 THEN 'unknown_hold' ELSE 'released' END,
+               reserved_cents = CASE WHEN dispatched_to_network = 1 THEN reserved_cents ELSE 0 END,
+               settled_cents = CASE WHEN dispatched_to_network = 1 THEN NULL ELSE 0 END,
+               note = CASE WHEN dispatched_to_network = 1
+                 THEN '检测到上次运行中断，已同步转入 UNKNOWN 待核实防止重复扣费'
+                 ELSE '检测到崩溃前尚未发包，已自动释放预占预算' END,
+               updated_at = ?
+           WHERE job_id = ? AND status = 'reserved'`,
+          now,
+          row.id,
+        );
+        reconciled += 1;
+      }
+      // Also clean up any reserved ledger entries with no job_id (e.g. non-queue paid calls interrupted mid-flight)
+      const orphanReserved = db.all<{ id: string; job_id: string | null; dispatched_to_network: number }>(
+        `SELECT id, job_id, dispatched_to_network FROM budget_ledger WHERE project_id = ? AND status = 'reserved'`,
+        projectId,
+      );
+      for (const led of orphanReserved) {
+        if (led.job_id && activeJobIds.has(led.job_id)) continue;
+        if (led.job_id) {
+          const jobStillActive = db.get<{ status: string }>(`SELECT status FROM jobs WHERE id = ?`, led.job_id);
+          if (jobStillActive?.status === "running") continue;
+        }
+        const wasDispatched = Number(led.dispatched_to_network ?? 0) === 1;
+        db.run(
+          `UPDATE budget_ledger
+           SET status = ?,
+               reserved_cents = CASE WHEN ? = 1 THEN reserved_cents ELSE 0 END,
+               settled_cents = CASE WHEN ? = 1 THEN NULL ELSE 0 END,
+               note = ?,
+               updated_at = ?
+           WHERE id = ? AND status = 'reserved'`,
+          wasDispatched ? "unknown_hold" : "released",
+          wasDispatched ? 1 : 0,
+          wasDispatched ? 1 : 0,
+          wasDispatched
+            ? "检测到发包后中断的孤儿预占，已转入 UNKNOWN 待核实"
+            : "检测到未发包的孤儿预占，已自动释放",
+          now,
+          led.id,
+        );
+      }
+      return reconciled;
+    }),
+  );
 }
 
 export function listJobRows(projects: ProjectStore, projectId: string): Job[] {
@@ -136,8 +181,8 @@ export function getJobRow(projects: ProjectStore, projectId: string, jobId: stri
   });
 }
 
-export function insertRunningJobRow(
-  projects: ProjectStore,
+export function insertRunningJobRowInDb(
+  db: import("../storage/sqlite-driver").SqliteDriver,
   input: {
     jobId: string;
     projectId: string;
@@ -150,22 +195,27 @@ export function insertRunningJobRow(
   },
 ): void {
   const now = new Date().toISOString();
-  projects.withProjectDb(input.projectId, (db) => {
-    db.run(
-      `INSERT INTO jobs (id, project_id, shot_id, kind, status, idempotency_key, input_sha256, provider_snapshot, summary_text, progress, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, 10, ?, ?)`,
-      input.jobId,
-      input.projectId,
-      input.shotId,
-      input.kind,
-      input.idempotencyKey,
-      input.inputSha256,
-      input.providerSnapshotJson,
-      input.summaryText,
-      now,
-      now,
-    );
-  });
+  db.run(
+    `INSERT INTO jobs (id, project_id, shot_id, kind, status, idempotency_key, input_sha256, provider_snapshot, summary_text, progress, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, 10, ?, ?)`,
+    input.jobId,
+    input.projectId,
+    input.shotId,
+    input.kind,
+    input.idempotencyKey,
+    input.inputSha256,
+    input.providerSnapshotJson,
+    input.summaryText,
+    now,
+    now,
+  );
+}
+
+export function insertRunningJobRow(
+  projects: ProjectStore,
+  input: Parameters<typeof insertRunningJobRowInDb>[1],
+): void {
+  projects.withProjectDb(input.projectId, (db) => insertRunningJobRowInDb(db, input));
 }
 
 export function recordAssetPortraitCandidateInDb(

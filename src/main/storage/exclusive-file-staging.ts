@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
+  createReadStream,
   fsyncSync,
   linkSync,
   mkdirSync,
@@ -309,20 +310,47 @@ export async function publishFileExclusively(
 
   let stagedCreated = false;
   try {
-    const srcBytes = await ops.readFile(path.resolve(srcPath));
-    if (srcBytes.length === 0) {
-      throw new ExclusivePublishError("STAGE_FAILED", "待发布的成片内容为空，已中止发布。");
-    }
-    const fh = await ops.open(tempPath, "wx", 0o600);
-    stagedCreated = true;
-    try {
-      await fh.writeFile(srcBytes);
-      await fh.datasync();
-    } finally {
-      await fh.close();
+    const resolvedSrc = path.resolve(srcPath);
+    let expectedSize: number;
+    if (options?.fsOps?.readFile) {
+      const srcBytes = await ops.readFile(resolvedSrc);
+      if (srcBytes.length === 0) {
+        throw new ExclusivePublishError("STAGE_FAILED", "待发布的成片内容为空，已中止发布。");
+      }
+      expectedSize = srcBytes.length;
+      const fh = await ops.open(tempPath, "wx", 0o600);
+      stagedCreated = true;
+      try {
+        await fh.writeFile(srcBytes);
+        await fh.datasync();
+      } finally {
+        await fh.close();
+      }
+    } else {
+      const srcStat = await ops.stat(resolvedSrc);
+      if (!srcStat.isFile() || srcStat.size === 0) {
+        throw new ExclusivePublishError("STAGE_FAILED", "待发布的成片内容为空，已中止发布。");
+      }
+      expectedSize = srcStat.size;
+      const fh = await ops.open(tempPath, "wx", 0o600);
+      stagedCreated = true;
+      try {
+        const rs = createReadStream(resolvedSrc, { highWaterMark: 1024 * 1024 });
+        for await (const chunk of rs) {
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          let offset = 0;
+          while (offset < buf.length) {
+            const written = await fh.write(buf, offset, buf.length - offset);
+            offset += written.bytesWritten;
+          }
+        }
+        await fh.datasync();
+      } finally {
+        await fh.close();
+      }
     }
     const st = await ops.stat(tempPath);
-    if (!st.isFile() || st.size !== srcBytes.length) {
+    if (!st.isFile() || st.size !== expectedSize) {
       throw new ExclusivePublishError("STAGE_FAILED", "成片暂存文件大小校验未通过，已中止发布。");
     }
 

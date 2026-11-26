@@ -93,4 +93,29 @@ describe("DB1: SqliteDriver transaction flag recovery after SQLITE_BUSY", () => 
     ).toThrow("second-failure");
     expect(db.all<{ id: string }>(`SELECT id FROM notes`)).toHaveLength(0);
   });
+
+  it("FIX-04: nested transaction uses SAVEPOINT so caught inner failure rolls back inner write while outer write commits", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "aivora-db1-sp-"));
+    tempDirs.push(dir);
+    const db = openSqlite(path.join(dir, "sp.db"), { busyTimeoutMs: 50 });
+    openDbs.push(db);
+    db.exec(`CREATE TABLE items (id TEXT PRIMARY KEY);`);
+
+    db.transaction(() => {
+      db.run(`INSERT INTO items (id) VALUES ('outer_ok')`);
+      try {
+        db.transaction(() => {
+          db.run(`INSERT INTO items (id) VALUES ('inner_must_rollback')`);
+          throw new Error("inner-boom");
+        });
+      } catch {
+        // Outer tx catches inner failure and continues
+      }
+      db.run(`INSERT INTO items (id) VALUES ('outer_after')`);
+    });
+
+    const ids = db.all<{ id: string }>(`SELECT id FROM items ORDER BY id ASC`).map((r) => r.id);
+    expect(ids).toEqual(["outer_after", "outer_ok"]);
+    expect(db.isInTransaction()).toBe(false);
+  });
 });

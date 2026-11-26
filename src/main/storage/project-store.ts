@@ -105,7 +105,6 @@ export class ProjectStore {
       try {
         const db = openSqlite(dbFile);
         try {
-          initProjectSchema(db);
           const row = db.get<{ id: string }>(`SELECT id FROM projects LIMIT 1`);
           if (row?.id) this.dirByProjectId.set(row.id, dir);
         } finally {
