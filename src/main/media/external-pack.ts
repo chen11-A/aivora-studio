@@ -14,6 +14,7 @@ import { injectLockedReferences } from "../providers/ref-image-injector";
 import type { ProjectStore } from "../storage/project-store";
 import { resolveConfinedMediaPath } from "./media-protocol";
 import { probeFileDurationSec } from "./motion-filters";
+import { writeExternalPackManifest } from "./external-pack-provenance";
 
 const VIDEO_EXTS = new Set([".mp4", ".webm", ".mov", ".m4v", ".mkv"]);
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
@@ -159,6 +160,12 @@ export function exportExternalShotPack(input: {
 
   writeFileSync(path.join(outputDir, "提示词总表.md"), mdLines.join("\n"), "utf8");
   writeFileSync(path.join(outputDir, "提示词总表.txt"), txtLines.join("\n"), "utf8");
+  writeExternalPackManifest({
+    packDir: outputDir,
+    workspace: input.workspace,
+    episodeId: input.episodeId,
+    provenanceState: "planned",
+  });
   writeFileSync(
     path.join(dropDir, "命名说明.txt"),
     [
