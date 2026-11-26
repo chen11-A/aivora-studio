@@ -89,7 +89,7 @@ export function DeliveryStage() {
   const filteredCards = useMemo(() => {
     if (session.filterMode === "issues") return episodeCards.filter((c) => c.issues.length > 0);
     if (session.filterMode === "ready") {
-      return episodeCards.filter((c) => c.truth.canFormalDeliver && c.issues.length === 0);
+      return episodeCards.filter((c) => c.truth.eligibility === "deliverable" && c.issues.length === 0);
     }
     return episodeCards;
   }, [episodeCards, session.filterMode]);

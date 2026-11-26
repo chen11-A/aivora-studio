@@ -23,9 +23,20 @@
 | **F14 + 正式交付真相** | `content-qc.ts`、`export-qc.ts`、`delivery-journal.ts`、`project-reader.ts`、`studio-truth.ts`、`f05-a03-a04-safety.test.ts` | 剪辑正式导出前自动阻断 + 打开工程自动对账 + 第五页内容质检复查 | `qc_reports` + `export_delivery_records`（绑定完整快照指纹与文件 SHA-256） | 未审、改剪点或中途退出立即退出「已正式交付」；打开工程自动把中断 `publishing` 归位为 `published` 或 `aborted` | 确定性内容+技术双质检前置阻断零污染目标文件，重启对账恢复与修改失效回归 |
 | **M01–M04 预检** | `provider-preflight.ts`、`live-preprod-gate.ts`、`plan-builder.ts`、`m01-m04-contracts.test.ts`、`qilin-live-generation-wiring.test.ts` | 真实生视频入口请求前参数校验 | 官方参数契约 + 请求体快照（零密钥泄漏） | 以最终参考图/时长参数校验，不支持提前中文拦截且零网络请求，绝不静默丢图 | 断言拦截请求体与 0 网络调用：Omni 2s/11s/双参考/7 图零外发；合规放行 |
 | **第 5 页多集交付** | `src/shared/types/delivery.ts`、`register-delivery-ipc.ts`、`multi-episode-exporter.ts`、`useDeliveryStore.ts`、`DeliveryStage.tsx`、`DeliveryDrawer.tsx` | ≥2 集按需开放「5 交付」：勾选与排序分集、按序合片导出、断点续跑与 F14 内容质检复查 | `multi_episode_export_queues`（SQLite 持久化队列 + 产物 SHA-256） | 10 集第 3 集失败重启后已完 9 集零重渲，修复后仅补第 3 集并按用户排序合片 | Electron 真窗口勾选+重排 10 集第 3 集失败重启续跑合片实测通过 |
-| **移出 v2.0.0 的 8 项扩展（留作 v2.1）** | `minimax-video-adapter.ts`、`finishing-pack.ts`、`contact-sheet.ts`、`creative-presets.ts`、`shootable-screenplay.ts`、`production-sheets.ts`、`skill-md-registry.ts` | 本版均不开放 UI 入口、不纳入 v2.0.0 对外承诺（见 `docs/release-notes-v2.0.0.md`） | 保留底层纯逻辑与自动化回归供 v2.1 实测后逐步开放 | MiniMax 待真账号实测；精剪包待目标剪辑器导入→修改→保存→重开实测后再开放 | 不放半成品入口，不夸大宣传 |
 
-## 二、推进与审计闭环（单主线 `main`）
+## 二、移出 v2.0.0 范围的 8 项扩展（v2.1 延后区，不纳入 2.0 承诺）
+
+以下模块仅保留底层纯逻辑与自动化回归供 v2.1 实测后开放，**不在 v2.0.0 开放前端入口或对外宣称支持**：
+1. `minimax-video-adapter.ts`（MiniMax / 海螺异步视频供应商 — 待真实付费账号实测提交与查单后开放）；
+2. `finishing-pack.ts`（标准精剪素材包 — 待至少一款目标剪辑器完成导入→修改→保存→重开实测后开放）；
+3. `contact-sheet.ts`（帧缩略图接触表）；
+4. 局部转场缓存作为独立新卖点（剪辑页既有转场的零音画漂移仅作为底层稳定性修复默默保留）；
+5. `creative-presets.ts`（同场宫格生成）；
+6. `creative-presets.ts`（角色三视图生成）；
+7. `creative-presets.ts`（双档升格生成）；
+8. `skill-md-registry.ts`（外部 `SKILL.md` 模板导入管理面板）及 `shootable-screenplay.ts` / `production-sheets.ts` 独立工作区面板。
+
+## 三、推进与审计闭环（单主线 `main`）
 
 1. **第 1–4 批基线落地**：完成 DB1/DB2、核心媒体与多集底座（`f3e065e`）。
 2. **发版前全量审计闭环（6+1 核心真接通 + 8 项诚实裁剪 + 跨会话底盘加固）**：
