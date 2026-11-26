@@ -102,45 +102,36 @@ export function reconcileOrphanRunningJobs(
         );
         db.run(
           `UPDATE budget_ledger
-           SET status = CASE WHEN dispatched_to_network = 1 THEN 'unknown_hold' ELSE 'released' END,
-               reserved_cents = CASE WHEN dispatched_to_network = 1 THEN reserved_cents ELSE 0 END,
-               settled_cents = CASE WHEN dispatched_to_network = 1 THEN NULL ELSE 0 END,
-               note = CASE WHEN dispatched_to_network = 1
-                 THEN '检测到上次运行中断，已同步转入 UNKNOWN 待核实防止重复扣费'
-                 ELSE '检测到崩溃前尚未发包，已自动释放预占预算' END,
+           SET status = 'unknown_hold',
+               settled_cents = NULL,
+               note = '检测到上次运行中断，已同步转入 UNKNOWN 待核实防止重复扣费',
                updated_at = ?
-           WHERE job_id = ? AND status = 'reserved'`,
+           WHERE job_id = ? AND status = 'reserved' AND dispatched_to_network = 1`,
           now,
           row.id,
         );
         reconciled += 1;
       }
-      // Also clean up any reserved ledger entries with no job_id (e.g. non-queue paid calls interrupted mid-flight)
-      const orphanReserved = db.all<{ id: string; job_id: string | null; dispatched_to_network: number }>(
-        `SELECT id, job_id, dispatched_to_network FROM budget_ledger WHERE project_id = ? AND status = 'reserved'`,
+      // Transition dispatched orphan ledger entries (e.g. non-queue paid calls interrupted mid-flight)
+      // while preserving unsent (dispatched_to_network = 0) entries as Case C for zero-drift resume in JobDrawer.
+      const orphanDispatched = db.all<{ id: string; job_id: string | null }>(
+        `SELECT id, job_id FROM budget_ledger
+         WHERE project_id = ? AND status = 'reserved' AND dispatched_to_network = 1`,
         projectId,
       );
-      for (const led of orphanReserved) {
+      for (const led of orphanDispatched) {
         if (led.job_id && activeJobIds.has(led.job_id)) continue;
         if (led.job_id) {
           const jobStillActive = db.get<{ status: string }>(`SELECT status FROM jobs WHERE id = ?`, led.job_id);
           if (jobStillActive?.status === "running") continue;
         }
-        const wasDispatched = Number(led.dispatched_to_network ?? 0) === 1;
         db.run(
           `UPDATE budget_ledger
-           SET status = ?,
-               reserved_cents = CASE WHEN ? = 1 THEN reserved_cents ELSE 0 END,
-               settled_cents = CASE WHEN ? = 1 THEN NULL ELSE 0 END,
-               note = ?,
+           SET status = 'unknown_hold',
+               settled_cents = NULL,
+               note = '检测到发包后中断的孤儿预占，已转入 UNKNOWN 待核实',
                updated_at = ?
-           WHERE id = ? AND status = 'reserved'`,
-          wasDispatched ? "unknown_hold" : "released",
-          wasDispatched ? 1 : 0,
-          wasDispatched ? 1 : 0,
-          wasDispatched
-            ? "检测到发包后中断的孤儿预占，已转入 UNKNOWN 待核实"
-            : "检测到未发包的孤儿预占，已自动释放",
+           WHERE id = ? AND status = 'reserved' AND dispatched_to_network = 1`,
           now,
           led.id,
         );
