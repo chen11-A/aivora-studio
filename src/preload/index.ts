@@ -107,6 +107,11 @@ const api: AivoraDesktopApi = {
     ipcRenderer.send(IPC_CHANNELS.APP_FLUSH_COMPLETE, ok);
   },
   getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.GET_APP_INFO),
+  loadDeliveryQueue: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.DELIVERY_LOAD_QUEUE, projectId),
+  runMultiEpisodeDelivery: (input) => ipcRenderer.invoke(IPC_CHANNELS.DELIVERY_RUN_MULTI_EPISODE, input),
+  exportFinishingPack: (input) => ipcRenderer.invoke(IPC_CHANNELS.DELIVERY_EXPORT_FINISHING_PACK, input),
+  runEpisodeContentQc: (input) => ipcRenderer.invoke(IPC_CHANNELS.DELIVERY_RUN_CONTENT_QC, input),
+  generateContactSheet: (input) => ipcRenderer.invoke(IPC_CHANNELS.MEDIA_GENERATE_CONTACT_SHEET, input),
   mediaUrl: (projectId, relativePath) =>
     `aivora-media://${encodeURIComponent(projectId)}/${relativePath
       .replace(/^\/+/, "")

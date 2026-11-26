@@ -449,6 +449,17 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     onFlushBeforeClose: () => () => undefined,
     notifyFlushComplete: () => undefined,
     getAppInfo: async () => ({ version: "1.9.3", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    loadDeliveryQueue: async () => null,
+    runMultiEpisodeDelivery: async () => ({
+      ok: false, queue: null, rerenderedCount: 0, skippedVerifiedCount: 0, failedEpisodeIds: [], mergedOutputPath: null,
+      message: "请在桌面端执行多集交付与断点续跑",
+    }),
+    exportFinishingPack: async () => ({ ok: false, message: "请在桌面端导出标准精剪素材包" }),
+    runEpisodeContentQc: async ({ episodeId }) => ({
+      episodeId, snapshotDigest: "preview", ok: true, requiresHumanSignOff: true, humanSignedOff: false,
+      errorCount: 0, warnCount: 0, issues: [], highRiskSeamShotIds: [], summary: "浏览器预览模式",
+    }),
+    generateContactSheet: async () => ({ ok: false, message: "请在桌面端生成帧缩略图网格" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
     resolveDroppedFilePath: () => null,
   };

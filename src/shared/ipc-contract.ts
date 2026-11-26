@@ -24,6 +24,16 @@ import type {
   ProviderTestResult,
 } from "./types/jobs";
 import type {
+  DeliveryQueueView,
+  EpisodeContentQcResult,
+  ExportFinishingPackInput,
+  ExportFinishingPackResult,
+  GenerateContactSheetInput,
+  GenerateContactSheetResult,
+  RunMultiEpisodeDeliveryInput,
+  RunMultiEpisodeDeliveryResult,
+} from "./types/delivery";
+import type {
   DownloadWatchState,
   ExternalDownloadEvent,
   ExternalDropCommitInput,
@@ -399,6 +409,11 @@ export type AivoraDesktopApi = {
     sqliteEngine: string;
     platform: string;
   }>;
+  loadDeliveryQueue: (projectId: string) => Promise<DeliveryQueueView | null>;
+  runMultiEpisodeDelivery: (input: RunMultiEpisodeDeliveryInput) => Promise<RunMultiEpisodeDeliveryResult>;
+  exportFinishingPack: (input: ExportFinishingPackInput) => Promise<ExportFinishingPackResult>;
+  runEpisodeContentQc: (input: { projectId: string; episodeId: string; humanSignedOff?: boolean }) => Promise<EpisodeContentQcResult>;
+  generateContactSheet: (input: GenerateContactSheetInput) => Promise<GenerateContactSheetResult>;
   mediaUrl: (projectId: string, relativePath: string) => string;
   resolveDroppedFilePath?: (file: File) => string | null;
 };
@@ -442,6 +457,11 @@ export const IPC_CHANNELS = {
   EXPORT_EPISODE_VIDEO: "aivora:media:export-episode",
   CANCEL_EPISODE_EXPORT: "aivora:media:cancel-export",
   EXPORT_PROGRESS_EVENT: "aivora:media:export-progress",
+  DELIVERY_LOAD_QUEUE: "aivora:delivery:load-queue",
+  DELIVERY_RUN_MULTI_EPISODE: "aivora:delivery:run-multi-episode",
+  DELIVERY_EXPORT_FINISHING_PACK: "aivora:delivery:export-finishing-pack",
+  DELIVERY_RUN_CONTENT_QC: "aivora:delivery:run-content-qc",
+  MEDIA_GENERATE_CONTACT_SHEET: "aivora:media:generate-contact-sheet",
   REVEAL_PATH: "aivora:shell:reveal-path",
   OPEN_EXTERNAL_URL: "aivora:shell:open-external-url",
   EXPORT_ARCHIVE: "aivora:archive:export",

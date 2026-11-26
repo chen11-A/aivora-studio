@@ -30,6 +30,7 @@ import { testProviderConnectivity } from "../providers/openai-compat-adapter";
 import type { DirectorService } from "../skills/director-service";
 import type { GlobalConfigStore } from "../storage/global-store";
 import { safeFolderSegment, type ProjectStore } from "../storage/project-store";
+import { registerDeliveryIpcHandlers } from "./register-delivery-ipc";
 import { registerExternalAndModelExtraIpc } from "./register-external-ipc";
 
 export function registerIpcHandlers(deps: {
@@ -490,4 +491,5 @@ export function registerIpcHandlers(deps: {
     getWindow: deps.getWindow,
     allowedRevealPaths,
   });
+  registerDeliveryIpcHandlers({ projects: deps.projects, allowedRevealPaths });
 }
