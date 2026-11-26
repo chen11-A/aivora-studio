@@ -152,6 +152,14 @@ export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): str
     input.characterAssetIds !== undefined
       ? JSON.stringify(input.characterAssetIds)
       : String(row.character_asset_ids_json ?? "[]");
+  const nextPropIdsJson =
+    input.propAssetIds !== undefined
+      ? JSON.stringify(input.propAssetIds)
+      : String(row.prop_asset_ids_json ?? "[]");
+  const nextReqRefIdsJson =
+    input.requiredRefAssetIds !== undefined
+      ? JSON.stringify(input.requiredRefAssetIds)
+      : String(row.required_ref_asset_ids_json ?? "[]");
 
   const nextDialogue = input.dialogue ?? String(row.dialogue ?? "");
   const nextSpeaker = input.speaker ?? String(row.speaker ?? "");
@@ -193,7 +201,7 @@ export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): str
        trim_in_sec = ?, trim_out_sec = ?, visual_prompt = ?,
        negative_prompt = ?, dialogue = ?, speaker = ?, speaker_asset_id = ?, speaker_status = ?,
        subtitle = ?, source_span_json = ?, key_beat = ?, key_beat_reason = ?, video_plan_mode = ?,
-       character_asset_ids_json = ?,
+       character_asset_ids_json = ?, prop_asset_ids_json = ?, required_ref_asset_ids_json = ?,
        selected_image_take_id = ?, selected_video_take_id = ?, selected_speech_take_id = ?, updated_at = ?
        WHERE id = ?`,
       input.title ?? String(row.title),
@@ -214,6 +222,8 @@ export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): str
       nextKeyBeatReason,
       nextVideoPlanMode,
       nextCharIdsJson,
+      nextPropIdsJson,
+      nextReqRefIdsJson,
       input.selectedImageTakeId !== undefined
         ? input.selectedImageTakeId
         : (row.selected_image_take_id as string | null),
@@ -236,38 +246,21 @@ export function selectTakeInDb(
   input: { projectId: string; shotId: string; takeId: string; kind: TakeKind },
 ): void {
   const now = new Date().toISOString();
+  const column =
+    input.kind === "speech"
+      ? "selected_speech_take_id"
+      : input.kind === "video"
+        ? "selected_video_take_id"
+        : "selected_image_take_id";
   db.transaction(() => {
-    if (input.kind === "speech") {
-      db.run(`UPDATE takes SET is_selected = 0 WHERE shot_id = ? AND kind = 'speech'`, input.shotId);
-      db.run(`UPDATE takes SET is_selected = 1 WHERE id = ? AND shot_id = ?`, input.takeId, input.shotId);
-      db.run(
-        `UPDATE shots SET selected_speech_take_id = ?, updated_at = ? WHERE id = ?`,
-        input.takeId,
-        now,
-        input.shotId,
-      );
-    } else {
-      db.run(
-        `UPDATE takes SET is_selected = 0 WHERE shot_id = ? AND kind IN ('image', 'video')`,
-        input.shotId,
-      );
-      db.run(`UPDATE takes SET is_selected = 1 WHERE id = ? AND shot_id = ?`, input.takeId, input.shotId);
-      if (input.kind === "video") {
-        db.run(
-          `UPDATE shots SET selected_video_take_id = ?, updated_at = ? WHERE id = ?`,
-          input.takeId,
-          now,
-          input.shotId,
-        );
-      } else {
-        db.run(
-          `UPDATE shots SET selected_image_take_id = ?, selected_video_take_id = NULL, updated_at = ? WHERE id = ?`,
-          input.takeId,
-          now,
-          input.shotId,
-        );
-      }
-    }
+    db.run(`UPDATE takes SET is_selected = 0 WHERE shot_id = ? AND kind = ?`, input.shotId, input.kind);
+    db.run(`UPDATE takes SET is_selected = 1 WHERE id = ? AND shot_id = ?`, input.takeId, input.shotId);
+    db.run(
+      `UPDATE shots SET ${column} = ?, updated_at = ? WHERE id = ?`,
+      input.takeId,
+      now,
+      input.shotId,
+    );
     db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
   });
 }

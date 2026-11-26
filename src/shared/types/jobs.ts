@@ -102,6 +102,22 @@ export type InjectedRefSummary = {
   description: string;
 };
 
+export type MissingRequiredRefSummary = {
+  assetId: string;
+  name: string;
+  kind: "character" | "scene" | "prop";
+  reason: string;
+};
+
+export type LockedReferenceMediaItem = {
+  assetId: string | null;
+  role: "first_frame" | "last_frame" | "character" | "scene" | "prop";
+  label: string;
+  mediaPath: string;
+  mediaSha256: string;
+  mime: "image/png" | "image/jpeg" | "image/webp";
+};
+
 export type LockedGenerationInput = {
   finalPrompt: string;
   negativePrompt: string;
@@ -110,6 +126,7 @@ export type LockedGenerationInput = {
   firstFrameMediaPath: string | null;
   referenceMediaPath: string | null;
   referenceMediaSha256: string | null;
+  referenceItems?: LockedReferenceMediaItem[];
   speechVoice: string;
 };
 
@@ -127,6 +144,8 @@ export type GenerationPlan = {
   estimatedSec: number;
   promptPreview: string;
   injectedRefs: InjectedRefSummary[];
+  missingRequiredRefs?: MissingRequiredRefSummary[];
+  modelPolicyNotice?: string | null;
   firstFramePath?: string | null;
   upstreamDurationNote?: string | null;
   idempotencyKey: string;

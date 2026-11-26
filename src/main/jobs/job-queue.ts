@@ -8,6 +8,7 @@ import type { OAuthManager } from "../auth/auth-manager";
 import { GROK_API } from "../auth/grok-oauth";
 import { probeFileDurationSec } from "../media/motion-filters";
 import { AmbiguousRemoteError } from "../providers/kling-adapter";
+import { checkModelPolicy } from "../providers/model-registry";
 import { buildAssetPortraitPrompt, injectLockedReferences } from "../providers/ref-image-injector";
 import { clampSeedanceDurationSec } from "../providers/seedance-adapter";
 import type { GlobalConfigStore } from "../storage/global-store";
@@ -114,6 +115,8 @@ export class GenerationJobQueue {
       : {
           finalPrompt: portraitInfo!.prompt,
           injectedRefs: [],
+          missingRequiredRefs: [],
+          orderedReferenceItems: [],
           primaryReferenceImageBase64: null,
           primaryReferenceImagePath: null,
           primaryReferenceMediaPath: null,
@@ -130,6 +133,7 @@ export class GenerationJobQueue {
     let modelId = "";
     let lockedSnap: LockedProviderSnapshot | null = null;
     let blockingReason: string | null = null;
+    let modelPolicyNotice: string | null = null;
 
     if (!binding) {
       blockingReason = `请先在「模型中心」为「${capability === "image" ? "生图定妆" : capability === "video" ? "生成视频" : "人物配音"}」指定默认模型。`;
@@ -170,6 +174,20 @@ export class GenerationJobQueue {
       }
     }
 
+    if (!blockingReason && modelId) {
+      const policy = checkModelPolicy(modelId);
+      if (!policy.allowed) {
+        blockingReason = policy.reason;
+      } else if (policy.notice) {
+        modelPolicyNotice = policy.notice;
+      }
+    }
+
+    const missingRequiredRefs = input.kind === "speech" || isPortrait ? [] : prepared.missingRequiredRefs;
+    if (!blockingReason && missingRequiredRefs.length > 0) {
+      blockingReason = missingRequiredRefs[0]?.reason ?? "必需参考图缺失";
+    }
+
     if (shot && input.kind === "speech") {
       const speechText = shot.dialogue.trim() || shot.subtitle.trim();
       if (!speechText) {
@@ -199,6 +217,7 @@ export class GenerationJobQueue {
         input.kind === "speech" || isPortrait ? null : prepared.primaryReferenceMediaPath,
       referenceMediaSha256:
         input.kind === "speech" || isPortrait ? null : prepared.primaryReferenceMediaSha256,
+      referenceItems: input.kind === "speech" || isPortrait ? [] : prepared.orderedReferenceItems,
       speechVoice,
     };
     const targetKey = input.assetId || input.shotId;
@@ -243,6 +262,8 @@ export class GenerationJobQueue {
       estimatedSec: input.kind === "video" ? 60 : 12,
       promptPreview,
       injectedRefs: input.kind === "speech" ? [] : prepared.injectedRefs,
+      missingRequiredRefs,
+      modelPolicyNotice,
       firstFramePath: confirmedFirstFrame?.mediaPath ?? null,
       upstreamDurationNote,
       idempotencyKey: `idem_${randomUUID().replaceAll("-", "").slice(0, 16)}`,
@@ -296,6 +317,8 @@ export class GenerationJobQueue {
       throw new Error("相同参数的生成任务正在运行中，请勿重复提交");
     }
     const snapshot = JSON.parse(plan.providerSnapshotJson) as LockedProviderSnapshot;
+    const policy = checkModelPolicy(snapshot.modelId);
+    if (!policy.allowed) throw new Error(policy.reason);
     const jobId = `job_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
 
     const ws = this.projects.openProject(plan.projectId);
@@ -447,7 +470,7 @@ export class GenerationJobQueue {
         progress: 100,
         errorMessage: null,
       });
-      return { ok: true, job: done, message: "查单成功！已找回成片视频并自动拉回本地保存。" };
+      return { ok: true, job: done, message: "查单成功！已找回视频并保存为候选版本，确认后可采用。" };
     }
     if (res.status === "failed") {
       const failed = updateJobRow(this.projects, input.projectId, job.id, {

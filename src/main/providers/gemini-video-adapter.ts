@@ -9,6 +9,7 @@ import type { AspectRatio } from "../../shared/types/domain";
 import { probeFfmpegStatus, runMediaBinary } from "../media/ffmpeg-locator";
 import { fetchGeminiApi, fetchGeminiMediaBytes } from "./gemini-official-adapter";
 import { AmbiguousRemoteError } from "./kling-adapter";
+import { checkModelPolicy } from "./model-registry";
 
 type VideoContentBlock = {
   type?: string;
@@ -58,6 +59,10 @@ export async function submitGeminiVideoTask(
   },
   fetcher: typeof fetch = fetch,
 ): Promise<{ taskId: string }> {
+  const policy = checkModelPolicy(input.modelId);
+  if (!policy.allowed) {
+    throw new Error(policy.reason);
+  }
   const contentInput = input.imageBase64
     ? [
         { type: "image", data: input.imageBase64, mime_type: input.imageMime || "image/jpeg" },

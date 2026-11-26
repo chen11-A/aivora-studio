@@ -87,10 +87,25 @@ export function detectGenerationPlanDrift(
   if (plan.kind === "video" && shot.durationSec !== locked.durationSec) reasons.push("时长");
   if (ws.project.aspectRatio !== locked.aspectRatio) reasons.push("画幅比例");
 
+  if (prepared.missingRequiredRefs.length > 0) {
+    reasons.push("必需参考图缺失");
+  }
+
   const refPathChanged = (prepared.primaryReferenceMediaPath ?? null) !== locked.referenceMediaPath;
   const refShaChanged =
     (prepared.primaryReferenceMediaSha256 ?? null) !== locked.referenceMediaSha256;
-  if ((refPathChanged || refShaChanged) && !firstFrameChanged && !reasons.includes("首帧图文件已不存在")) {
+  const prevRefSig = (locked.referenceItems ?? [])
+    .map((r) => `${r.role}:${r.mediaPath}:${r.mediaSha256}`)
+    .join("|");
+  const curRefSig = prepared.orderedReferenceItems
+    .map((r) => `${r.role}:${r.mediaPath}:${r.mediaSha256}`)
+    .join("|");
+  const refListChanged = locked.referenceItems !== undefined && prevRefSig !== curRefSig;
+  if (
+    (refPathChanged || refShaChanged || refListChanged) &&
+    !firstFrameChanged &&
+    !reasons.includes("首帧图文件已不存在")
+  ) {
     reasons.push(locked.firstFrameMediaPath ? "首帧图" : "参考图");
   }
 

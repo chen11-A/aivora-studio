@@ -57,24 +57,53 @@ export type DispatchedJobOutcome =
       promptSnapshotOverride?: string;
     };
 
-async function loadLockedReferenceImage(
+async function loadSingleReferenceImage(
   projectDir: string,
-  locked: LockedGenerationInput,
-): Promise<{ base64: string; mime: string; compressed: boolean } | null> {
-  if (!locked.referenceMediaPath) return null;
-  const absPath = resolveConfinedMediaPath(projectDir, locked.referenceMediaPath);
+  mediaPath: string,
+  expectedSha256: string | null,
+): Promise<{ base64: string; mime: "image/png" | "image/jpeg" | "image/webp"; compressed: boolean }> {
+  const absPath = resolveConfinedMediaPath(projectDir, mediaPath);
   if (!absPath || !existsSync(absPath)) {
     throw new Error(
       "已确认的首帧或参考图文件已不存在，已拦截发送以避免降级为无参考图扣费，请重新确认后再生成。",
     );
   }
-  if (locked.referenceMediaSha256) {
+  if (expectedSha256) {
     const actualSha = createHash("sha256").update(readFileSync(absPath)).digest("hex");
-    if (actualSha !== locked.referenceMediaSha256) {
+    if (actualSha !== expectedSha256) {
       throw new Error("已确认的首帧或参考图文件内容已变化，已拦截发送，请重新确认后再生成。");
     }
   }
-  return prepareReferenceImageForUpload(absPath);
+  const prepared = await prepareReferenceImageForUpload(absPath);
+  if (!prepared) {
+    throw new Error("参考图文件无法读取，已拦截发送。");
+  }
+  return prepared;
+}
+
+async function loadLockedReferenceImage(
+  projectDir: string,
+  locked: LockedGenerationInput,
+): Promise<{ base64: string; mime: "image/png" | "image/jpeg" | "image/webp"; compressed: boolean } | null> {
+  if (!locked.referenceMediaPath) return null;
+  return loadSingleReferenceImage(projectDir, locked.referenceMediaPath, locked.referenceMediaSha256);
+}
+
+async function loadLockedReferenceImages(
+  projectDir: string,
+  locked: LockedGenerationInput,
+): Promise<Array<{ base64: string; mime: "image/png" | "image/jpeg" | "image/webp"; label: string }>> {
+  const items = locked.referenceItems ?? [];
+  if (items.length === 0) {
+    const single = await loadLockedReferenceImage(projectDir, locked);
+    return single ? [{ base64: single.base64, mime: single.mime, label: "reference" }] : [];
+  }
+  const out: Array<{ base64: string; mime: "image/png" | "image/jpeg" | "image/webp"; label: string }> = [];
+  for (const item of items) {
+    const loaded = await loadSingleReferenceImage(projectDir, item.mediaPath, item.mediaSha256);
+    out.push({ base64: loaded.base64, mime: loaded.mime, label: item.label });
+  }
+  return out;
 }
 
 export async function dispatchGenerationJob(ctx: {
@@ -281,7 +310,8 @@ export async function dispatchGenerationJob(ctx: {
 
   // 7. Shot first-frame image generation (Gemini Official, ComfyUI Worker, or OpenAI-compat)
   if (plan.kind === "image") {
-    const refImg = await loadLockedReferenceImage(projectDir, locked);
+    const refImgs = await loadLockedReferenceImages(projectDir, locked);
+    const primaryRef = refImgs[0] ?? null;
     const media =
       snapshot.protocol === "gemini-official"
         ? await runGeminiImageGeneration(
@@ -292,8 +322,9 @@ export async function dispatchGenerationJob(ctx: {
               prompt: locked.finalPrompt,
               aspectRatio: locked.aspectRatio,
               projectDir,
-              referenceImageBase64: refImg?.base64 ?? null,
-              referenceImageMime: refImg?.mime ?? "image/jpeg",
+              referenceImageBase64: primaryRef?.base64 ?? null,
+              referenceImageMime: primaryRef?.mime ?? "image/jpeg",
+              referenceImages: refImgs,
             },
             fetcher,
           )
@@ -307,7 +338,7 @@ export async function dispatchGenerationJob(ctx: {
                 negativePrompt: locked.negativePrompt,
                 aspectRatio: locked.aspectRatio,
                 projectDir,
-                referenceImageBase64: refImg?.base64 ?? null,
+                referenceImageBase64: primaryRef?.base64 ?? null,
               },
               fetcher,
             )
@@ -319,11 +350,17 @@ export async function dispatchGenerationJob(ctx: {
                 prompt: locked.finalPrompt,
                 aspectRatio: locked.aspectRatio,
                 projectDir,
-                referenceImageBase64: refImg?.base64 ?? null,
+                referenceImageBase64: primaryRef?.base64 ?? null,
+                referenceImages: refImgs,
               },
               fetcher,
             );
-    return { target: "shot-take", kind: "image", media, message: "首帧图生成成功，已新增版本并选中" };
+    return {
+      target: "shot-take",
+      kind: "image",
+      media,
+      message: "首帧候选图已生成（未覆盖当前定稿，确认满意后再点「采用」）",
+    };
   }
 
   // 8. Speech TTS synthesis (Gemini Official or OpenAI-compat)
@@ -345,7 +382,7 @@ export async function dispatchGenerationJob(ctx: {
       target: "shot-take",
       kind: "speech",
       media,
-      message: "对白配音生成成功，已绑定至当前镜头",
+      message: "对白配音候选已生成（未覆盖当前定稿，确认后再采用）",
       promptSnapshotOverride: buildSpeechSnapshot(locked.finalPrompt, voice),
     };
   }

@@ -173,7 +173,7 @@ export function populateDemoProject(db: SqliteDriver, created: ProjectWorkspace)
       now,
     );
     db.run(
-      `UPDATE scenes SET title = '第一场 · 晚照书店外', summary = '雨后傍晚，林晚重返老街书店门口' WHERE id = ?`,
+      `UPDATE scenes SET title = '第一场 · 晚照书店外', location_asset_id = 'ast_shop', summary = '雨后傍晚，林晚重返老街书店门口' WHERE id = ?`,
       sc1.id,
     );
     db.run(
@@ -212,8 +212,8 @@ export function populateDemoProject(db: SqliteDriver, created: ProjectWorkspace)
     const tk2Id = `tk_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
     const shot2Prompt = "林晚停下旧自行车摘下湿帽，侧脸望向橱窗里的诗集，玻璃倒映夕阳余晖";
     db.run(
-      `INSERT INTO shots (id, scene_id, episode_id, order_index, title, scale, camera_move, duration_sec, visual_prompt, dialogue, speaker, speaker_asset_id, speaker_status, subtitle, key_beat, key_beat_reason, selected_image_take_id, updated_at)
-       VALUES (?, ?, ?, 1, '镜 02 · 林晚驻足橱窗', '近景', '缓推', 3, ?, '这家店居然还开着。', '林晚', 'ast_linwan', 'confirmed', '这家店居然还开着。', 1, '关键人物重逢开端与旧诗集伏笔', ?, ?)`,
+      `INSERT INTO shots (id, scene_id, episode_id, order_index, title, scale, camera_move, duration_sec, visual_prompt, dialogue, speaker, speaker_asset_id, speaker_status, subtitle, key_beat, key_beat_reason, character_asset_ids_json, selected_image_take_id, updated_at)
+       VALUES (?, ?, ?, 1, '镜 02 · 林晚驻足橱窗', '近景', '缓推', 3, ?, '这家店居然还开着。', '林晚', 'ast_linwan', 'confirmed', '这家店居然还开着。', 1, '关键人物重逢开端与旧诗集伏笔', '["ast_linwan"]', ?, ?)`,
       sh2Id,
       sc1.id,
       ep1.id,
@@ -236,8 +236,8 @@ export function populateDemoProject(db: SqliteDriver, created: ProjectWorkspace)
     const tk3Id = `tk_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
     const shot3Prompt = "书店木门推开铜铃晃动，高大书架间光线穿过微尘，陈伯站在木梯上微笑回头";
     db.run(
-      `INSERT INTO shots (id, scene_id, episode_id, order_index, title, scale, camera_move, duration_sec, visual_prompt, dialogue, speaker, speaker_asset_id, speaker_status, subtitle, key_beat, key_beat_reason, selected_image_take_id, updated_at)
-       VALUES (?, ?, ?, 2, '镜 03 · 推门铜铃轻响', '中景', '横摇', 5, ?, '小晚，你终于回来了。那本夹着银杏叶的书，我替你留了整整三年。', '陈伯', 'ast_chenbo', 'confirmed', '那本夹着银杏叶的书，我替你留了整整三年。', 1, '铜铃重逢与三年旧书揭晓', ?, ?)`,
+      `INSERT INTO shots (id, scene_id, episode_id, order_index, title, scale, camera_move, duration_sec, visual_prompt, dialogue, speaker, speaker_asset_id, speaker_status, subtitle, key_beat, key_beat_reason, character_asset_ids_json, selected_image_take_id, updated_at)
+       VALUES (?, ?, ?, 2, '镜 03 · 推门铜铃轻响', '中景', '横摇', 5, ?, '小晚，你终于回来了。那本夹着银杏叶的书，我替你留了整整三年。', '陈伯', 'ast_chenbo', 'confirmed', '那本夹着银杏叶的书，我替你留了整整三年。', 1, '铜铃重逢与三年旧书揭晓', '["ast_chenbo"]', ?, ?)`,
       sh3Id,
       sc2Id,
       ep1.id,

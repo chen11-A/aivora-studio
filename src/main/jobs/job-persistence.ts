@@ -240,6 +240,10 @@ export function updateJobRow(
   });
 }
 
+/**
+ * F04: Any generated, retried, or late-arriving take is strictly saved as a candidate (`is_selected = 0`).
+ * Never overwrites existing confirmed image/video/speech selections and NEVER clears `selected_video_take_id`.
+ */
 export function recordSuccessfulTakeInDb(
   projects: ProjectStore,
   input: {
@@ -251,13 +255,14 @@ export function recordSuccessfulTakeInDb(
     providerInfo: string;
     durationSec?: number | null;
   },
-): void {
+): { takeId: string; versionNumber: number } {
   const now = new Date().toISOString();
   const takeId = `tk_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
   const dur =
     typeof input.durationSec === "number" && Number.isFinite(input.durationSec) && input.durationSec > 0
       ? Number(input.durationSec.toFixed(2))
       : null;
+  let nextVer = 1;
   projects.withProjectDb(input.projectId, (db) => {
     const maxVer =
       db.get<{ v: number | null }>(
@@ -266,19 +271,11 @@ export function recordSuccessfulTakeInDb(
           : `SELECT MAX(version_number) AS v FROM takes WHERE shot_id = ? AND kind IN ('image', 'video')`,
         input.shotId,
       )?.v ?? 0;
-    const nextVer = Number(maxVer) + 1;
+    nextVer = Number(maxVer) + 1;
     db.transaction(() => {
-      if (input.kind === "speech") {
-        db.run(`UPDATE takes SET is_selected = 0 WHERE shot_id = ? AND kind = 'speech'`, input.shotId);
-      } else {
-        db.run(
-          `UPDATE takes SET is_selected = 0 WHERE shot_id = ? AND kind IN ('image', 'video')`,
-          input.shotId,
-        );
-      }
       db.run(
         `INSERT INTO takes (id, shot_id, kind, version_number, media_path, media_sha256, prompt_snapshot, provider_info, is_selected, duration_sec, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
         takeId,
         input.shotId,
         input.kind,
@@ -290,29 +287,8 @@ export function recordSuccessfulTakeInDb(
         dur,
         now,
       );
-      if (input.kind === "video") {
-        db.run(
-          `UPDATE shots SET selected_video_take_id = ?, updated_at = ? WHERE id = ?`,
-          takeId,
-          now,
-          input.shotId,
-        );
-      } else if (input.kind === "image") {
-        db.run(
-          `UPDATE shots SET selected_image_take_id = ?, selected_video_take_id = NULL, updated_at = ? WHERE id = ?`,
-          takeId,
-          now,
-          input.shotId,
-        );
-      } else {
-        db.run(
-          `UPDATE shots SET selected_speech_take_id = ?, updated_at = ? WHERE id = ?`,
-          takeId,
-          now,
-          input.shotId,
-        );
-      }
       db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
     });
   });
+  return { takeId, versionNumber: nextVer };
 }

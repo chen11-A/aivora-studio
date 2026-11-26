@@ -102,9 +102,11 @@ describe("v1.2.1 first-frame anchoring, confirmed-ref vs candidate separation, s
     expect(submittedEndpoint).toContain("/v1/videos/image2video");
     expect(submittedImageB64).toBe(tinyPng.toString("base64"));
 
-    // Verify ffprobe automatically populated durationSec on the generated video take
+    // Verify F04: generated video is saved as candidate with ffprobe duration and never overwrites old confirmed video
     const freshWs = projects.openProject(demo.project.id);
-    const newVidTake = freshWs.takes.find((t) => t.id === freshWs.shots.find((s) => s.id === shotId)?.selectedVideoTakeId);
+    const videoTakes = freshWs.takes.filter((t) => t.shotId === shotId && t.kind === "video");
+    expect(videoTakes).toHaveLength(2);
+    const newVidTake = videoTakes.find((t) => !t.isSelected);
     expect(newVidTake?.durationSec).toBeGreaterThanOrEqual(0.8);
 
     projects.closeAll();
@@ -246,10 +248,28 @@ describe("v1.2.1 first-frame anchoring, confirmed-ref vs candidate separation, s
     });
     expect(preflight.warnings.some((w) => w.includes(dialogueShot.title) && w.includes("待重配"))).toBe(true);
 
-    // 3. Regenerate speech via AI TTS -> returns to "ready"
+    // 3. Regenerate speech via AI TTS -> saves candidate first (old take preserved), returns to "ready" after user adopts candidate
     const regenPlan = queue.preparePlan({ projectId: demo.project.id, shotId: dialogueShot.id, kind: "speech" });
     const regenRes = await queue.confirmAndRun(regenPlan);
     expect(regenRes.ok).toBe(true);
+    const wsAfterCand = projects.openProject(demo.project.id);
+    const newSpeechCandidate = wsAfterCand.takes.find(
+      (t) => t.shotId === dialogueShot.id && t.kind === "speech" && !t.isSelected,
+    );
+    expect(newSpeechCandidate).toBeTruthy();
+    expect(
+      evaluateShotSpeechStatus(
+        wsAfterCand.shots.find((s) => s.id === dialogueShot.id)!,
+        wsAfterCand.takes,
+        wsAfterCand.assets,
+      ).state,
+    ).toBe("stale");
+    projects.selectTake({
+      projectId: demo.project.id,
+      shotId: dialogueShot.id,
+      kind: "speech",
+      takeId: newSpeechCandidate!.id,
+    });
     const wsRegen = projects.openProject(demo.project.id);
     expect(
       evaluateShotSpeechStatus(

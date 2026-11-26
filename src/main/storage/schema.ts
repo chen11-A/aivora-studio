@@ -227,6 +227,12 @@ export function initProjectSchema(db: SqliteDriver): void {
   if (!shotCols.has("video_plan_mode")) {
     db.exec(`ALTER TABLE shots ADD COLUMN video_plan_mode TEXT NOT NULL DEFAULT 'paid_video'`);
   }
+  if (!shotCols.has("prop_asset_ids_json")) {
+    db.exec(`ALTER TABLE shots ADD COLUMN prop_asset_ids_json TEXT NOT NULL DEFAULT '[]'`);
+  }
+  if (!shotCols.has("required_ref_asset_ids_json")) {
+    db.exec(`ALTER TABLE shots ADD COLUMN required_ref_asset_ids_json TEXT NOT NULL DEFAULT '[]'`);
+  }
   const assetCols = new Set(
     db.all<{ name: string }>(`PRAGMA table_info(assets)`).map((c) => c.name),
   );

@@ -305,17 +305,15 @@ export async function commitExternalDropImport(
     }
     const durationSec =
       item.mediaKind === "video" ? await probeFileDurationSec(item.filePath, "video") : null;
-    const curShot = projects.openProject(input.projectId).shots.find((s) => s.id === item.shotId);
-    const preserveSelection =
-      !input.overwriteSelectedVideo && Boolean(curShot?.selectedVideoTakeId);
 
+    // F04: External drop imports strictly create candidate takes without overwriting confirmed takes
     projects.importShotTakeFromPath({
       projectId: input.projectId,
       shotId: item.shotId,
       kind: item.mediaKind,
       sourceFilePath: item.filePath,
       durationSec,
-      preserveExistingSelection: preserveSelection,
+      preserveExistingSelection: true,
     });
     shotShas.add(sha);
     existingShasByShot.set(item.shotId, shotShas);

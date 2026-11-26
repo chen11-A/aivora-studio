@@ -359,15 +359,27 @@ export async function runGeminiImageGeneration(
     projectDir: string;
     referenceImageBase64?: string | null;
     referenceImageMime?: string;
+    referenceImages?: Array<{ base64: string; mime: string }>;
   },
   fetcher: typeof fetch = fetch,
 ): Promise<{ mediaPath: string; mediaSha256: string }> {
-  const contentInput = input.referenceImageBase64
-    ? [
-        { type: "image", data: input.referenceImageBase64, mime_type: input.referenceImageMime || "image/jpeg" },
-        { type: "text", text: input.prompt },
-      ]
-    : input.prompt;
+  const { checkModelPolicy } = await import("./model-registry");
+  const policy = checkModelPolicy(input.modelId);
+  if (!policy.allowed) throw new Error(policy.reason);
+
+  const orderedRefs =
+    input.referenceImages && input.referenceImages.length > 0
+      ? input.referenceImages
+      : input.referenceImageBase64
+        ? [{ base64: input.referenceImageBase64, mime: input.referenceImageMime || "image/jpeg" }]
+        : [];
+  const contentInput =
+    orderedRefs.length > 0
+      ? [
+          ...orderedRefs.map((ref) => ({ type: "image", data: ref.base64, mime_type: ref.mime })),
+          { type: "text", text: input.prompt },
+        ]
+      : input.prompt;
 
   const res = await fetchGeminiApi(
     {

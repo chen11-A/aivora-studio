@@ -10,6 +10,7 @@ export function ConfirmJobModal() {
   const close = useAiGenerationStore((s) => s.closePendingPlan);
   const confirmRun = useAiGenerationStore((s) => s.confirmRunPendingPlan);
   const setModelCenterOpen = useStudioStore((s) => s.setModelCenterOpen);
+  const setStage = useStudioStore((s) => s.setStage);
 
   const lastPlanRef = useRef(plan);
   if (plan) lastPlanRef.current = plan;
@@ -72,6 +73,11 @@ export function ConfirmJobModal() {
                 {activePlan.upstreamDurationNote}
               </div>
             )}
+            {activePlan.modelPolicyNotice && (
+              <div className="pt-1.5 text-[11px] text-[var(--accent-amber-ink)] border-t border-[var(--border-subtle)]">
+                {activePlan.modelPolicyNotice}
+              </div>
+            )}
           </div>
 
           {activePlan.kind !== "speech" && (
@@ -82,7 +88,7 @@ export function ConfirmJobModal() {
               </div>
               {activePlan.injectedRefs.length === 0 ? (
                 <div className="text-[11px] text-[var(--text-muted)]">
-                  暂未锁定角色或场景参考图，将按下方画面描述直接生成。
+                  本镜未绑定已锁定角色/场景参考图，将按下方画面描述直接生成。
                 </div>
               ) : (
                 <div className="flex flex-wrap gap-1.5">
@@ -108,19 +114,34 @@ export function ConfirmJobModal() {
               <AlertTriangle className="w-4 h-4 text-[var(--accent-amber-text)] shrink-0 mt-0.5" />
               <div className="flex-1">
                 <div>{activePlan.blockingReason}</div>
-                {activePlan.blockingReason?.includes("模型中心") && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      close();
-                      setModelCenterOpen(true);
-                    }}
-                    className="aivora-pressable mt-2 inline-flex items-center gap-1 text-[var(--accent-primary-text)] hover:underline font-medium cursor-pointer"
-                  >
-                    <Cpu className="w-3.5 h-3.5" />
-                    <span>前往模型中心配置</span>
-                  </button>
-                )}
+                <div className="flex flex-wrap gap-3 mt-2">
+                  {activePlan.blockingReason?.includes("模型中心") && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        close();
+                        setModelCenterOpen(true);
+                      }}
+                      className="aivora-pressable inline-flex items-center gap-1 text-[var(--accent-primary-text)] hover:underline font-medium cursor-pointer"
+                    >
+                      <Cpu className="w-3.5 h-3.5" />
+                      <span>前往模型中心配置</span>
+                    </button>
+                  )}
+                  {(activePlan.missingRequiredRefs?.length ?? 0) > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        close();
+                        void setStage("cast");
+                      }}
+                      className="aivora-pressable inline-flex items-center gap-1 text-[var(--accent-primary-text)] hover:underline font-medium cursor-pointer"
+                    >
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>前往角色与场景补齐参考</span>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -128,7 +149,7 @@ export function ConfirmJobModal() {
           <div className="flex items-start gap-2 text-[11px] text-[var(--text-muted)]">
             <ShieldCheck className="w-4 h-4 text-[var(--accent-success-text)] shrink-0 mt-0.5" />
             <span>
-              防重复扣费：断网时不会自动重发，可在「任务」中仅查进度找回；生成失败绝不覆盖已有画面。
+              防重复扣费与保护定稿：断网时不会自动重发；新回片仅保存为候选版本，绝不自动覆盖或清空当前定稿。
             </span>
           </div>
 

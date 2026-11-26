@@ -233,7 +233,22 @@ export function importShotTakeInDb(
   }
 
   db.transaction(() => {
-    if (input.kind === "speech") {
+    if (input.preserveExistingSelection) {
+      db.run(
+        `INSERT INTO takes (id, shot_id, kind, version_number, media_path, media_sha256, prompt_snapshot, provider_info, is_selected, duration_sec, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+        takeId,
+        input.shotId,
+        input.kind,
+        nextVer,
+        copied.mediaPath,
+        copied.mediaSha256,
+        input.kind === "speech" ? speechSnapshot : shot.visual_prompt,
+        input.kind === "speech" ? `候选音频 · ${copied.baseName}` : `外采回流 · ${copied.baseName}`,
+        dur,
+        now,
+      );
+    } else if (input.kind === "speech") {
       db.run(`UPDATE takes SET is_selected = 0 WHERE shot_id = ? AND kind = 'speech'`, input.shotId);
       db.run(
         `INSERT INTO takes (id, shot_id, kind, version_number, media_path, media_sha256, prompt_snapshot, provider_info, is_selected, duration_sec, created_at)
@@ -254,25 +269,11 @@ export function importShotTakeInDb(
         now,
         input.shotId,
       );
-    } else if (input.preserveExistingSelection) {
-      db.run(
-        `INSERT INTO takes (id, shot_id, kind, version_number, media_path, media_sha256, prompt_snapshot, provider_info, is_selected, duration_sec, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-        takeId,
-        input.shotId,
-        input.kind,
-        nextVer,
-        copied.mediaPath,
-        copied.mediaSha256,
-        shot.visual_prompt,
-        `外采回流 · ${copied.baseName}`,
-        dur,
-        now,
-      );
     } else {
       db.run(
-        `UPDATE takes SET is_selected = 0 WHERE shot_id = ? AND kind IN ('image', 'video')`,
+        `UPDATE takes SET is_selected = 0 WHERE shot_id = ? AND kind = ?`,
         input.shotId,
+        input.kind,
       );
       db.run(
         `INSERT INTO takes (id, shot_id, kind, version_number, media_path, media_sha256, prompt_snapshot, provider_info, is_selected, duration_sec, created_at)
@@ -296,8 +297,9 @@ export function importShotTakeInDb(
           input.shotId,
         );
       } else {
+        // F04: Importing a new first-frame image NEVER wipes out an already-adopted video take!
         db.run(
-          `UPDATE shots SET selected_image_take_id = ?, selected_video_take_id = NULL, updated_at = ? WHERE id = ?`,
+          `UPDATE shots SET selected_image_take_id = ?, updated_at = ? WHERE id = ?`,
           takeId,
           now,
           input.shotId,

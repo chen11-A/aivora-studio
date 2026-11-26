@@ -129,8 +129,13 @@ describe("GenerationJobQueue anti-duplicate-charge guarantees", () => {
     expect(postCount).toBe(1); // STRICTLY zero duplicate POSTs!
     expect(getQueryCount).toBeGreaterThanOrEqual(2);
 
-    const afterRecover = projects.openProject(demo.project.id).shots.find((s) => s.id === shot.id)!;
-    expect(afterRecover.selectedVideoTakeId).toBeTruthy();
+    const afterWs = projects.openProject(demo.project.id);
+    const afterRecover = afterWs.shots.find((s) => s.id === shot.id)!;
+    expect(afterRecover.selectedVideoTakeId).toBeNull();
+    const candidateVideos = afterWs.takes.filter((t) => t.shotId === shot.id && t.kind === "video");
+    expect(candidateVideos).toHaveLength(1);
+    expect(candidateVideos[0]?.isSelected).toBe(false);
+    expect(candidateVideos[0]?.durationSec).toBeGreaterThanOrEqual(0.8);
 
     projects.closeAll();
     globalConfig.close();

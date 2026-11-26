@@ -138,17 +138,21 @@ describe("external web workflow pack export & drop-folder batch import", () => {
     expect(commit.importedCount).toBe(3);
 
     const wsAfter = commit.workspace!;
-    // Shot 1 & Shot 3 had no video -> newly imported videos automatically selected with ffprobe duration
+    // F04: external drop回片 always creates candidate takes without overwriting or auto-selecting
     const s1 = wsAfter.shots.find((s) => s.id === epShots[0]!.id)!;
     const s2 = wsAfter.shots.find((s) => s.id === epShots[1]!.id)!;
     const s3 = wsAfter.shots.find((s) => s.id === epShots[2]!.id)!;
-    expect(s1.selectedVideoTakeId).toBeTruthy();
-    expect(s3.selectedVideoTakeId).toBeTruthy();
-    // Shot 2 already had a selected video -> new version added, original selection preserved!
+    expect(s1.selectedVideoTakeId).toBeNull();
+    expect(s3.selectedVideoTakeId).toBeNull();
+    // Shot 2 already had a selected video -> new version added as candidate, original selection preserved!
     expect(s2.selectedVideoTakeId).toBe(shot2OrigVideoTakeId);
+    expect(wsAfter.takes.filter((t) => t.shotId === s1.id && t.kind === "video")).toHaveLength(1);
     expect(wsAfter.takes.filter((t) => t.shotId === s2.id && t.kind === "video")).toHaveLength(2);
-    // ffprobe populated durationSec on imported video
-    expect(wsAfter.takes.find((t) => t.id === s1.selectedVideoTakeId)?.durationSec).toBeGreaterThanOrEqual(0.8);
+    expect(wsAfter.takes.filter((t) => t.shotId === s3.id && t.kind === "video")).toHaveLength(1);
+    // ffprobe populated durationSec on imported candidate video
+    const s1Cand = wsAfter.takes.find((t) => t.shotId === s1.id && t.kind === "video");
+    expect(s1Cand?.isSelected).toBe(false);
+    expect(s1Cand?.durationSec).toBeGreaterThanOrEqual(0.8);
 
     // Re-running scan now flags all 4 videos as duplicates!
     const rescan = scanExternalDropFolder({ workspace: wsAfter, episodeId: epId, folderDir: dropDir });

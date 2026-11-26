@@ -11,6 +11,7 @@ import {
   testGeminiOfficialConnection,
 } from "./gemini-official-adapter";
 import { signKlingJwt } from "./kling-adapter";
+import { checkModelPolicy, detectRasterImageMime } from "./model-registry";
 import { normalizeSeedanceBaseUrl, testSeedanceConnectivity } from "./seedance-adapter";
 
 function cleanBase(url: string): string {
@@ -263,6 +264,12 @@ function wrapSyncPostNetworkError(actionLabel: string, err: unknown): Error {
   );
 }
 
+export type OpenAiReferenceImageInput = {
+  base64: string;
+  mime?: string;
+  label?: string;
+};
+
 export async function runOpenAiImageGeneration(
   input: {
     baseUrl: string;
@@ -272,38 +279,67 @@ export async function runOpenAiImageGeneration(
     aspectRatio: AspectRatio;
     projectDir: string;
     referenceImageBase64?: string | null;
+    referenceImages?: OpenAiReferenceImageInput[];
   },
   fetcher: typeof fetch = fetch,
 ): Promise<{ mediaPath: string; mediaSha256: string }> {
-  const size = input.aspectRatio === "9:16" ? "1024x1792" : "1792x1024";
-  let res: Response | null = null;
+  const policy = checkModelPolicy(input.modelId);
+  if (!policy.allowed) {
+    throw new Error(policy.reason);
+  }
 
-  if (input.referenceImageBase64) {
+  const size = input.aspectRatio === "9:16" ? "1024x1792" : "1792x1024";
+  const orderedRefs: OpenAiReferenceImageInput[] =
+    input.referenceImages && input.referenceImages.length > 0
+      ? input.referenceImages
+      : input.referenceImageBase64
+        ? [{ base64: input.referenceImageBase64, label: "reference" }]
+        : [];
+
+  let res: Response;
+
+  if (orderedRefs.length > 0) {
     const form = new FormData();
     form.append("model", input.modelId);
     form.append("prompt", input.prompt);
     form.append("size", size);
     form.append("n", "1");
-    const refBytes = Buffer.from(input.referenceImageBase64, "base64");
-    form.append("image", new Blob([refBytes], { type: "image/png" }), "reference.png");
 
-    let editRes: Response;
+    const fieldName = orderedRefs.length > 1 ? "image[]" : "image";
+    orderedRefs.forEach((ref, idx) => {
+      const refBytes = Buffer.from(ref.base64, "base64");
+      const detected = detectRasterImageMime(refBytes);
+      if (!detected) {
+        throw new Error(
+          `第 ${idx + 1} 张参考图${ref.label ? `（${ref.label}）` : ""}不是有效的 PNG/JPEG/WebP 图像，已拦截发送以防错误扣费。`,
+        );
+      }
+      const fileName = `ref_${String(idx + 1).padStart(2, "0")}${detected.ext}`;
+      form.append(fieldName, new Blob([refBytes], { type: detected.mime }), fileName);
+    });
+
     try {
-      editRes = await fetcher(`${cleanBase(input.baseUrl)}/images/edits`, {
+      res = await fetcher(`${cleanBase(input.baseUrl)}/images/edits`, {
         method: "POST",
         headers: { Authorization: `Bearer ${input.apiKey.trim()}` },
         body: form,
         signal: AbortSignal.timeout(90_000),
       });
     } catch (err) {
-      throw wrapSyncPostNetworkError("生图", err);
+      throw wrapSyncPostNetworkError("参考生图", err);
     }
-    if (editRes.ok || (editRes.status !== 404 && editRes.status !== 405 && editRes.status !== 501)) {
-      res = editRes;
-    }
-  }
 
-  if (!res) {
+    // F04: NEVER silently downgrade failed /images/edits to text-only /images/generations!
+    if (!res.ok) {
+      const rawBody = await res.text().catch(() => "");
+      if (res.status === 404 || res.status === 405 || res.status === 501) {
+        throw new Error(
+          `当前接口或模型不支持带参考图生图（/images/edits 返回 HTTP ${res.status}），已拦截发送且绝不静默降级为无图生图；如需改为无图生图或更换模型，请重新确认新计划。`,
+        );
+      }
+      throw new Error(diagnoseHttpError(res.status, rawBody));
+    }
+  } else {
     try {
       res = await fetcher(`${cleanBase(input.baseUrl)}/images/generations`, {
         method: "POST",
@@ -322,10 +358,11 @@ export async function runOpenAiImageGeneration(
     } catch (err) {
       throw wrapSyncPostNetworkError("生图", err);
     }
+    if (!res.ok) {
+      throw new Error(diagnoseHttpError(res.status, await res.text().catch(() => "")));
+    }
   }
-  if (!res.ok) {
-    throw new Error(diagnoseHttpError(res.status, await res.text().catch(() => "")));
-  }
+
   const data = (await res.json()) as {
     data?: Array<{ b64_json?: string; url?: string }>;
   };
@@ -341,10 +378,12 @@ export async function runOpenAiImageGeneration(
     throw new Error("生图接口未返回有效图片数据");
   }
 
+  const outMime = detectRasterImageMime(bytes);
+  const ext = outMime?.ext ?? ".png";
   const sha = createHash("sha256").update(bytes).digest("hex");
   const assetsDir = path.join(input.projectDir, "assets");
   mkdirSync(assetsDir, { recursive: true });
-  const fileName = `${sha.slice(0, 16)}.png`;
+  const fileName = `${sha.slice(0, 16)}${ext}`;
   writeFileSync(path.join(assetsDir, fileName), bytes);
   return { mediaPath: `assets/${fileName}`, mediaSha256: sha };
 }

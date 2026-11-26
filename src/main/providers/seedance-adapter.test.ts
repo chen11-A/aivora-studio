@@ -157,9 +157,9 @@ describe("Volcengine Ark Seedance 2.0 / 2.5 adapter & UNKNOWN recovery", () => {
     expect(getCount).toBeGreaterThanOrEqual(2);
 
     const wsAfter = projects.openProject(demo.project.id);
-    const take = wsAfter.takes.find(
-      (t) => t.id === wsAfter.shots.find((s) => s.id === shotId)?.selectedVideoTakeId,
-    );
+    expect(wsAfter.shots.find((s) => s.id === shotId)?.selectedVideoTakeId).toBeNull();
+    const take = wsAfter.takes.find((t) => t.shotId === shotId && t.kind === "video");
+    expect(take?.isSelected).toBe(false);
     expect(take?.durationSec).toBeGreaterThanOrEqual(0.8);
 
     // 3. Direct network disconnect during submit throws AmbiguousRemoteError

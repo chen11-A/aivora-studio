@@ -138,6 +138,8 @@ export function readWorkspaceFromDb(
         keyBeatReason: String(r.key_beat_reason ?? ""),
         videoPlanMode,
         characterAssetIds: JSON.parse(String(r.character_asset_ids_json ?? "[]")),
+        propAssetIds: JSON.parse(String(r.prop_asset_ids_json ?? "[]")),
+        requiredRefAssetIds: JSON.parse(String(r.required_ref_asset_ids_json ?? "[]")),
         selectedImageTakeId: r.selected_image_take_id ? String(r.selected_image_take_id) : null,
         selectedVideoTakeId: r.selected_video_take_id ? String(r.selected_video_take_id) : null,
         selectedSpeechTakeId: r.selected_speech_take_id ? String(r.selected_speech_take_id) : null,
