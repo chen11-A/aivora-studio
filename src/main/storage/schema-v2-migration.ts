@@ -78,6 +78,54 @@ export const V2_MIGRATIONS: ReadonlyArray<{
       }
     },
   },
+  {
+    version: "v2.0.0_002_budget_ledger_and_multi_ep_queue",
+    description:
+      "Add F16 atomic budget policies/ledger tables and persistent multi-episode export queue table",
+    apply: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS budget_policies (
+          project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+          max_budget_cents INTEGER NOT NULL DEFAULT 0,
+          currency TEXT NOT NULL DEFAULT 'USD',
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS budget_ledger (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          job_id TEXT,
+          shot_id TEXT,
+          kind TEXT NOT NULL,
+          status TEXT NOT NULL,
+          quoted_cents INTEGER NOT NULL DEFAULT 0,
+          reserved_cents INTEGER NOT NULL DEFAULT 0,
+          settled_cents INTEGER,
+          approval_id TEXT NOT NULL,
+          dispatch_id TEXT NOT NULL UNIQUE,
+          input_sha256 TEXT NOT NULL,
+          remote_task_id TEXT,
+          dispatched_to_network INTEGER NOT NULL DEFAULT 0,
+          provider_label TEXT NOT NULL DEFAULT '',
+          model_id TEXT NOT NULL DEFAULT '',
+          note TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS multi_episode_export_queues (
+          queue_id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          status TEXT NOT NULL DEFAULT 'idle',
+          episode_order_json TEXT NOT NULL DEFAULT '[]',
+          items_json TEXT NOT NULL DEFAULT '[]',
+          output_dir TEXT NOT NULL DEFAULT '',
+          merge_all INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL
+        );
+      `);
+    },
+  },
 ];
 
 export type MigrationRunReport = {

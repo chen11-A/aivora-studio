@@ -107,8 +107,26 @@ export function reconcileOrphanRunningJobs(
 
 export function listJobRows(projects: ProjectStore, projectId: string): Job[] {
   return projects.withProjectDb(projectId, (db) =>
-    db.all<Record<string, unknown>>(`SELECT * FROM jobs ORDER BY created_at DESC LIMIT 50`).map(rowToJob),
+    db.all<Record<string, unknown>>(`SELECT * FROM jobs ORDER BY created_at DESC LIMIT 200`).map(rowToJob),
   );
+}
+
+/**
+ * Full-DB pending lookup (removes the old LIMIT 50 blindspot when >50 historical jobs exist).
+ */
+export function hasPendingJobForInputInDb(
+  projects: ProjectStore,
+  projectId: string,
+  inputSha256: string,
+): { pending: boolean; status: string | null } {
+  return projects.withProjectDb(projectId, (db) => {
+    const row = db.get<{ status: string }>(
+      `SELECT status FROM jobs WHERE project_id = ? AND input_sha256 = ? AND status IN ('running', 'unknown') LIMIT 1`,
+      projectId,
+      inputSha256,
+    );
+    return row ? { pending: true, status: row.status } : { pending: false, status: null };
+  });
 }
 
 export function getJobRow(projects: ProjectStore, projectId: string, jobId: string): Job | null {
@@ -291,4 +309,44 @@ export function recordSuccessfulTakeInDb(
     });
   });
   return { takeId, versionNumber: nextVer };
+}
+
+export function settleBudgetByJobIdInDb(
+  projects: ProjectStore,
+  projectId: string,
+  jobId: string,
+  outcome: "succeeded" | "failed" | "unknown",
+  remoteTaskId?: string | null,
+): void {
+  projects.withProjectDb(projectId, (db) => {
+    const row = db.get<{ id: string }>(
+      `SELECT id FROM budget_ledger WHERE project_id = ? AND job_id = ? AND status IN ('reserved', 'unknown_hold') LIMIT 1`,
+      projectId,
+      jobId,
+    );
+    if (!row) return;
+    const now = new Date().toISOString();
+    if (outcome === "succeeded") {
+      db.run(
+        `UPDATE budget_ledger SET status = 'settled', settled_cents = reserved_cents, reserved_cents = 0, remote_task_id = COALESCE(?, remote_task_id), updated_at = ? WHERE id = ?`,
+        remoteTaskId ?? null,
+        now,
+        row.id,
+      );
+    } else if (outcome === "failed") {
+      db.run(
+        `UPDATE budget_ledger SET status = 'released', settled_cents = 0, reserved_cents = 0, remote_task_id = COALESCE(?, remote_task_id), updated_at = ? WHERE id = ?`,
+        remoteTaskId ?? null,
+        now,
+        row.id,
+      );
+    } else {
+      db.run(
+        `UPDATE budget_ledger SET status = 'unknown_hold', settled_cents = NULL, dispatched_to_network = 1, remote_task_id = COALESCE(?, remote_task_id), updated_at = ? WHERE id = ?`,
+        remoteTaskId ?? null,
+        now,
+        row.id,
+      );
+    }
+  });
 }

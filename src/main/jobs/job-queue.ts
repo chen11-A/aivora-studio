@@ -1,18 +1,20 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { resolveConfirmedFirstFrameTake, resolveShotSpeechVoiceId } from "../../shared/media-selection";
 import type { Job } from "../../shared/types/domain";
-import type { GenerationPlan, JobExecutionResult, LockedGenerationInput } from "../../shared/types/jobs";
+import type { GenerationPlan, JobExecutionResult } from "../../shared/types/jobs";
 import type { CapabilityKey } from "../../shared/types/provider";
 import type { OAuthManager } from "../auth/auth-manager";
-import { GROK_API } from "../auth/grok-oauth";
 import { probeFileDurationSec } from "../media/motion-filters";
 import { AmbiguousRemoteError } from "../providers/kling-adapter";
 import { checkModelPolicy } from "../providers/model-registry";
-import { buildAssetPortraitPrompt, injectLockedReferences } from "../providers/ref-image-injector";
-import { clampSeedanceDurationSec } from "../providers/seedance-adapter";
 import type { GlobalConfigStore } from "../storage/global-store";
 import type { ProjectStore } from "../storage/project-store";
+import {
+  authorizeAndReserveBudget,
+  markBudgetEntryDispatched,
+  quotePaidAction,
+  settleBudgetEntry,
+} from "./budget-ledger";
 import {
   dispatchGenerationJob,
   downloadRecoveredVideo,
@@ -27,19 +29,21 @@ import {
   recordAssetPortraitCandidateInDb,
   recordSuccessfulTakeInDb,
   resolveTrustedLockedSecrets,
+  settleBudgetByJobIdInDb,
   updateJobRow,
   type LockedProviderSnapshot,
 } from "./job-persistence";
+import { buildGenerationPlan } from "./plan-builder";
 import { detectGenerationPlanDrift, PlanDriftError } from "./plan-drift";
 
 const MAX_PREPARED_PLAN_CACHE = 512;
 
 /**
- * Anti-Duplicate-Charge Job Queue:
+ * Anti-Duplicate-Charge & F16 Budget-Ledger Job Queue:
  * 1. `preparePlan` produces an explicit confirmation summary with locked config & input snapshot (0 network calls).
- * 2. `confirmAndRun` verifies no post-confirm parameter drift and executes strictly against the locked snapshot;
- *    ambiguous network timeouts become `unknown` and NEVER auto-retry; failures NEVER overwrite selected takes.
- * 3. `recoverUnknownJob` performs strictly GET-only status lookup by `remoteTaskId`.
+ * 2. `confirmAndRun` atomically authorizes & reserves budget in SQLite (`BEGIN IMMEDIATE`) BEFORE any network call,
+ *    verifies zero post-confirm drift, saves new outputs strictly as candidates (F04), and never estimates UNKNOWN as paid.
+ * 3. `recoverUnknownJob` performs strictly GET-only status lookup by `remoteTaskId` and settles the ledger cleanly.
  */
 export class GenerationJobQueue {
   private readonly activeJobIds = new Set<string>();
@@ -97,182 +101,12 @@ export class GenerationJobQueue {
     assetId?: string;
     kind: "image" | "video" | "speech";
   }): GenerationPlan {
-    const ws = this.projects.openProject(input.projectId);
-    const isPortrait = Boolean(input.assetId && input.kind === "image");
-    const shot = isPortrait ? null : ws.shots.find((s) => s.id === input.shotId);
-    if (!isPortrait && !shot) throw new Error("镜头不存在");
-
-    const portraitInfo = isPortrait ? buildAssetPortraitPrompt(ws, input.assetId!) : null;
-    const confirmedFirstFrame =
-      shot && input.kind === "video" ? resolveConfirmedFirstFrameTake(shot, ws.takes) : null;
-    const prepared = shot
-      ? injectLockedReferences(
-          ws,
-          ws.dirPath,
-          shot,
-          input.kind === "video" ? (confirmedFirstFrame?.mediaPath ?? null) : null,
-        )
-      : {
-          finalPrompt: portraitInfo!.prompt,
-          injectedRefs: [],
-          missingRequiredRefs: [],
-          orderedReferenceItems: [],
-          primaryReferenceImageBase64: null,
-          primaryReferenceImagePath: null,
-          primaryReferenceMediaPath: null,
-          primaryReferenceMediaSha256: null,
-        };
-
-    const capability: CapabilityKey =
-      input.kind === "speech" ? "tts" : input.kind === "video" ? "video" : "image";
-    const snapshot = this.globalConfig.getSnapshot();
-    const binding = snapshot.routing[capability];
-
-    let providerLabel = "未配置模型";
-    let protocol = "none";
-    let modelId = "";
-    let lockedSnap: LockedProviderSnapshot | null = null;
-    let blockingReason: string | null = null;
-    let modelPolicyNotice: string | null = null;
-
-    if (!binding) {
-      blockingReason = `请先在「模型中心」为「${capability === "image" ? "生图定妆" : capability === "video" ? "生成视频" : "人物配音"}」指定默认模型。`;
-    } else if (binding.source === "oauth") {
-      const acc = snapshot.oauthAccounts.find((a) => a.providerId === binding.sourceId);
-      if (!acc || acc.status !== "connected") {
-        blockingReason = "所选官方账号尚未登录或登录已过期，请前往「模型中心」重新授权。";
-      } else {
-        providerLabel = acc.displayName;
-        protocol = acc.providerId === "grok-web" ? "oauth-grok" : "oauth-chatgpt";
-        modelId = binding.modelId;
-        lockedSnap = {
-          source: "oauth",
-          sourceId: acc.providerId,
-          providerLabel: acc.displayName,
-          protocol: acc.providerId === "grok-web" ? "oauth-grok" : "oauth-chatgpt",
-          baseUrl: acc.providerId === "grok-web" ? GROK_API : "https://api.openai.com/v1",
-          modelId,
-        };
-      }
-    } else {
-      const provider = snapshot.providers.find((p) => p.id === binding.sourceId);
-      if (!provider || !provider.enabled || !provider.hasSecret) {
-        blockingReason = "所选厂家未启用或尚未保存 API 密钥/令牌，请前往「模型中心」检查。";
-      } else {
-        providerLabel = provider.name;
-        protocol = provider.protocol;
-        modelId = binding.modelId;
-        lockedSnap = {
-          source: "provider",
-          sourceId: provider.id,
-          providerLabel: provider.name,
-          protocol: provider.protocol,
-          baseUrl: provider.baseUrl,
-          modelId,
-          klingMode: prepared.primaryReferenceMediaPath ? "image2video" : "text2video",
-        };
-      }
-    }
-
-    if (!blockingReason && modelId) {
-      const policy = checkModelPolicy(modelId);
-      if (!policy.allowed) {
-        blockingReason = policy.reason;
-      } else if (policy.notice) {
-        modelPolicyNotice = policy.notice;
-      }
-    }
-
-    const missingRequiredRefs = input.kind === "speech" || isPortrait ? [] : prepared.missingRequiredRefs;
-    if (!blockingReason && missingRequiredRefs.length > 0) {
-      blockingReason = missingRequiredRefs[0]?.reason ?? "必需参考图缺失";
-    }
-
-    if (shot && input.kind === "speech") {
-      const speechText = shot.dialogue.trim() || shot.subtitle.trim();
-      if (!speechText) {
-        blockingReason = "当前镜头没有台词文本，请先填写台词。";
-      } else if (shot.speakerStatus === "unconfirmed") {
-        blockingReason =
-          "当前镜头说话人为「待确认」，为防错配声线扣费已拦截配音；请先在分镜右侧确认说话人角色。";
-      } else if (!shot.speaker.trim()) {
-        blockingReason =
-          "当前镜头尚未指定说话人，为防错配默认声线扣费已拦截配音；请先指定说话人角色或「旁白」。";
-      }
-    }
-
-    const promptPreview =
-      shot && input.kind === "speech"
-        ? shot.dialogue.trim() || shot.subtitle.trim()
-        : prepared.finalPrompt;
-    const speechVoice =
-      shot && input.kind === "speech" ? resolveShotSpeechVoiceId(shot, ws.assets) : "";
-    const lockedInput: LockedGenerationInput = {
-      finalPrompt: promptPreview,
-      negativePrompt: shot ? shot.negativePrompt : "",
-      durationSec: shot ? shot.durationSec : 0,
-      aspectRatio: ws.project.aspectRatio,
-      firstFrameMediaPath: confirmedFirstFrame?.mediaPath ?? null,
-      referenceMediaPath:
-        input.kind === "speech" || isPortrait ? null : prepared.primaryReferenceMediaPath,
-      referenceMediaSha256:
-        input.kind === "speech" || isPortrait ? null : prepared.primaryReferenceMediaSha256,
-      referenceItems: input.kind === "speech" || isPortrait ? [] : prepared.orderedReferenceItems,
-      speechVoice,
-    };
-    const targetKey = input.assetId || input.shotId;
-    const inputSha256 = createHash("sha256")
-      .update(
-        JSON.stringify({
-          targetKey,
-          kind: input.kind,
-          modelId,
-          ...lockedInput,
-        }),
-      )
-      .digest("hex");
-
-    if (!blockingReason && this.activeInputHashes.has(inputSha256)) {
-      blockingReason = "相同参数的生成任务正在运行中，为防重复扣费已拦截重复提交。";
-    }
-
-    let upstreamDurationNote: string | null = null;
-    if (shot && input.kind === "video" && protocol === "kling-video") {
-      upstreamDurationNote = `可灵接口按 ${shot.durationSec >= 7 ? "10" : "5"}s 档计费生成，成片将按本镜 ${shot.durationSec}s 区间裁切采用`;
-    } else if (shot && input.kind === "video" && protocol === "seedance-video") {
-      const sec = clampSeedanceDurationSec(modelId, shot.durationSec);
-      upstreamDurationNote = `即梦 Seedance 按 ${sec}s 整数档生成，成片将按本镜 ${shot.durationSec}s 区间裁切采用`;
-    } else if (shot && input.kind === "video" && protocol === "gemini-official") {
-      upstreamDurationNote = `Google Gemini 异步视频按模型默认时长生成，成片将按本镜 ${shot.durationSec}s 区间裁切采用`;
-    } else if (shot && input.kind === "video" && protocol === "comfy-worker") {
-      upstreamDurationNote = `将发送至已配置的 ComfyUI 算力 Worker（按 ${shot.durationSec}s 渲染）`;
-    }
-
-    const plan: GenerationPlan = {
-      planId: `pln_${randomUUID().replaceAll("-", "").slice(0, 10)}`,
-      projectId: input.projectId,
-      shotId: input.shotId,
-      assetId: input.assetId ?? null,
-      shotTitle: portraitInfo ? portraitInfo.title : shot!.title,
-      kind: input.kind,
-      capability,
-      providerLabel,
-      protocol,
-      modelId,
-      estimatedSec: input.kind === "video" ? 60 : 12,
-      promptPreview,
-      injectedRefs: input.kind === "speech" ? [] : prepared.injectedRefs,
-      missingRequiredRefs,
-      modelPolicyNotice,
-      firstFramePath: confirmedFirstFrame?.mediaPath ?? null,
-      upstreamDurationNote,
-      idempotencyKey: `idem_${randomUUID().replaceAll("-", "").slice(0, 16)}`,
-      inputSha256,
-      providerSnapshotJson: lockedSnap ? JSON.stringify(lockedSnap) : "",
-      lockedInput,
-      canRun: blockingReason === null,
-      blockingReason,
-    };
+    const plan = buildGenerationPlan({
+      projects: this.projects,
+      globalConfig: this.globalConfig,
+      activeInputHashes: this.activeInputHashes,
+      input,
+    });
     this.rememberPreparedPlan(plan);
     return plan;
   }
@@ -330,6 +164,28 @@ export class GenerationJobQueue {
       throw new PlanDriftError(drift.reasons);
     }
 
+    // F16: Atomic budget reservation & approval/dispatch ID persistence BEFORE any network call
+    const quote = quotePaidAction({
+      kind: plan.kind,
+      durationSec: plan.lockedInput.durationSec,
+      modelId: snapshot.modelId,
+    });
+    const ledgerEntry = this.projects.withProjectDb(plan.projectId, (db) =>
+      authorizeAndReserveBudget(db, {
+        projectId: plan.projectId,
+        jobId,
+        shotId: plan.assetId ? null : plan.shotId,
+        kind: plan.kind,
+        quotedCents: quote.quotedCents,
+        approvalId: plan.planId,
+        dispatchId: plan.idempotencyKey,
+        inputSha256: plan.inputSha256,
+        providerLabel: snapshot.providerLabel,
+        modelId: snapshot.modelId,
+        note: plan.shotTitle,
+      }),
+    );
+
     insertRunningJobRow(this.projects, {
       jobId,
       projectId: plan.projectId,
@@ -345,6 +201,9 @@ export class GenerationJobQueue {
     this.activeInputHashes.add(plan.inputSha256);
     try {
       const creds = await resolveTrustedLockedSecrets(snapshot, this.globalConfig, this.oauth);
+      this.projects.withProjectDb(plan.projectId, (db) =>
+        markBudgetEntryDispatched(db, ledgerEntry.id),
+      );
       const outcome = await dispatchGenerationJob({
         plan,
         projectDir: ws.dirPath,
@@ -353,7 +212,14 @@ export class GenerationJobQueue {
         fetcher: this.fetcher,
         pollIntervalMs: this.pollIntervalMs,
         maxPollRounds: this.maxPollRounds,
-        onUpdateJob: (patch) => updateJobRow(this.projects, plan.projectId, jobId, patch),
+        onUpdateJob: (patch) => {
+          updateJobRow(this.projects, plan.projectId, jobId, patch);
+          if (patch.remoteTaskId) {
+            this.projects.withProjectDb(plan.projectId, (db) =>
+              markBudgetEntryDispatched(db, ledgerEntry.id, patch.remoteTaskId),
+            );
+          }
+        },
       });
 
       if (outcome.target === "asset-portrait" && plan.assetId) {
@@ -366,6 +232,9 @@ export class GenerationJobQueue {
           status: "succeeded",
           progress: 100,
         });
+        this.projects.withProjectDb(plan.projectId, (db) =>
+          settleBudgetEntry(db, ledgerEntry.id, "succeeded"),
+        );
         return { ok: true, job: done, message: outcome.message };
       }
 
@@ -387,6 +256,9 @@ export class GenerationJobQueue {
           status: "succeeded",
           progress: 100,
         });
+        this.projects.withProjectDb(plan.projectId, (db) =>
+          settleBudgetEntry(db, ledgerEntry.id, "succeeded"),
+        );
         return { ok: true, job: done, message: outcome.message };
       }
 
@@ -399,6 +271,12 @@ export class GenerationJobQueue {
         errorMessage: msg,
         remoteTaskId: isAmbiguous && err.remoteTaskId ? err.remoteTaskId : undefined,
       });
+      this.projects.withProjectDb(plan.projectId, (db) =>
+        settleBudgetEntry(db, ledgerEntry.id, isAmbiguous ? "unknown" : "failed", {
+          remoteTaskId: isAmbiguous ? err.remoteTaskId : undefined,
+          note: msg,
+        }),
+      );
       return { ok: false, job: updated, message: msg };
     } finally {
       this.activeJobIds.delete(jobId);
@@ -470,6 +348,7 @@ export class GenerationJobQueue {
         progress: 100,
         errorMessage: null,
       });
+      settleBudgetByJobIdInDb(this.projects, input.projectId, job.id, "succeeded", taskId);
       return { ok: true, job: done, message: "查单成功！已找回视频并保存为候选版本，确认后可采用。" };
     }
     if (res.status === "failed") {
@@ -478,6 +357,7 @@ export class GenerationJobQueue {
         remoteTaskId: taskId,
         errorMessage: res.errorMessage || "远端任务执行失败",
       });
+      settleBudgetByJobIdInDb(this.projects, input.projectId, job.id, "failed", taskId);
       return { ok: false, job: failed, message: failed.errorMessage || "远端任务已失败" };
     }
     const pending = updateJobRow(this.projects, input.projectId, job.id, {
