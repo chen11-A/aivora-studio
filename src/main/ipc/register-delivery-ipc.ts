@@ -166,10 +166,15 @@ export function registerDeliveryIpcHandlers(deps: DeliveryIpcDeps): void {
         humanSignedOff: false,
       });
       if (!contentQc.ok) {
+        const blockingDetails = contentQc.issues
+          .filter((i) => i.severity === "error")
+          .slice(0, 3)
+          .map((i) => `第 ${i.shotIndex} 镜「${i.shotTitle}」${i.message}`)
+          .join("；");
         return {
           ok: false,
           snapshotDigest: contentQc.snapshotDigest,
-          message: `当前分集仍有 ${contentQc.errorCount} 项阻塞级内容质检问题，修复后才能确认审片通过。`,
+          message: `当前分集仍有 ${contentQc.errorCount} 项阻塞问题，修复后才能确认审片：${blockingDetails}${contentQc.errorCount > 3 ? "等" : ""}。`,
         };
       }
       deps.projects.withProjectDb(input.projectId, (db) => {

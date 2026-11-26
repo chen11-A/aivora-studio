@@ -286,7 +286,12 @@ export function settleBudgetEntry(
   db: SqliteDriver,
   ledgerId: string,
   outcome: "succeeded" | "failed" | "unknown",
-  options?: { actualCents?: number; remoteTaskId?: string | null; note?: string },
+  options?: {
+    actualCents?: number;
+    reconciledEstimatedCents?: number;
+    remoteTaskId?: string | null;
+    note?: string;
+  },
 ): BudgetLedgerEntry {
   const now = new Date().toISOString();
   return db.transaction(() => {
@@ -311,12 +316,18 @@ export function settleBudgetEntry(
           ledgerId,
         );
       } else {
+        const nextQuoted =
+          options?.reconciledEstimatedCents !== undefined &&
+          Number.isFinite(options.reconciledEstimatedCents)
+            ? Math.max(0, Math.round(options.reconciledEstimatedCents))
+            : quoted;
         db.run(
           `UPDATE budget_ledger
-           SET status = 'settled_estimated', reserved_cents = 0, settled_cents = NULL,
+           SET status = 'settled_estimated', quoted_cents = ?, reserved_cents = 0, settled_cents = NULL,
                remote_task_id = COALESCE(?, remote_task_id),
                note = COALESCE(?, note), updated_at = ?
            WHERE id = ?`,
+          nextQuoted,
           options?.remoteTaskId ?? null,
           options?.note ?? "远端已完成（服务商未返回实付金额，按预估占用预算额度，请以实际账单为准）",
           now,

@@ -205,7 +205,7 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
                 }`}
               >
                 <div className="font-medium">快速试片</div>
-                <div className="text-[11px] opacity-80">允许占位画板，明确标为非正式交付</div>
+                <div className="text-[11px] opacity-80">允许占位画板，但每镜仍须有可用画面（暂不自动补空镜画板）</div>
               </button>
             </div>
 

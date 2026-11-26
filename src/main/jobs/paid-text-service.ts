@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import type { OAuthManager } from "../auth/auth-manager";
 import { completeChatGptResponsesText } from "../auth/chatgpt-oauth";
 import { GROK_API } from "../auth/grok-oauth";
-import { runGeminiDirectorChat } from "../providers/gemini-official-adapter";
+import {
+  DEFAULT_GEMINI_DIRECTOR_MAX_OUTPUT_TOKENS,
+  runGeminiDirectorChatWithUsage,
+  type GeminiTokenUsage,
+} from "../providers/gemini-official-adapter";
 import { AmbiguousRemoteError } from "../providers/kling-adapter";
 import { runOpenAiChatCompletion } from "../providers/openai-compat-adapter";
 import type { GlobalConfigStore } from "../storage/global-store";
@@ -14,9 +18,10 @@ import {
   quotePaidAction,
   settleBudgetEntry,
 } from "./budget-ledger";
+import { estimateTextUsageCents } from "./budget-pricing";
 
 export type BudgetedTextCallResult =
-  | { ok: true; rawText: string; providerSummary: string; ledgerId?: string }
+  | { ok: true; rawText: string; providerSummary: string; ledgerId?: string; usage?: GeminiTokenUsage | null }
   | { ok: false; budgetBlocked?: boolean; message: string };
 
 /**
@@ -25,15 +30,18 @@ export type BudgetedTextCallResult =
  */
 export function checkMultiCallTextBudgetHeadroom(
   deps: { projects: ProjectStore; globalConfig: GlobalConfigStore },
-  input: { projectId: string; promptLengths: number[]; purposeLabel: string },
+  input: { projectId: string; promptLengths: number[]; purposeLabel: string; maxOutputTokens?: number },
 ): { ok: true; totalQuotedCents: number } | { ok: false; budgetBlocked: true; message: string } {
   const snap = deps.globalConfig.getSnapshot();
   const binding = snap.routing.script;
   if (!binding || binding.source === "oauth" || input.promptLengths.length === 0) {
     return { ok: true, totalQuotedCents: 0 };
   }
+  const maxOut = Math.max(256, Math.round(input.maxOutputTokens ?? DEFAULT_GEMINI_DIRECTOR_MAX_OUTPUT_TOKENS));
   const totalQuotedCents = input.promptLengths.reduce(
-    (sum, len) => sum + quotePaidAction({ kind: "text", modelId: binding.modelId, inputChars: len }).quotedCents,
+    (sum, len) =>
+      sum +
+      quotePaidAction({ kind: "text", modelId: binding.modelId, inputChars: len, maxOutputTokens: maxOut }).quotedCents,
     0,
   );
   const summary = deps.projects.withProjectDb(input.projectId, (db) =>
@@ -43,7 +51,7 @@ export function checkMultiCallTextBudgetHeadroom(
     return {
       ok: false,
       budgetBlocked: true,
-      message: `作品预算上限拦截：${input.purposeLabel}共需 ${input.promptLengths.length} 次文本模型请求（预估 $${(totalQuotedCents / 100).toFixed(2)}），超过当前剩余预算 $${(summary.remainingCents / 100).toFixed(2)}，已拦截发送。请在「模型中心」调整作品预算上限后重试。`,
+      message: `作品预算上限拦截：${input.purposeLabel}共需 ${input.promptLengths.length} 次文本模型请求（按输出上限 ${maxOut} tokens 预估 $${(totalQuotedCents / 100).toFixed(2)}），超过当前剩余预算 $${(summary.remainingCents / 100).toFixed(2)}，已拦截发送。请在「模型中心」调整作品预算上限后重试。`,
     };
   }
   return { ok: true, totalQuotedCents };
@@ -52,8 +60,9 @@ export function checkMultiCallTextBudgetHeadroom(
 /**
  * F16 unified paid text-model entrypoint for Director split & Action polish:
  * - Routes all API-key text model calls (`gemini-official`, `openai-chat`, etc.) strictly
- *   through SQLite `budget_ledger` (atomic reserve before dispatch -> settle_estimated / release / unknown_hold).
- * - Prevents director split (including multi-scene loops) and action polish from bypassing project budget caps.
+ *   through SQLite `budget_ledger` (atomic reserve before dispatch -> usage-reconciled settlement).
+ * - Enforces explicit `max_output_tokens` on Gemini requests and reconciles returned token usage
+ *   (including thinking tokens) against the ledger so subsequent calls honor real consumption.
  */
 export async function runBudgetedTextModelCall(
   deps: {
@@ -68,6 +77,7 @@ export async function runBudgetedTextModelCall(
     purpose: string;
     systemPrompt: string;
     userPrompt: string;
+    maxOutputTokens?: number;
   },
 ): Promise<BudgetedTextCallResult> {
   const snap = deps.globalConfig.getSnapshot();
@@ -110,10 +120,15 @@ export async function runBudgetedTextModelCall(
     return { ok: false, message: "所选剧本厂家缺少可用 API Key，请在模型中心补全" };
   }
 
+  const maxOutputTokens = Math.max(
+    256,
+    Math.round(input.maxOutputTokens ?? DEFAULT_GEMINI_DIRECTOR_MAX_OUTPUT_TOKENS),
+  );
   const quote = quotePaidAction({
     kind: "text",
     modelId: binding.modelId,
     inputChars: input.systemPrompt.length + input.userPrompt.length,
+    maxOutputTokens,
   });
   const inputSha256 = createHash("sha256")
     .update(
@@ -124,6 +139,7 @@ export async function runBudgetedTextModelCall(
         purpose: input.purpose,
         providerId: binding.sourceId,
         modelId: binding.modelId,
+        maxOutputTokens,
         userPrompt: input.userPrompt,
       }),
     )
@@ -152,47 +168,82 @@ export async function runBudgetedTextModelCall(
     };
   }
 
+  let settledOnServer = false;
   try {
     deps.projects.withProjectDb(input.projectId, (db) => markBudgetEntryDispatched(db, ledgerId));
-    const rawText =
-      creds.view.protocol === "gemini-official"
-        ? await runGeminiDirectorChat(
-            {
-              baseUrl: creds.view.baseUrl,
-              apiKey: creds.apiKey,
-              modelId: binding.modelId,
-              systemPrompt: input.systemPrompt,
-              userPrompt: input.userPrompt,
-            },
-            deps.fetcher,
-          )
-        : await runOpenAiChatCompletion(
-            {
-              baseUrl: creds.view.baseUrl,
-              apiKey: creds.apiKey,
-              modelId: binding.modelId,
-              systemPrompt: input.systemPrompt,
-              userPrompt: input.userPrompt,
-            },
-            deps.fetcher,
-          );
-    deps.projects.withProjectDb(input.projectId, (db) =>
-      settleBudgetEntry(db, ledgerId, "succeeded"),
-    );
+    let rawText = "";
+    let usage: GeminiTokenUsage | null = null;
+    if (creds.view.protocol === "gemini-official") {
+      const gemRes = await runGeminiDirectorChatWithUsage(
+        {
+          baseUrl: creds.view.baseUrl,
+          apiKey: creds.apiKey,
+          modelId: binding.modelId,
+          systemPrompt: input.systemPrompt,
+          userPrompt: input.userPrompt,
+          maxOutputTokens,
+        },
+        deps.fetcher,
+      );
+      rawText = gemRes.text;
+      usage = gemRes.usage;
+      if (usage) {
+        const resolvedUsage = usage;
+        const reconciledCents = estimateTextUsageCents({ modelId: binding.modelId, ...resolvedUsage });
+        deps.projects.withProjectDb(input.projectId, (db) =>
+          settleBudgetEntry(db, ledgerId, "succeeded", {
+            reconciledEstimatedCents: reconciledCents,
+            note: `实测用量 in=${resolvedUsage.inputTokens} out=${resolvedUsage.outputTokens} thought=${resolvedUsage.thoughtTokens}（上限 ${maxOutputTokens}，按费率校对暂估 $${(reconciledCents / 100).toFixed(2)}，以账单为准）`,
+          }),
+        );
+      } else {
+        deps.projects.withProjectDb(input.projectId, (db) =>
+          settleBudgetEntry(db, ledgerId, "unknown", {
+            note: `远端已返回但未附带 token 用量（待核对，保留保守预留 $${(quote.quotedCents / 100).toFixed(2)}，不按零费用或已实扣记账）`,
+          }),
+        );
+      }
+      settledOnServer = true;
+      if (!rawText) {
+        throw new Error(
+          gemRes.status === "incomplete"
+            ? `Gemini 输出达到上限（${maxOutputTokens} tokens）未返回完整文本，实际用量已计入账本`
+            : "Gemini 未返回剧本拆镜文本",
+        );
+      }
+    } else {
+      rawText = await runOpenAiChatCompletion(
+        {
+          baseUrl: creds.view.baseUrl,
+          apiKey: creds.apiKey,
+          modelId: binding.modelId,
+          systemPrompt: input.systemPrompt,
+          userPrompt: input.userPrompt,
+        },
+        deps.fetcher,
+      );
+      deps.projects.withProjectDb(input.projectId, (db) =>
+        settleBudgetEntry(db, ledgerId, "succeeded"),
+      );
+      settledOnServer = true;
+    }
     return {
       ok: true,
       rawText,
       providerSummary: `${creds.view.name} · ${binding.modelId}`,
       ledgerId,
+      usage,
     };
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    const isAmbiguous =
-      err instanceof AmbiguousRemoteError ||
-      /timeout|timed out|abort|504|ECONNRESET|ETIMEDOUT|fetch failed/i.test(detail);
-    deps.projects.withProjectDb(input.projectId, (db) =>
-      settleBudgetEntry(db, ledgerId, isAmbiguous ? "unknown" : "failed"),
-    );
+    if (!settledOnServer) {
+      const detail = err instanceof Error ? err.message : String(err);
+      const isAmbiguous =
+        err instanceof AmbiguousRemoteError ||
+        /timeout|timed out|abort|504|ECONNRESET|ETIMEDOUT|fetch failed/i.test(detail);
+      deps.projects.withProjectDb(input.projectId, (db) =>
+        settleBudgetEntry(db, ledgerId, isAmbiguous ? "unknown" : "failed"),
+      );
+    }
     throw err;
   }
 }

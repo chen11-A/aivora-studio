@@ -1,10 +1,16 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ProjectStore } from "../storage/project-store";
-import { EXPORT_TEMP_PREFIX, ExportWriteGuard } from "./export-guard";
+import {
+  buildExportTempPrefix,
+  EXPORT_TEMP_PREFIX,
+  ExportWriteGuard,
+  markExportScratchDirOwner,
+  unregisterActiveExportScratchDir,
+} from "./export-guard";
 import { exportEpisodeToMp4 } from "./export-pipeline";
 import { preflightEpisodeExport } from "./export-preflight";
 import { activeMediaProcessCount, probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
@@ -24,10 +30,23 @@ afterEach(() => {
 });
 
 describe("export-pipeline & ExportWriteGuard", () => {
-  it("tracks active export guard state and cleans stale crash temp dirs", async () => {
+  it("cleans verified dead-PID crash dirs & aged legacy dirs while keeping live/unverified dirs (F01)", async () => {
     const base = makeTempDir("aivora-guard-");
-    const staleDir = path.join(base, `${EXPORT_TEMP_PREFIX}crash123`);
-    mkdirSync(staleDir, { recursive: true });
+    const freshUnverified = path.join(base, `${EXPORT_TEMP_PREFIX}fresh-unverified`);
+    const agedLegacy = path.join(base, `${EXPORT_TEMP_PREFIX}aged-crash123`);
+    const deadPidDir = path.join(base, `${buildExportTempPrefix(999_999)}dead`);
+    const liveOtherPidDir = path.join(base, `${buildExportTempPrefix(process.ppid)}alive`);
+    const activeSameProcDir = path.join(base, `${buildExportTempPrefix(process.pid)}active`);
+    for (const d of [freshUnverified, agedLegacy, deadPidDir, liveOtherPidDir, activeSameProcDir]) {
+      mkdirSync(d, { recursive: true });
+    }
+    const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    utimesSync(agedLegacy, twoDaysAgo, twoDaysAgo);
+    markExportScratchDirOwner(deadPidDir, 999_999);
+    unregisterActiveExportScratchDir(deadPidDir);
+    markExportScratchDirOwner(liveOtherPidDir, process.ppid);
+    unregisterActiveExportScratchDir(liveOtherPidDir);
+    markExportScratchDirOwner(activeSameProcDir, process.pid);
 
     const guard = new ExportWriteGuard();
     expect(guard.isExporting()).toBe(false);
@@ -37,8 +56,16 @@ describe("export-pipeline & ExportWriteGuard", () => {
     expect(guard.isExporting()).toBe(false);
 
     const removed = guard.cleanupStaleTempDirs([base]);
-    expect(removed).toBe(1);
-    expect(existsSync(staleDir)).toBe(false);
+    expect(removed).toBe(2); // agedLegacy + deadPidDir ONLY
+    expect(existsSync(agedLegacy)).toBe(false);
+    expect(existsSync(deadPidDir)).toBe(false);
+    expect(existsSync(freshUnverified)).toBe(true);
+    expect(existsSync(liveOtherPidDir)).toBe(true);
+    expect(existsSync(activeSameProcDir)).toBe(true);
+
+    unregisterActiveExportScratchDir(activeSameProcDir);
+    expect(guard.cleanupStaleTempDirs([base])).toBe(1);
+    expect(existsSync(activeSameProcDir)).toBe(false);
   });
 
   it(

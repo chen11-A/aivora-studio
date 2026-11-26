@@ -14,6 +14,20 @@ const SCENE_HEADING_RE =
   /^第[零一二三四五六七八九十百千万0-9]+[场幕](?:[\s\u3000·:：—-].*)?$/;
 const SCENE_SHIFT_CUE_RE =
   /^(?:次日|翌日|当夜|入夜|深夜|黄昏|傍晚|黎明|清晨|午后|片刻后|半柱香后|一炷香后|转眼|与此同时|另一边|回到|来到|踏入|走出|城外|殿内|山崖|断崖|黑碑前|石碑前)/;
+const STRONG_TIME_SHIFT_RE =
+  /^(?:[一二三四五六七八九十百两半0-9]+[天日周个月年]后|次日|翌日|当夜|隔日|数日后|半月后|数月后|多年后)(?:[，,、\s]|$)/;
+const SCENE_SETTING_EVIDENCE_RE =
+  /(?:城|堂|院|殿|门|楼|阁|馆|寺|庙|崖|山|街|巷|房|室|渡|村|镇|府|谷|林|江|河|湖|海|夜|晨|暮|午|雨|雪|风|雾|光)/;
+
+function isStrongTimeSceneShiftParagraph(line: string): boolean {
+  const t = line.trim();
+  if (!t || isChapterHeading(t) || /^[“"「『]/.test(t) || /[：:]\s*[“"「『]/.test(t)) return false;
+  const m = STRONG_TIME_SHIFT_RE.exec(t);
+  if (!m) return false;
+  const after = t.slice(m[0].length).trim();
+  if (!after || /^[“"「『我你他她咱]/.test(after)) return false;
+  return SCENE_SETTING_EVIDENCE_RE.test(after);
+}
 
 const DEFAULT_MAX_PARAGRAPHS_PER_SCENE = 14;
 const DEFAULT_MAX_CHARS_PER_SCENE = 1100;
@@ -43,7 +57,7 @@ function inferSceneLocationName(lines: string[], fallbackTitle: string): string 
   }
   const joined = lines.slice(0, 4).join(" ");
   const locMatch =
-    /([\u4e00-\u9fa5]{1,5}(?:书店|客栈|大殿|主殿|石碑|黑碑|断崖|山崖|悬崖|石崖|渊底|深渊|崖边|祭坛|演武场|老街|长街|巷口|庭院|书房|城门|古庙|栈道|密室|渡口|石室|阁楼|酒馆|茶楼))/.exec(
+    /([\u4e00-\u9fa5]{1,5}(?:书店|客栈|大殿|主殿|石碑|黑碑|断崖|山崖|悬崖|石崖|渊底|深渊|崖边|祭坛|演武场|老街|长街|巷口|庭院|书房|城门|山门|古庙|栈道|密室|渡口|石室|阁楼|酒馆|茶楼|听山堂|大堂|正堂|学堂))/.exec(
       joined,
     );
   if (locMatch) {
@@ -139,10 +153,16 @@ function partitionRangeIntoScenes(params: {
       .slice(rng.start, rng.end + 1)
       .reduce((acc, p) => acc + p.replace(/\s+/g, "").length, 0);
 
-    // Preserve explicit short/medium scenes as-is; only split genuinely long blocks
+    const hasStrongTimeShift =
+      !hasExplicitScenes &&
+      paragraphs
+        .slice(rng.start + 1, rng.end + 1)
+        .some((p) => isStrongTimeSceneShiftParagraph(p));
+
+    // Preserve explicit short/medium scenes as-is; split long blocks or explicit time-jump transitions
     const needsSubSplit = hasExplicitScenes
       ? len > Math.max(maxParagraphsPerScene + 8, 22) || rngChars > maxCharsPerScene * 1.8
-      : len > maxParagraphsPerScene || rngChars > maxCharsPerScene;
+      : len > maxParagraphsPerScene || rngChars > maxCharsPerScene || hasStrongTimeShift;
 
     if (!needsSubSplit) {
       finalRanges.push(rng);
@@ -157,6 +177,11 @@ function partitionRangeIntoScenes(params: {
       const pChars = p.replace(/\s+/g, "").length;
       const segLen = i - segStart;
 
+      const hitStrongTimeShift =
+        !hasExplicitScenes &&
+        segLen >= 1 &&
+        isStrongTimeSceneShiftParagraph(p) &&
+        paragraphs.slice(segStart, i).some((line) => !isChapterHeading(line));
       const hitNaturalShift =
         segLen >= Math.max(5, Math.floor(maxParagraphsPerScene * 0.55)) &&
         SCENE_SHIFT_CUE_RE.test(p) &&
@@ -164,10 +189,10 @@ function partitionRangeIntoScenes(params: {
       const hitSizeCap =
         segLen >= maxParagraphsPerScene || (segLen >= 4 && segChars + pChars > maxCharsPerScene);
 
-      if (i > segStart && (hitNaturalShift || hitSizeCap)) {
-        // Avoid leaving a tiny 1-2 paragraph orphan tail at the very end of the range
+      if (i > segStart && (hitStrongTimeShift || hitNaturalShift || hitSizeCap)) {
+        // Avoid leaving a tiny 1-2 paragraph orphan tail for size-based splits; honor explicit time jumps immediately
         const remaining = rng.end - i + 1;
-        if (remaining >= 3) {
+        if (hitStrongTimeShift || remaining >= 3) {
           finalRanges.push({
             start: segStart,
             end: i - 1,

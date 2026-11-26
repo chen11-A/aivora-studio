@@ -24,21 +24,9 @@ import {
 } from "./audio-contract";
 import { buildAudioNormalizationFilter } from "./audio-normalize";
 import { runEpisodeContentAndSubtitleQc, type ContentQcReport } from "./content-qc";
-import {
-  beginDeliveryPublishJournal,
-  hasEpisodeReviewSignOff,
-  markDeliveryAborted,
-  markDeliveryPublished,
-  sha256FileHex,
-} from "./delivery-journal";
-import { EXPORT_TEMP_PREFIX } from "./export-guard";
-import {
-  buildFailedQcReport,
-  buildSkippedQcReport,
-  resolveExportResultMessage,
-  runPostExportQc,
-  type ShotTimelineWindow,
-} from "./export-qc";
+import { beginDeliveryPublishJournal, hasEpisodeReviewSignOff, markDeliveryAborted, markDeliveryPublished, sha256FileHex } from "./delivery-journal";
+import { buildExportTempPrefix, markExportScratchDirOwner, unregisterActiveExportScratchDir } from "./export-guard";
+import { buildFailedQcReport, buildSkippedQcReport, resolveExportResultMessage, runPostExportQc, type ShotTimelineWindow } from "./export-qc";
 import {
   AUDIO_ENC,
   BASE_FFMPEG,
@@ -167,7 +155,8 @@ export async function exportEpisodeToMp4(params: {
     };
   }
 
-  const scratchDir = await mkdtemp(path.join(tmpdir(), EXPORT_TEMP_PREFIX));
+  const scratchDir = await mkdtemp(path.join(tmpdir(), buildExportTempPrefix()));
+  markExportScratchDirOwner(scratchDir);
   let publishedPath: string | null = null;
   let publishedDurationSec = 0;
   let publishedWidth: number | undefined;
@@ -489,8 +478,18 @@ export async function exportEpisodeToMp4(params: {
         message: "已取消成片导出，临时文件已清理，未生成损坏成片。",
       };
     }
+    const rawDetail = err instanceof Error ? err.message : String(err);
+    const errCode = (err as NodeJS.ErrnoException | null)?.code;
+    if (errCode === "ENOENT" || /\bENOENT\b|aivora-export-/i.test(rawDetail)) {
+      return {
+        ok: false,
+        exportMode: effectiveMode,
+        message: "导出未完成（临时工作目录被中断或不可访问），原文件未被修改，请重试。",
+      };
+    }
     throw err;
   } finally {
+    unregisterActiveExportScratchDir(scratchDir);
     await rm(scratchDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 120 });
   }
 }

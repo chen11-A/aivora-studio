@@ -95,6 +95,7 @@ export class DirectorService {
     purpose: string;
     systemPrompt: string;
     userPrompt: string;
+    maxOutputTokens?: number;
   }): Promise<BudgetedTextCallResult> {
     return runBudgetedTextModelCall(
       {
@@ -233,6 +234,7 @@ export class DirectorService {
           purpose: `导演拆镜：${ep.title}`,
           systemPrompt: DIRECTOR_SYSTEM_PROMPT,
           userPrompt,
+          maxOutputTokens: 8192,
         });
         if (!aiRes.ok) return { ok: false, message: aiRes.message };
         providerSummary = aiRes.providerSummary;
@@ -276,6 +278,7 @@ export class DirectorService {
             projectId: input.projectId,
             promptLengths: activeChunks.map((c) => DIRECTOR_SYSTEM_PROMPT.length + c.userPrompt.length),
             purposeLabel: `逐场导演拆镜（${ep.title}）`,
+            maxOutputTokens: 8192,
           },
         );
         if (!headroom.ok) return { ok: false, message: headroom.message };
@@ -287,6 +290,7 @@ export class DirectorService {
               purpose: `逐场拆镜：${rangeLabel}`,
               systemPrompt: DIRECTOR_SYSTEM_PROMPT,
               userPrompt,
+              maxOutputTokens: 8192,
             });
             if (!aiRes.ok) return { ok: false, message: aiRes.message };
             providerSummary = aiRes.providerSummary;
@@ -448,6 +452,7 @@ export class DirectorService {
         purpose: `动作精修：${shot.title}`,
         systemPrompt: ACTION_POLISH_SYSTEM_PROMPT,
         userPrompt,
+        maxOutputTokens: 2048,
       });
       if (!aiRes.ok) {
         if (aiRes.budgetBlocked) {

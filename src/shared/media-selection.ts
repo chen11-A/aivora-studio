@@ -198,6 +198,14 @@ export function evaluateShotSpeechStatus(
   return { state: "ready", label: "已配音" };
 }
 
+export type EpisodeFormalBlockingIssue = {
+  shotId: string;
+  shotIndex: number;
+  shotTitle: string;
+  reason: string;
+  suggestion: string;
+};
+
 export type EpisodeExportReadiness = {
   totalShots: number;
   totalDurationSec: number;
@@ -209,7 +217,9 @@ export type EpisodeExportReadiness = {
   subtitleCount: number;
   bgmAsset: Asset | null;
   missingVisualShots: Array<{ id: string; title: string }>;
+  formalBlockingIssues: EpisodeFormalBlockingIssue[];
   canExport: boolean;
+  canFormalExport: boolean;
   blockingReason: string | null;
 };
 
@@ -231,18 +241,57 @@ export function evaluateEpisodeExportReadiness(
   let speechCount = 0;
   let subtitleCount = 0;
   const missingVisualShots: Array<{ id: string; title: string }> = [];
+  const formalBlockingIssues: EpisodeFormalBlockingIssue[] = [];
 
-  for (const shot of epShots) {
+  for (let i = 0; i < epShots.length; i += 1) {
+    const shot = epShots[i]!;
+    const shotIndex = i + 1;
     const take = resolveActiveVisualTake(shot, workspace.takes);
+    const speech = resolveSelectedSpeechTake(shot, workspace.takes);
     if (take) {
       visualReadyCount += 1;
       if (isVideoMediaPath(take.mediaPath)) realVideoCount += 1;
-      else if (isSvgPlaceholderPath(take.mediaPath)) placeholderCount += 1;
-      else realImageCount += 1;
+      else if (isSvgPlaceholderPath(take.mediaPath)) {
+        placeholderCount += 1;
+        formalBlockingIssues.push({
+          shotId: shot.id,
+          shotIndex,
+          shotTitle: shot.title,
+          reason: "仍为占位画板",
+          suggestion: "前往分镜页生成或导入真实画面",
+        });
+      } else realImageCount += 1;
     } else {
       missingVisualShots.push({ id: shot.id, title: shot.title });
+      formalBlockingIssues.push({
+        shotId: shot.id,
+        shotIndex,
+        shotTitle: shot.title,
+        reason: "缺少可用画面",
+        suggestion: "前往分镜页生成或导入画面",
+      });
     }
-    if (resolveSelectedSpeechTake(shot, workspace.takes)) speechCount += 1;
+    if (speech) speechCount += 1;
+    if (shot.dialogue.trim()) {
+      if (shot.speakerStatus !== "confirmed") {
+        formalBlockingIssues.push({
+          shotId: shot.id,
+          shotIndex,
+          shotTitle: shot.title,
+          reason: "说话人待确认",
+          suggestion: "前往分镜页确认说话人角色",
+        });
+      }
+      if (!speech) {
+        formalBlockingIssues.push({
+          shotId: shot.id,
+          shotIndex,
+          shotTitle: shot.title,
+          reason: "有对白未配音",
+          suggestion: "前往分镜页生成或导入对白配音",
+        });
+      }
+    }
     if (shot.subtitle.trim()) subtitleCount += 1;
   }
 
@@ -257,7 +306,7 @@ export function evaluateEpisodeExportReadiness(
   if (epShots.length === 0) {
     blockingReason = "当前分集还没有镜头，请先在「分镜」页新增至少 1 个镜头。";
   } else if (missingVisualShots.length > 0) {
-    blockingReason = `有 ${missingVisualShots.length} 个镜头缺少可用画面版本，请先补齐或选定版本。`;
+    blockingReason = `有 ${missingVisualShots.length} 个镜头（如「${missingVisualShots[0]!.title}」）缺少可用画面，当前版本试片与正片均需先补齐或导入画面后再导出。`;
   }
 
   return {
@@ -271,7 +320,9 @@ export function evaluateEpisodeExportReadiness(
     subtitleCount,
     bgmAsset,
     missingVisualShots,
+    formalBlockingIssues,
     canExport: blockingReason === null,
+    canFormalExport: blockingReason === null && formalBlockingIssues.length === 0,
     blockingReason,
   };
 }

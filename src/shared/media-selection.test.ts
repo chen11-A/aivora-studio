@@ -60,6 +60,36 @@ describe("media-selection & export readiness", () => {
     expect(readiness.visualReadyCount).toBe(1);
     expect(readiness.realVideoCount).toBe(1);
     expect(readiness.missingVisualShots).toEqual([{ id: "sh_2", title: "镜02" }]);
-    expect(readiness.blockingReason).toContain("1 个镜头缺少可用画面版本");
+    expect(readiness.blockingReason).toContain("缺少可用画面");
+    expect(readiness.blockingReason).toContain("试片与正片");
+  });
+
+  it("distinguishes preview-ready from formal-blocked when dialogue has unconfirmed speaker or missing speech (F04)", () => {
+    const ws = makeWorkspace();
+    ws.takes.push({
+      id: "tk_vid_2",
+      shotId: "sh_2",
+      kind: "video",
+      versionNumber: 1,
+      mediaPath: "assets/c.mp4",
+      mediaSha256: null,
+      promptSnapshot: "",
+      providerInfo: "",
+      isSelected: true,
+      durationSec: 4,
+      createdAt: ws.project.createdAt,
+    });
+    ws.shots[1]!.selectedVideoTakeId = "tk_vid_2";
+    ws.shots[1]!.dialogue = "山门起风了。";
+    ws.shots[1]!.speakerStatus = "unconfirmed";
+
+    const readiness = evaluateEpisodeExportReadiness(ws, "ep_1");
+    expect(readiness.canExport).toBe(true);
+    expect(readiness.canFormalExport).toBe(false);
+    expect(readiness.formalBlockingIssues.map((i) => i.reason)).toEqual([
+      "说话人待确认",
+      "有对白未配音",
+    ]);
+    expect(readiness.formalBlockingIssues[0]!.shotIndex).toBe(2);
   });
 });

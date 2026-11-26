@@ -317,19 +317,21 @@ export function EditorStage() {
             <div
               data-testid="export-readiness-card"
               className={`rounded-xl p-3 border text-[11px] flex flex-col gap-1.5 ${
-                readiness.canExport
+                readiness.canFormalExport
                   ? "bg-[var(--accent-success-soft)] border-[var(--accent-success-border)] text-[var(--accent-success-ink)]"
                   : "bg-[var(--accent-amber-soft)] border-[var(--accent-amber-border)] text-[var(--accent-amber-ink)]"
               }`}
             >
               <div className="flex items-center justify-between gap-2 font-semibold text-[12px]">
                 <span className="flex items-center gap-1.5 min-w-0">
-                  {readiness.canExport ? (
+                  {readiness.canFormalExport ? (
                     <CheckCircle2 className="w-3.5 h-3.5 text-[var(--accent-success-text)] shrink-0" />
                   ) : (
                     <AlertTriangle className="w-3.5 h-3.5 text-[var(--accent-amber-text)] shrink-0" />
                   )}
-                  <span className="truncate">{readiness.canExport ? "本集就绪，可直接导出" : "还有镜头缺少画面"}</span>
+                  <span className="truncate">
+                    {readiness.canFormalExport ? "正片就绪，可审片导出" : !readiness.canExport ? "还有镜头缺少画面" : readiness.formalBlockingIssues.some((i) => i.reason === "有对白未配音") ? `可试片，正片缺配音（待修 ${readiness.formalBlockingIssues.length} 项）` : `可试片，正片待完善（${readiness.formalBlockingIssues.length} 项）`}
+                  </span>
                 </span>
                 <button
                   type="button"
@@ -347,16 +349,17 @@ export function EditorStage() {
               <div className="text-[11px] opacity-90 tabular-nums">
                 字幕：{readiness.subtitleCount}/{readiness.totalShots} 镜 · 配音：{readiness.speechCount} 镜
               </div>
-              {readiness.missingVisualShots.length > 0 && (
+              {readiness.formalBlockingIssues.length > 0 && (
                 <div className="flex flex-wrap gap-1 pt-1">
-                  {readiness.missingVisualShots.map((m) => (
+                  {readiness.formalBlockingIssues.slice(0, 6).map((issue, idx) => (
                     <button
-                      key={m.id}
+                      key={`${issue.shotId}-${idx}`}
                       type="button"
-                      onClick={() => void jumpToShot(m.id)}
+                      title={issue.suggestion}
+                      onClick={() => void jumpToShot(issue.shotId)}
                       className="aivora-pressable px-2 py-0.5 rounded-md bg-[var(--bg-surface)]/85 hover:bg-[var(--bg-surface)] border border-[var(--accent-amber-border)] text-[var(--accent-amber-text)] font-medium cursor-pointer"
                     >
-                      去补齐：{m.title}
+                      去修第 {issue.shotIndex} 镜：{issue.reason}
                     </button>
                   ))}
                 </div>

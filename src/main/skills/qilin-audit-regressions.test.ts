@@ -251,6 +251,35 @@ describe("v1.8.0 Adversarial Audit P0/P1/P2 Regressions", () => {
       ],
     });
     expect(customProposal.screenwriterTrace?.outputSummary).toContain("2 场");
+
+    // 6. Minimal F02: short script with explicit time+location shift splits into 2 scenes and binds later shots to Scene 2
+    const timeJumpScript = [
+      "山门 · 黄昏",
+      "陆照立在石阶前，回望暮色里的山门。",
+      "三天后，落云城听山堂。",
+      "陆家主落座堂中，沉声问起北境来信。",
+    ].join("\n\n");
+    const timeJumpOutline = buildScreenwriterOutline({ rawText: timeJumpScript, defaultTitle: "换场测试" });
+    const jumpScenes = timeJumpOutline.episodes[0]?.scenes ?? [];
+    expect(jumpScenes).toHaveLength(2);
+    expect(jumpScenes[1]!.locationName).toContain("听山堂");
+    const jumpProposal = buildOfflineDirectorProposal("换场测试", timeJumpScript);
+    expect(jumpProposal.scenes).toHaveLength(2);
+    expect(jumpProposal.scenes[1]!.locationName).toContain("听山堂");
+    expect(jumpProposal.scenes[1]!.shots.some((sh) => sh.sourceExcerpt?.includes("陆家主") || sh.visualPrompt.includes("陆家主"))).toBe(true);
+
+    // 7. F02 negative guard: dialogue mentioning '三天后我再来' / quoted time-jump must NEVER mis-split
+    const dialogueOnlyOutline = buildScreenwriterOutline({
+      rawText: [
+        "山门 · 黄昏",
+        "陆照低声开口。",
+        "三天后我再来。",
+        "三天后，我再来。",
+        "「三天后，落云城听山堂见。」",
+      ].join("\n\n"),
+      defaultTitle: "对白不误切",
+    });
+    expect(dialogueOnlyOutline.episodes[0]?.scenes ?? []).toHaveLength(1);
     projects.closeAll();
   });
 });

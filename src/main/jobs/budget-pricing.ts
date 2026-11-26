@@ -48,12 +48,63 @@ function resolveVideoPricingFactors(modelId?: string, resolution?: string): {
   return { centsPerSec, modelTier, resMultiplier, resolutionTier };
 }
 
+export type TextTokenUsageInput = {
+  modelId?: string;
+  inputTokens: number;
+  outputTokens: number;
+  thoughtTokens?: number;
+  cachedInputTokens?: number;
+};
+
+function resolveTextTokenRatesCentsPer1M(modelId?: string): {
+  inputCentsPer1M: number;
+  outputCentsPer1M: number;
+} {
+  const m = (modelId ?? "").toLowerCase();
+  if (/gemini-4-(?:carbon|argon)|opus|\bo[13]\b/.test(m)) {
+    return { inputCentsPer1M: 400, outputCentsPer1M: 2000 };
+  }
+  if (/gemini-4-neon|claude-4|claude-3\.7/.test(m)) {
+    return { inputCentsPer1M: 300, outputCentsPer1M: 1500 };
+  }
+  if (/flash-lite|\bmini\b|haiku/.test(m)) {
+    return { inputCentsPer1M: 30, outputCentsPer1M: 250 };
+  }
+  if (/gemini-(?:3\.1|2\.5)-pro|\bpro\b|gpt-5|gpt-4o/.test(m)) {
+    return { inputCentsPer1M: 150, outputCentsPer1M: 1000 };
+  }
+  if (/gemini-4-hydrogen|flash/.test(m)) {
+    return { inputCentsPer1M: 150, outputCentsPer1M: 750 };
+  }
+  return { inputCentsPer1M: 150, outputCentsPer1M: 750 };
+}
+
+/**
+ * Estimates text-call cost in cents from provider-reported token usage.
+ * Per Google Gemini API billing docs, `thoughtTokens` are billed at the output token rate.
+ */
+export function estimateTextUsageCents(input: TextTokenUsageInput): number {
+  const rates = resolveTextTokenRatesCentsPer1M(input.modelId);
+  const totalInput = Math.max(0, Number(input.inputTokens) || 0);
+  const cached = Math.min(totalInput, Math.max(0, Number(input.cachedInputTokens ?? 0) || 0));
+  const freshInput = totalInput - cached;
+  const billableOutput =
+    Math.max(0, Number(input.outputTokens) || 0) + Math.max(0, Number(input.thoughtTokens ?? 0) || 0);
+  const rawCents =
+    (freshInput * rates.inputCentsPer1M +
+      cached * rates.inputCentsPer1M * 0.1 +
+      billableOutput * rates.outputCentsPer1M) /
+    1_000_000;
+  return rawCents > 0 ? Math.max(1, Math.ceil(rawCents)) : 0;
+}
+
 export function quotePaidAction(input: {
   kind: PaidActionKind;
   durationSec?: number;
   modelId?: string;
   resolution?: string;
   inputChars?: number;
+  maxOutputTokens?: number;
 }): BudgetQuote {
   const dur = Math.max(1, Math.round(input.durationSec ?? 5));
   if (input.kind === "video") {
@@ -97,20 +148,22 @@ export function quotePaidAction(input: {
     };
   }
   if (input.kind === "text") {
-    const m = (input.modelId ?? "").toLowerCase();
-    const base = /pro|opus|gpt-5|gpt-4o|o1|o3|claude-3\.7|claude-4/.test(m)
-      ? 3
-      : /flash|mini|lite|haiku/.test(m)
-        ? 1
-        : 2;
-    const extra = Math.max(0, Math.floor(((input.inputChars ?? 0) - 4000) / 6000));
-    const cents = Math.max(1, base + extra);
+    const estInputTokens = Math.max(256, Math.ceil((input.inputChars ?? 0) * 0.75));
+    const maxOut = Math.max(256, Math.round(input.maxOutputTokens ?? 4096));
+    const cents = Math.max(
+      1,
+      estimateTextUsageCents({
+        modelId: input.modelId,
+        inputTokens: estInputTokens,
+        outputTokens: maxOut,
+      }),
+    );
     const modelTag = input.modelId?.trim() ? `${input.modelId.trim()} · ` : "";
     return {
       kind: "text",
       quotedCents: cents,
       pricingBasis: "estimated_unit",
-      summary: `预估文本模型费用约 $${(cents / 100).toFixed(2)}（${modelTag}以服务商实际账单为准）`,
+      summary: `预估文本上限费用约 $${(cents / 100).toFixed(2)}（${modelTag}输出上限 ${maxOut} tokens，返回后按实测用量校对）`,
     };
   }
   return { kind: "visual_qc", quotedCents: 3, pricingBasis: "estimated_unit", summary: "预估可选视觉抽检费用约 $0.03" };

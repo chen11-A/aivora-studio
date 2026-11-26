@@ -61,9 +61,17 @@ describe("F16 Paid Text Service: Director split (single & multi-scene) and Actio
     ];
 
     let fetchCount = 0;
+    const seenMaxOutputTokens: number[] = [];
+    let nextUsageOverride:
+      | { total_input_tokens: number; total_output_tokens: number; total_thought_tokens: number; total_tokens: number }
+      | null = null;
     const mockFetch: typeof fetch = async (_url, init) => {
       fetchCount += 1;
       const bodyStr = typeof init?.body === "string" ? init.body : "";
+      const parsedBody = JSON.parse(bodyStr) as {
+        generation_config?: { max_output_tokens?: number };
+      };
+      seenMaxOutputTokens.push(Number(parsedBody.generation_config?.max_output_tokens ?? 0));
       const isPolish = bodyStr.includes("三拍动作");
       const textPayload = isPolish
         ? JSON.stringify({
@@ -95,16 +103,23 @@ describe("F16 Paid Text Service: Director split (single & multi-scene) and Actio
               },
             ],
           });
+      const usage = nextUsageOverride ?? {
+        total_input_tokens: 600,
+        total_output_tokens: 500,
+        total_thought_tokens: 400,
+        total_tokens: 1500,
+      };
+      nextUsageOverride = null;
       return new Response(
-        JSON.stringify({ outputs: [{ type: "text", text: textPayload }] }),
+        JSON.stringify({ outputs: [{ type: "text", text: textPayload }], usage }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     };
 
     const director = new DirectorService(projects, globalConfig, oauth, mockFetch);
 
-    // 1. Cap = 1 cent (< 3 cents for gemini-2.5-pro): single-scene split & action polish BOTH blocked with 0 HTTP calls!
-    projects.withProjectDb(ws.project.id, (db) => setProjectBudgetCap(db, ws.project.id, 1));
+    // 1. Cap = 2 cents (< worst-case quote): single-scene split & action polish BOTH blocked with 0 HTTP calls!
+    projects.withProjectDb(ws.project.id, (db) => setProjectBudgetCap(db, ws.project.id, 2));
     const singleBlocked = await director.proposeSplit({ projectId: ws.project.id, episodeId: epId });
     expect(singleBlocked.ok).toBe(false);
     expect(singleBlocked.message).toContain("预算");
@@ -115,8 +130,8 @@ describe("F16 Paid Text Service: Director split (single & multi-scene) and Actio
     expect(polishBlocked.message).toContain("预算");
     expect(fetchCount).toBe(0);
 
-    // 2. Cap = 5 cents (< 3 scenes * 3 cents = 9 cents): multi-scene split blocked UPFRONT before Scene 1 (0 HTTP calls)!
-    projects.withProjectDb(ws.project.id, (db) => setProjectBudgetCap(db, ws.project.id, 5));
+    // 2. Cap = 20 cents (< 3 scenes * 9c worst-case bound = 27c): multi-scene split blocked UPFRONT before Scene 1!
+    projects.withProjectDb(ws.project.id, (db) => setProjectBudgetCap(db, ws.project.id, 20));
     const multiBlocked = await director.proposeSplit({
       projectId: ws.project.id,
       episodeId: epId,
@@ -127,8 +142,9 @@ describe("F16 Paid Text Service: Director split (single & multi-scene) and Actio
     expect(multiBlocked.message).toContain("3 次");
     expect(fetchCount).toBe(0);
 
-    // 3. Raise cap to 25 cents: multi-scene split (3 calls = 9c) + action polish (1 call = 3c) succeed & settle in budget_ledger!
-    projects.withProjectDb(ws.project.id, (db) => setProjectBudgetCap(db, ws.project.id, 25));
+    // 3. Raise cap to 30 cents: multi-scene split (3 calls, 8192 cap) + action polish (1 call, 2048 cap) succeed!
+    // Actual usage per call = 600 in + (500 out + 400 thought) => ~0.99c => 1c each (4c total vs 30c pre-reserved)!
+    projects.withProjectDb(ws.project.id, (db) => setProjectBudgetCap(db, ws.project.id, 30));
     const multiOk = await director.proposeSplit({
       projectId: ws.project.id,
       episodeId: epId,
@@ -140,18 +156,99 @@ describe("F16 Paid Text Service: Director split (single & multi-scene) and Actio
     const polishOk = await director.proposeActionPolish({ projectId: ws.project.id, shotId });
     expect(polishOk.ok, polishOk.message).toBe(true);
     expect(fetchCount).toBe(4);
+    expect(seenMaxOutputTokens).toEqual([8192, 8192, 8192, 2048]);
 
     projects.withProjectDb(ws.project.id, (db) => {
       const sum = getProjectBudgetSummary(db, ws.project.id);
-      expect(sum.estimatedSettledCents).toBe(12);
-      expect(sum.remainingCents).toBe(13);
-      const rows = db.all<{ kind: string; status: string }>(
-        `SELECT kind, status FROM budget_ledger WHERE project_id = ?`,
+      expect(sum.settledCents).toBe(0); // Never fakes provider invoice
+      expect(sum.estimatedSettledCents).toBe(4); // Reconciled down from pre-reserved 30c to actual-usage 4c!
+      expect(sum.remainingCents).toBe(26);
+      const rows = db.all<{ kind: string; status: string; note: string }>(
+        `SELECT kind, status, note FROM budget_ledger WHERE project_id = ?`,
         ws.project.id,
       );
       expect(rows).toHaveLength(4);
       expect(rows.every((r) => r.kind === "text" && r.status === "settled_estimated")).toBe(true);
+      expect(rows[0]!.note).toContain("thought=400");
     });
+
+    // 4. Heavy thinking-token response (20,000 thought + 4,000 output = 24c + input => 25c) consumes remaining cap,
+    // immediately blocking the next call with 0 HTTP requests!
+    nextUsageOverride = {
+      total_input_tokens: 1000,
+      total_output_tokens: 4000,
+      total_thought_tokens: 20000,
+      total_tokens: 25000,
+    };
+    const heavyCall = await director.proposeSplit({ projectId: ws.project.id, episodeId: epId });
+    expect(heavyCall.ok, heavyCall.message).toBe(true);
+    expect(fetchCount).toBe(5);
+
+    projects.withProjectDb(ws.project.id, (db) => {
+      const sum = getProjectBudgetSummary(db, ws.project.id);
+      expect(sum.estimatedSettledCents).toBe(29); // 4c + 25c
+      expect(sum.remainingCents).toBe(1);
+    });
+
+    const blockedAfterRealUsage = await director.proposeActionPolish({ projectId: ws.project.id, shotId });
+    expect(blockedAfterRealUsage.ok).toBe(false);
+    expect(blockedAfterRealUsage.message).toContain("预算上限拦截");
+    expect(fetchCount).toBe(5);
+
+    // 5. Response without `usage` metadata -> marks unknown_hold (待核对, NOT zero cost or settled)!
+    projects.withProjectDb(ws.project.id, (db) => setProjectBudgetCap(db, ws.project.id, 100));
+    const noUsageDirector = new DirectorService(
+      projects,
+      globalConfig,
+      oauth,
+      async () => {
+        fetchCount += 1;
+        return new Response(
+          JSON.stringify({
+            outputs: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  refinedVisualPrompt: "测试动作",
+                  actionBeats: ["起", "承", "收"],
+                }),
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      },
+    );
+    const noUsageRes = await noUsageDirector.proposeActionPolish({ projectId: ws.project.id, shotId });
+    expect(noUsageRes.ok).toBe(true);
+    expect(fetchCount).toBe(6);
+    projects.withProjectDb(ws.project.id, (db) => {
+      const sum = getProjectBudgetSummary(db, ws.project.id);
+      expect(sum.settledCents).toBe(0);
+      expect(sum.unknownHoldCount).toBe(1);
+      expect(sum.unknownHoldCents).toBeGreaterThanOrEqual(3); // Conservative reserve retained!
+    });
+
+    // 6. Ambiguous post-dispatch network failure (ECONNRESET) -> unknown_hold AND blocks automatic duplicate resend!
+    let ambiguousCalls = 0;
+    const flakyDirector = new DirectorService(
+      projects,
+      globalConfig,
+      oauth,
+      async () => {
+        ambiguousCalls += 1;
+        throw new Error("ECONNRESET: socket hang up after dispatch");
+      },
+    );
+    const firstAmbiguous = await flakyDirector.proposeSplit({ projectId: ws.project.id, episodeId: epId });
+    expect(firstAmbiguous.ok).toBe(false);
+    expect(ambiguousCalls).toBe(1);
+
+    // Re-submitting identical parameters MUST be blocked with 0 extra HTTP requests!
+    const retryBlocked = await flakyDirector.proposeSplit({ projectId: ws.project.id, episodeId: epId });
+    expect(retryBlocked.ok).toBe(false);
+    expect(retryBlocked.message).toContain("UNKNOWN");
+    expect(ambiguousCalls).toBe(1);
 
     projects.closeAll();
     globalConfig.close();

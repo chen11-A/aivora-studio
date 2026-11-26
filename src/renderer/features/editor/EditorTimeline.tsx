@@ -1,6 +1,6 @@
 import { memo, useMemo, useRef, useState } from "react";
 import { Film, Music, Subtitles, Volume2 } from "lucide-react";
-import { resolveActiveVisualTake } from "@shared/media-selection";
+import { resolveActiveVisualTake, resolveSelectedSpeechTake } from "@shared/media-selection";
 import type { Asset, Shot, Take } from "@shared/types/domain";
 import type { TimelineSegment } from "./useTimelinePlayback";
 
@@ -59,11 +59,12 @@ const TimelineTracks = memo(function TimelineTracks(props: {
   segments: TimelineSegment[];
   layouts: SegmentLayout[];
   activeVersionByShotId: Map<string, number | null>;
+  hasSpeechByShotId: Map<string, boolean>;
   activeIndex: number | null;
   bgmAsset: Asset | null;
   bgmVolumeDb: number;
 }) {
-  const { segments, layouts, activeVersionByShotId, activeIndex, bgmAsset, bgmVolumeDb } = props;
+  const { segments, layouts, activeVersionByShotId, hasSpeechByShotId, activeIndex, bgmAsset, bgmVolumeDb } = props;
   return (
     <>
       {/* Video Track */}
@@ -111,22 +112,30 @@ const TimelineTracks = memo(function TimelineTracks(props: {
           <Volume2 className="w-3 h-3 text-[var(--accent-success-text)]" /> 对白
         </span>
         <div className="flex items-center gap-1 h-full">
-          {segments.map(({ shot }, idx) => (
-            <div
-              key={shot.id}
-              title={shot.dialogue ? `${shot.speaker || "旁白"}：${shot.dialogue}` : "无对白"}
-              style={{ width: `${layouts[idx]!.width}px` }}
-              className={`h-full px-2 rounded-md flex items-center overflow-hidden text-[10px] shrink-0 ${
-                shot.dialogue
-                  ? "bg-[var(--track-dialogue-bg)] border border-[var(--accent-success-border)] text-[var(--accent-success-ink)]"
-                  : "bg-[var(--bg-inset)] border border-dashed border-[var(--border-subtle)] text-[var(--text-muted)]"
-              }`}
-            >
-              <span className="block truncate min-w-0">
-                {shot.dialogue ? `${shot.speaker || "旁白"}：${shot.dialogue}` : "无对白"}
-              </span>
-            </div>
-          ))}
+          {segments.map(({ shot }, idx) => {
+            const hasDialogue = Boolean(shot.dialogue.trim());
+            const hasSpeech = Boolean(hasSpeechByShotId.get(shot.id));
+            const speakerLabel =
+              shot.speakerStatus === "confirmed" ? shot.speaker.trim() || "旁白" : "说话人待确认";
+            const label = !hasDialogue
+              ? "无对白"
+              : `${speakerLabel}${hasSpeech ? "" : " · 未配音"}：${shot.dialogue}`;
+            const toneClass = !hasDialogue
+              ? "bg-[var(--bg-inset)] border border-dashed border-[var(--border-subtle)] text-[var(--text-muted)]"
+              : hasSpeech && shot.speakerStatus === "confirmed"
+                ? "bg-[var(--track-dialogue-bg)] border border-[var(--accent-success-border)] text-[var(--accent-success-ink)]"
+                : "bg-[var(--accent-amber-soft)] border border-dashed border-[var(--accent-amber-border)] text-[var(--accent-amber-ink)]";
+            return (
+              <div
+                key={shot.id}
+                title={label}
+                style={{ width: `${layouts[idx]!.width}px` }}
+                className={`h-full px-2 rounded-md flex items-center overflow-hidden text-[10px] shrink-0 ${toneClass}`}
+              >
+                <span className="block truncate min-w-0">{label}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -232,6 +241,14 @@ export function EditorTimeline(props: {
     return map;
   }, [segments, takes]);
 
+  const hasSpeechByShotId = useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const seg of segments) {
+      map.set(seg.shot.id, Boolean(resolveSelectedSpeechTake(seg.shot, takes)));
+    }
+    return map;
+  }, [segments, takes]);
+
   const playheadX = computePlayheadX(layouts, playheadSec);
 
   function clientXToTimeSec(clientX: number): number {
@@ -323,6 +340,7 @@ export function EditorTimeline(props: {
             segments={segments}
             layouts={layouts}
             activeVersionByShotId={activeVersionByShotId}
+            hasSpeechByShotId={hasSpeechByShotId}
             activeIndex={activeIndex}
             bgmAsset={bgmAsset}
             bgmVolumeDb={bgmVolumeDb}

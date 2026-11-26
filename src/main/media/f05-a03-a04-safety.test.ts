@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +16,13 @@ import {
   reconcilePendingDeliveryRecords,
   recordEpisodeReviewSignOff,
 } from "./delivery-journal";
+import {
+  buildExportTempPrefix,
+  EXPORT_TEMP_PREFIX,
+  ExportWriteGuard,
+  markExportScratchDirOwner,
+  unregisterActiveExportScratchDir,
+} from "./export-guard";
 import { exportEpisodeToMp4 } from "./export-pipeline";
 import { probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
 
@@ -489,5 +497,84 @@ describe("F05 exclusive export publish, A03 stale-report guard, A04 archive safe
     expect(existsSync(outSigned)).toBe(true);
 
     store.closeAll();
+  }, 60_000);
+
+  it("F01: preserves Instance A active FFmpeg export & live child-PID scratch dir when Instance B cleans up on startup, and cleans dead crash leftovers", async () => {
+    const ff = await probeFfmpegStatus();
+    if (!ff.available || !ff.ffmpegPath) return;
+
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-f01-cross-"));
+    tempDirs.push(base);
+    const sharedTmp = path.join(base, "shared-tmp");
+    mkdirSync(sharedTmp, { recursive: true });
+
+    // Real live second OS process (simulates another running instance holding a scratch dir)
+    const liveChild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    const liveChildPid = liveChild.pid!;
+    const liveChildDir = path.join(sharedTmp, `${buildExportTempPrefix(liveChildPid)}child`);
+    const crashedDir = path.join(sharedTmp, `${buildExportTempPrefix(999_999)}dead`);
+    const unverifiedDir = path.join(sharedTmp, `${EXPORT_TEMP_PREFIX}ownerless-fresh`);
+    for (const d of [liveChildDir, crashedDir, unverifiedDir]) mkdirSync(d, { recursive: true });
+    markExportScratchDirOwner(liveChildDir, liveChildPid);
+    unregisterActiveExportScratchDir(liveChildDir);
+    markExportScratchDirOwner(crashedDir, 999_999);
+    unregisterActiveExportScratchDir(crashedDir);
+
+    const store = new ProjectStore(path.join(base, "wsA"));
+    const created = store.createProject({ name: "跨实例导出保护", aspectRatio: "16:9" });
+    const epId = created.episodes[0]!.id;
+    const shotId = created.shots[0]!.id;
+    const clipRel = "assets/clip.mp4";
+    await runMediaBinary(ff.ffmpegPath, [
+      "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24:duration=2",
+      "-f", "lavfi", "-i", "sine=f=440:r=48000:d=2",
+      "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+      path.join(created.dirPath, clipRel),
+    ]);
+    store.withProjectDb(created.project.id, (db) => {
+      db.run(
+        `INSERT INTO takes (id, shot_id, kind, version_number, media_path, is_selected, duration_sec, created_at)
+         VALUES ('tk-f01', ?, 'video', 1, ?, 1, 2, ?)`,
+        shotId, clipRel, new Date().toISOString(),
+      );
+      db.run(`UPDATE shots SET selected_video_take_id = 'tk-f01' WHERE id = ?`, shotId);
+    });
+
+    const ws = store.openProject(created.project.id);
+    const outPath = path.join(base, "instance-a-output.mp4");
+    let instanceBTriggered = false;
+    try {
+      const exportRes = await exportEpisodeToMp4({
+        workspace: ws,
+        projectDir: ws.dirPath,
+        episodeId: epId,
+        outputPath: outPath,
+        exportMode: "preview",
+        runQc: false,
+        onProgress: () => {
+          if (instanceBTriggered) return;
+          instanceBTriggered = true;
+          // Instance B starts up right while Instance A is mid-FFmpeg render!
+          const instanceBGuard = new ExportWriteGuard();
+          instanceBGuard.cleanupStaleTempDirs([sharedTmp]);
+        },
+      });
+      expect(instanceBTriggered).toBe(true);
+      expect(exportRes.ok, exportRes.message).toBe(true);
+      expect(existsSync(outPath)).toBe(true);
+      expect(existsSync(liveChildDir)).toBe(true);
+      expect(existsSync(unverifiedDir)).toBe(true);
+      expect(existsSync(crashedDir)).toBe(false);
+    } finally {
+      liveChild.kill();
+      await new Promise<void>((resolve) => liveChild.once("exit", () => resolve()));
+      store.closeAll();
+    }
+
+    // Once the other process actually dies (crash leftover), cleanup removes its dir cleanly
+    const postCrashGuard = new ExportWriteGuard();
+    expect(postCrashGuard.cleanupStaleTempDirs([sharedTmp])).toBe(1);
+    expect(existsSync(liveChildDir)).toBe(false);
+    expect(existsSync(unverifiedDir)).toBe(true);
   }, 60_000);
 });

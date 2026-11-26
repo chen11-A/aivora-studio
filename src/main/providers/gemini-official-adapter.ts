@@ -43,6 +43,32 @@ type InteractionContentBlock = {
   sample_rate?: number;
 };
 
+export const DEFAULT_GEMINI_DIRECTOR_MAX_OUTPUT_TOKENS = 8192;
+
+export type GeminiTokenUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  thoughtTokens: number;
+  cachedInputTokens: number;
+  totalTokens: number;
+};
+
+type InteractionUsagePayload = {
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  total_thought_tokens?: number;
+  total_cached_tokens?: number;
+  total_tokens?: number;
+};
+
+type LegacyUsageMetadataPayload = {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  thoughtsTokenCount?: number;
+  cachedContentTokenCount?: number;
+  totalTokenCount?: number;
+};
+
 type InteractionPayload = {
   id?: string;
   status?: string;
@@ -50,7 +76,41 @@ type InteractionPayload = {
   error?: { message?: string };
   outputs?: InteractionContentBlock[];
   steps?: Array<{ content?: InteractionContentBlock[] }>;
+  usage?: InteractionUsagePayload;
+  usageMetadata?: LegacyUsageMetadataPayload;
 };
+
+function parseGeminiTokenUsage(payload: InteractionPayload): GeminiTokenUsage | null {
+  const u = payload.usage;
+  if (u && typeof u === "object") {
+    const inputTokens = Math.max(0, Number(u.total_input_tokens ?? 0) || 0);
+    const outputTokens = Math.max(0, Number(u.total_output_tokens ?? 0) || 0);
+    const thoughtTokens = Math.max(0, Number(u.total_thought_tokens ?? 0) || 0);
+    const cachedInputTokens = Math.max(0, Number(u.total_cached_tokens ?? 0) || 0);
+    const totalTokens = Math.max(
+      inputTokens + outputTokens + thoughtTokens,
+      Number(u.total_tokens ?? 0) || 0,
+    );
+    if (totalTokens > 0 || inputTokens > 0 || outputTokens > 0 || thoughtTokens > 0) {
+      return { inputTokens, outputTokens, thoughtTokens, cachedInputTokens, totalTokens };
+    }
+  }
+  const m = payload.usageMetadata;
+  if (m && typeof m === "object") {
+    const inputTokens = Math.max(0, Number(m.promptTokenCount ?? 0) || 0);
+    const outputTokens = Math.max(0, Number(m.candidatesTokenCount ?? 0) || 0);
+    const thoughtTokens = Math.max(0, Number(m.thoughtsTokenCount ?? 0) || 0);
+    const cachedInputTokens = Math.max(0, Number(m.cachedContentTokenCount ?? 0) || 0);
+    const totalTokens = Math.max(
+      inputTokens + outputTokens + thoughtTokens,
+      Number(m.totalTokenCount ?? 0) || 0,
+    );
+    if (totalTokens > 0 || inputTokens > 0 || outputTokens > 0 || thoughtTokens > 0) {
+      return { inputTokens, outputTokens, thoughtTokens, cachedInputTokens, totalTokens };
+    }
+  }
+  return null;
+}
 
 function diagnoseGeminiHttp(status: number, body: string): string {
   const snippet = body.slice(0, 180).trim();
@@ -212,17 +272,41 @@ export async function fetchGeminiOfficialModels(
   }
 }
 
-export async function runGeminiDirectorChat(
-  input: { baseUrl: string; apiKey: string; modelId: string; systemPrompt: string; userPrompt: string },
+export type GeminiDirectorChatResult = {
+  text: string;
+  usage: GeminiTokenUsage | null;
+  status?: string;
+  maxOutputTokens: number;
+};
+
+export async function runGeminiDirectorChatWithUsage(
+  input: {
+    baseUrl: string;
+    apiKey: string;
+    modelId: string;
+    systemPrompt: string;
+    userPrompt: string;
+    maxOutputTokens?: number;
+  },
   fetcher: typeof fetch = fetch,
-): Promise<string> {
+): Promise<GeminiDirectorChatResult> {
+  const maxOutputTokens = Math.max(
+    256,
+    Math.round(input.maxOutputTokens ?? DEFAULT_GEMINI_DIRECTOR_MAX_OUTPUT_TOKENS),
+  );
   const res = await fetchGeminiApi(
     {
       baseUrl: input.baseUrl,
       pathAndQuery: "/v1beta/interactions",
       apiKey: input.apiKey,
       method: "POST",
-      body: { model: input.modelId, system_instruction: input.systemPrompt, input: input.userPrompt, stream: false },
+      body: {
+        model: input.modelId,
+        system_instruction: input.systemPrompt,
+        input: input.userPrompt,
+        generation_config: { max_output_tokens: maxOutputTokens },
+        stream: false,
+      },
       timeoutMs: 90_000,
     },
     fetcher,
@@ -234,8 +318,23 @@ export async function runGeminiDirectorChat(
     .map((b) => b.text ?? "")
     .join("\n")
     .trim();
-  if (!text) throw new Error("Gemini 未返回剧本拆镜文本");
-  return text;
+  return { text, usage: parseGeminiTokenUsage(payload), status: payload.status, maxOutputTokens };
+}
+
+export async function runGeminiDirectorChat(
+  input: {
+    baseUrl: string;
+    apiKey: string;
+    modelId: string;
+    systemPrompt: string;
+    userPrompt: string;
+    maxOutputTokens?: number;
+  },
+  fetcher: typeof fetch = fetch,
+): Promise<string> {
+  const result = await runGeminiDirectorChatWithUsage(input, fetcher);
+  if (!result.text) throw new Error("Gemini 未返回剧本拆镜文本");
+  return result.text;
 }
 
 export async function runGeminiImageGeneration(
