@@ -10,7 +10,7 @@ import {
   exportExternalShotPack,
   scanExternalDropFolder,
 } from "../media/external-pack";
-import { runGeminiMusicGeneration } from "../providers/gemini-official-adapter";
+import { generateProjectBgmWithBudget } from "../jobs/paid-bgm-service";
 import { fetchRemoteProviderModels } from "../providers/openai-compat-adapter";
 import type { GlobalConfigStore } from "../storage/global-store";
 import type { ProjectStore } from "../storage/project-store";
@@ -234,64 +234,11 @@ export function registerExternalAndModelExtraIpc(deps: ExternalIpcDeps): void {
 
   handle(
     IPC_CHANNELS.GENERATE_PROJECT_BGM,
-    async (input: { projectId: string; prompt: string }) => {
-      const snap = deps.globalConfig.getSnapshot();
-      const gemini = snap.providers.find(
-        (p) => p.protocol === "gemini-official" && p.enabled && p.hasSecret,
-      );
-      if (!gemini) {
-        return {
-          ok: false,
-          projectId: input.projectId,
-          message: "请先在「模型中心」保存一个 Google Gemini 官方全家桶 API Key，即可生成 Lyria 候选配乐。",
-        };
-      }
-      const creds = deps.globalConfig.getProviderCredentials(gemini.id);
-      if (!creds?.apiKey) {
-        return {
-          ok: false,
-          projectId: input.projectId,
-          message: "Gemini API Key 不可用，请在模型中心重新保存。",
-        };
-      }
-      const projectDir = deps.projects.resolveProjectDir(input.projectId);
-      if (!projectDir) {
-        return { ok: false, projectId: input.projectId, message: "作品目录不存在" };
-      }
-      const musicModel = gemini.models.find((m) => /lyria/i.test(m)) ?? "lyria-3.5";
-      try {
-        const media = await runGeminiMusicGeneration({
-          baseUrl: creds.view.baseUrl,
-          apiKey: creds.apiKey,
-          modelId: musicModel,
-          prompt: input.prompt.trim() || "warm cinematic background music, gentle piano and strings",
-          projectDir,
-        });
-        const stamp = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-        const { assetId, workspace } = deps.projects.registerProjectBgmCandidate({
-          projectId: input.projectId,
-          name: `AI 候选配乐 · ${musicModel} (${stamp})`,
-          mediaPath: media.mediaPath,
-          mediaSha256: media.mediaSha256,
-          description: input.prompt.trim().slice(0, 120) || "Lyria AI 候选配乐（待试听）",
-        });
-        return {
-          ok: true,
-          projectId: input.projectId,
-          candidateAssetId: assetId,
-          candidateMediaPath: media.mediaPath,
-          modelId: musicModel,
-          workspace,
-          message: `已通过 ${musicModel} 生成并登记候选配乐（未覆盖当前配乐，重启或清理缓存也不会丢失）`,
-        };
-      } catch (err) {
-        return {
-          ok: false,
-          projectId: input.projectId,
-          message: err instanceof Error ? err.message : "AI 生成配乐失败",
-        };
-      }
-    },
+    async (input: { projectId: string; prompt: string }) =>
+      generateProjectBgmWithBudget(
+        { projects: deps.projects, globalConfig: deps.globalConfig },
+        input,
+      ),
   );
 
   handle(

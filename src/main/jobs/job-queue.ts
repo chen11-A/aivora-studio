@@ -199,6 +199,7 @@ export class GenerationJobQueue {
 
     this.activeJobIds.add(jobId);
     this.activeInputHashes.add(plan.inputSha256);
+    let remoteSucceeded = false;
     try {
       const creds = await resolveTrustedLockedSecrets(snapshot, this.globalConfig, this.oauth);
       this.projects.withProjectDb(plan.projectId, (db) =>
@@ -221,6 +222,7 @@ export class GenerationJobQueue {
           }
         },
       });
+      remoteSucceeded = true;
 
       if (outcome.target === "asset-portrait" && plan.assetId) {
         recordAssetPortraitCandidateInDb(this.projects, {
@@ -264,16 +266,21 @@ export class GenerationJobQueue {
 
       throw new Error("未知的生成结果类型");
     } catch (err) {
-      const isAmbiguous = err instanceof AmbiguousRemoteError;
-      const msg = err instanceof Error ? err.message : String(err);
+      const isAmbiguous = remoteSucceeded || err instanceof AmbiguousRemoteError;
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      const msg = remoteSucceeded
+        ? `远端生成已成功，但本地保存/入库失败，已转入 UNKNOWN 防重复扣费：${rawMsg}`
+        : rawMsg;
+      const remoteTaskId =
+        err instanceof AmbiguousRemoteError && err.remoteTaskId ? err.remoteTaskId : undefined;
       const updated = updateJobRow(this.projects, plan.projectId, jobId, {
         status: isAmbiguous ? "unknown" : "failed",
         errorMessage: msg,
-        remoteTaskId: isAmbiguous && err.remoteTaskId ? err.remoteTaskId : undefined,
+        remoteTaskId,
       });
       this.projects.withProjectDb(plan.projectId, (db) =>
         settleBudgetEntry(db, ledgerEntry.id, isAmbiguous ? "unknown" : "failed", {
-          remoteTaskId: isAmbiguous ? err.remoteTaskId : undefined,
+          remoteTaskId,
           note: msg,
         }),
       );

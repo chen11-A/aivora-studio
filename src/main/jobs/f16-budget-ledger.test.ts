@@ -16,6 +16,7 @@ import {
   settleBudgetEntry,
 } from "./budget-ledger";
 import { GenerationJobQueue } from "./job-queue";
+import { generateProjectBgmWithBudget } from "./paid-bgm-service";
 
 const tempDirs: string[] = [];
 
@@ -260,6 +261,134 @@ describe("F16 atomic budget ledger, full-DB pending guard, and A/B/C crash recov
     const plan = queue.preparePlan({ projectId: ws.project.id, shotId: shC.id, kind: "image" });
     await expect(queue.confirmAndRun(plan)).rejects.toThrow("预算上限拦截");
     expect(netCalls).toBe(0);
+
+    projects.closeAll();
+    globalConfig.close();
+  });
+
+  it("differentiates video pricing by model & resolution, separates estimated vs actual settlement, routes Lyria BGM through budget ledger with dual-window lock, and holds UNKNOWN when local save fails after remote success", async () => {
+    // 1. Model + resolution pricing differentiation
+    const qStd720 = quotePaidAction({ kind: "video", durationSec: 5, modelId: "standard", resolution: "720p" });
+    const qKling1080 = quotePaidAction({ kind: "video", durationSec: 5, modelId: "kling-v3", resolution: "1080p" });
+    const qVeo4k = quotePaidAction({ kind: "video", durationSec: 5, modelId: "veo-3", resolution: "4k" });
+    expect(qKling1080.quotedCents).toBeGreaterThan(qStd720.quotedCents);
+    expect(qVeo4k.quotedCents).toBeGreaterThan(qKling1080.quotedCents);
+
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-f16-audit1-"));
+    tempDirs.push(base);
+    const projects = new ProjectStore(path.join(base, "ws"));
+    const globalConfig = new GlobalConfigStore(path.join(base, "app"), mockVault);
+    const ws = projects.createProject({ name: "配乐与实付诚实账本", aspectRatio: "16:9" });
+
+    globalConfig.saveProvider({
+      name: "Gemini Official",
+      protocol: "gemini-official",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      models: ["gemini-2.5-flash", "lyria-3.5"],
+      apiKey: "AIza-test-lyria",
+      enabled: true,
+    });
+
+    // 2. Estimated vs actual settlement honesty
+    projects.withProjectDb(ws.project.id, (db) => {
+      setProjectBudgetCap(db, ws.project.id, 30);
+      const eEst = authorizeAndReserveBudget(db, {
+        projectId: ws.project.id,
+        kind: "music",
+        quotedCents: 10,
+        inputSha256: "sha_est_1",
+        providerLabel: "Gemini",
+        modelId: "lyria-3.5",
+      });
+      const settledEst = settleBudgetEntry(db, eEst.id, "succeeded");
+      expect(settledEst.status).toBe("settled_estimated");
+      expect(settledEst.settledCents).toBeNull();
+
+      const sum1 = getProjectBudgetSummary(db, ws.project.id);
+      expect(sum1.settledCents).toBe(0); // NEVER fabricates actual billed amount!
+      expect(sum1.estimatedSettledCents).toBe(10);
+      expect(sum1.remainingCents).toBe(20); // Still reserves headroom against cap!
+
+      const eAct = authorizeAndReserveBudget(db, {
+        projectId: ws.project.id,
+        kind: "image",
+        quotedCents: 4,
+        inputSha256: "sha_act_1",
+        providerLabel: "Img",
+        modelId: "gpt-image-1",
+      });
+      const settledAct = settleBudgetEntry(db, eAct.id, "succeeded", { actualCents: 6 });
+      expect(settledAct.status).toBe("settled");
+      expect(settledAct.settledCents).toBe(6);
+
+      const sum2 = getProjectBudgetSummary(db, ws.project.id);
+      expect(sum2.settledCents).toBe(6);
+      expect(sum2.estimatedSettledCents).toBe(10);
+      expect(sum2.remainingCents).toBe(14);
+    });
+
+    // 3. Lyria BGM dual-window concurrent submit -> ONLY 1 remote call issued!
+    let bgmCalls = 0;
+    let releaseBgm!: () => void;
+    const bgmGate = new Promise<void>((r) => {
+      releaseBgm = r;
+    });
+    const slowRunner = async () => {
+      bgmCalls += 1;
+      await bgmGate;
+      return { mediaPath: "assets/lyria_test.wav", mediaSha256: "sha_lyria_wav" };
+    };
+
+    const p1 = generateProjectBgmWithBudget(
+      { projects, globalConfig, musicRunner: slowRunner },
+      { projectId: ws.project.id, prompt: "古风笛声夜景" },
+    );
+    // Second concurrent confirm with same prompt (e.g., second window) must be rejected atomically
+    const p2 = generateProjectBgmWithBudget(
+      { projects, globalConfig, musicRunner: slowRunner },
+      { projectId: ws.project.id, prompt: "古风笛声夜景" },
+    );
+    const res2 = await p2;
+    expect(res2.ok).toBe(false);
+    expect(res2.message).toContain("跨窗口原子锁");
+
+    // Inject local DB save failure AFTER remote music generation succeeds -> MUST hold UNKNOWN!
+    const origRegister = projects.registerProjectBgmCandidate.bind(projects);
+    projects.registerProjectBgmCandidate = () => {
+      throw new Error("SQLITE_FULL: simulated local save crash");
+    };
+    releaseBgm();
+    const res1 = await p1;
+    projects.registerProjectBgmCandidate = origRegister;
+
+    expect(bgmCalls).toBe(1);
+    expect(res1.ok).toBe(false);
+    expect(res1.status).toBe("unknown");
+    expect(res1.message).toContain("UNKNOWN");
+
+    // Ledger must hold UNKNOWN (not released to 0!) and block immediate duplicate retry
+    projects.withProjectDb(ws.project.id, (db) => {
+      const sum = getProjectBudgetSummary(db, ws.project.id);
+      expect(sum.unknownHoldCount).toBe(1);
+      expect(sum.unknownHoldCents).toBe(10);
+      expect(sum.remainingCents).toBe(4);
+    });
+    const retryBlocked = await generateProjectBgmWithBudget(
+      { projects, globalConfig, musicRunner: slowRunner },
+      { projectId: ws.project.id, prompt: "古风笛声夜景" },
+    );
+    expect(retryBlocked.ok).toBe(false);
+    expect(retryBlocked.message).toContain("UNKNOWN");
+    expect(bgmCalls).toBe(1);
+
+    // Budget cap (4 cents remaining < 10 cents Lyria quote) blocks new prompt with 0 network calls!
+    const overCap = await generateProjectBgmWithBudget(
+      { projects, globalConfig, musicRunner: slowRunner },
+      { projectId: ws.project.id, prompt: "全新激昂战鼓" },
+    );
+    expect(overCap.ok).toBe(false);
+    expect(overCap.message).toContain("预算上限拦截");
+    expect(bgmCalls).toBe(1);
 
     projects.closeAll();
     globalConfig.close();

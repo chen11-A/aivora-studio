@@ -1,15 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { SqliteDriver } from "../storage/sqlite-driver";
+import type { BudgetQuote, PaidActionKind } from "./budget-pricing";
 
-export type PaidActionKind = "image" | "video" | "speech" | "music" | "visual_qc";
-export type BudgetLedgerStatus = "quoted" | "reserved" | "settled" | "unknown_hold" | "released";
+export { quotePaidAction, type BudgetQuote, type PaidActionKind } from "./budget-pricing";
 
-export type BudgetQuote = {
-  kind: PaidActionKind;
-  quotedCents: number;
-  pricingBasis: "estimated_unit" | "unknown_pricing";
-  summary: string;
-};
+export type BudgetLedgerStatus =
+  | "quoted"
+  | "reserved"
+  | "settled"
+  | "settled_estimated"
+  | "unknown_hold"
+  | "released";
 
 export type BudgetLedgerEntry = {
   id: string;
@@ -36,7 +37,10 @@ export type BudgetLedgerEntry = {
 export type BudgetSummary = {
   projectId: string;
   maxBudgetCents: number;
+  /** Strictly confirmed actual billed cents reported by providers (NEVER fabricated from quotes). */
   settledCents: number;
+  /** Completed actions where provider did not return actual bill (tracked by estimate, counts toward cap). */
+  estimatedSettledCents: number;
   reservedCents: number;
   unknownHoldCents: number;
   unknownHoldCount: number;
@@ -84,32 +88,7 @@ function rowToLedgerEntry(row: Record<string, unknown>): BudgetLedgerEntry {
   };
 }
 
-export function quotePaidAction(input: {
-  kind: PaidActionKind;
-  durationSec?: number;
-  modelId?: string;
-}): BudgetQuote {
-  const dur = Math.max(1, Math.round(input.durationSec ?? 5));
-  if (input.kind === "video") {
-    const cents = Math.max(15, dur * 6);
-    return {
-      kind: "video",
-      quotedCents: cents,
-      pricingBasis: "estimated_unit",
-      summary: `预估视频费用约 $${(cents / 100).toFixed(2)}（按 ${dur}s 估算，以服务商实际账单为准）`,
-    };
-  }
-  if (input.kind === "image") {
-    return { kind: "image", quotedCents: 4, pricingBasis: "estimated_unit", summary: "预估生图费用约 $0.04" };
-  }
-  if (input.kind === "speech") {
-    return { kind: "speech", quotedCents: 2, pricingBasis: "estimated_unit", summary: "预估配音费用约 $0.02" };
-  }
-  if (input.kind === "music") {
-    return { kind: "music", quotedCents: 10, pricingBasis: "estimated_unit", summary: "预估配乐费用约 $0.10" };
-  }
-  return { kind: "visual_qc", quotedCents: 3, pricingBasis: "estimated_unit", summary: "预估可选视觉抽检费用约 $0.03" };
-}
+export type { BudgetQuote as PaidActionQuote };
 
 export function setProjectBudgetCap(
   db: SqliteDriver,
@@ -134,9 +113,10 @@ export function setProjectBudgetCap(
 
 /**
  * Full-DB budget summary (ZERO `LIMIT 50` blindspot):
- * - `settledCents` counts ONLY confirmed settled entries (NEVER estimates `unknown_hold` as paid!).
- * - `unknownHoldCents` is tracked separately AND counts toward budget-cap headroom so uncertain charges
- *   cannot be bypassed to overspend.
+ * - `settledCents` counts ONLY provider-confirmed actual billed cents (`status = 'settled'`).
+ * - `estimatedSettledCents` tracks completed calls without provider billing echo (`status = 'settled_estimated'`).
+ * - `unknownHoldCents` tracks uncertain/in-flight failures (`status = 'unknown_hold'`).
+ * - All four (`settled + estimatedSettled + reserved + unknownHold`) count toward budget-cap headroom.
  */
 export function getProjectBudgetSummary(db: SqliteDriver, projectId: string): BudgetSummary {
   const policy = db.get<{ max_budget_cents: number }>(
@@ -146,12 +126,14 @@ export function getProjectBudgetSummary(db: SqliteDriver, projectId: string): Bu
   const maxBudgetCents = Number(policy?.max_budget_cents ?? 0);
   const agg = db.get<{
     settled: number | null;
+    estimated_settled: number | null;
     reserved: number | null;
     unknown_hold: number | null;
     unknown_count: number | null;
   }>(
     `SELECT
        SUM(CASE WHEN status = 'settled' THEN COALESCE(settled_cents, 0) ELSE 0 END) AS settled,
+       SUM(CASE WHEN status = 'settled_estimated' THEN quoted_cents ELSE 0 END) AS estimated_settled,
        SUM(CASE WHEN status = 'reserved' THEN reserved_cents ELSE 0 END) AS reserved,
        SUM(CASE WHEN status = 'unknown_hold' THEN reserved_cents ELSE 0 END) AS unknown_hold,
        SUM(CASE WHEN status = 'unknown_hold' THEN 1 ELSE 0 END) AS unknown_count
@@ -160,15 +142,17 @@ export function getProjectBudgetSummary(db: SqliteDriver, projectId: string): Bu
     projectId,
   );
   const settledCents = Number(agg?.settled ?? 0);
+  const estimatedSettledCents = Number(agg?.estimated_settled ?? 0);
   const reservedCents = Number(agg?.reserved ?? 0);
   const unknownHoldCents = Number(agg?.unknown_hold ?? 0);
   const unknownHoldCount = Number(agg?.unknown_count ?? 0);
-  const committed = settledCents + reservedCents + unknownHoldCents;
+  const committed = settledCents + estimatedSettledCents + reservedCents + unknownHoldCents;
   const remainingCents = maxBudgetCents > 0 ? Math.max(0, maxBudgetCents - committed) : null;
   return {
     projectId,
     maxBudgetCents,
     settledCents,
+    estimatedSettledCents,
     reservedCents,
     unknownHoldCents,
     unknownHoldCount,
@@ -237,10 +221,11 @@ export function authorizeAndReserveBudget(
 
     const summary = getProjectBudgetSummary(db, input.projectId);
     if (summary.maxBudgetCents > 0) {
-      const committed = summary.settledCents + summary.reservedCents + summary.unknownHoldCents;
+      const committed =
+        summary.settledCents + summary.estimatedSettledCents + summary.reservedCents + summary.unknownHoldCents;
       if (committed + quoted > summary.maxBudgetCents) {
         throw new Error(
-          `预算上限拦截：当前已结算 $${(summary.settledCents / 100).toFixed(2)} + 预占/待核实 $${((summary.reservedCents + summary.unknownHoldCents) / 100).toFixed(2)} + 本次预估 $${(quoted / 100).toFixed(2)} 超出作品预算上限 $${(summary.maxBudgetCents / 100).toFixed(2)}，已拒绝发起请求。`,
+          `预算上限拦截：当前已核实结算 $${(summary.settledCents / 100).toFixed(2)} + 按预估暂结 $${(summary.estimatedSettledCents / 100).toFixed(2)} + 预占/待核实 $${((summary.reservedCents + summary.unknownHoldCents) / 100).toFixed(2)} + 本次预估 $${(quoted / 100).toFixed(2)} 超出作品预算上限 $${(summary.maxBudgetCents / 100).toFixed(2)}，已拒绝发起请求。`,
         );
       }
     }
@@ -291,7 +276,9 @@ export function markBudgetEntryDispatched(
 
 /**
  * Settles a reserved or unknown_hold budget entry:
- * - `succeeded`: settles actual or quoted cents, clears reserved_cents.
+ * - `succeeded` WITH `actualCents`: `status = 'settled'`, `settled_cents = actualCents`.
+ * - `succeeded` WITHOUT `actualCents`: `status = 'settled_estimated'`, `settled_cents = NULL`
+ *   (NEVER fabricates provider actual billed cents from a quote; still counts `quoted_cents` toward budget cap).
  * - `failed`: releases reservation (0 settled).
  * - `unknown`: transitions to `unknown_hold` with `settled_cents = NULL` (NEVER estimated as paid!).
  */
@@ -309,19 +296,33 @@ export function settleBudgetEntry(
     const prevReserved = Number(row.reserved_cents ?? quoted);
 
     if (outcome === "succeeded") {
-      const settled = options?.actualCents !== undefined ? Math.max(0, Math.round(options.actualCents)) : quoted;
-      db.run(
-        `UPDATE budget_ledger
-         SET status = 'settled', reserved_cents = 0, settled_cents = ?,
-             remote_task_id = COALESCE(?, remote_task_id),
-             note = COALESCE(?, note), updated_at = ?
-         WHERE id = ?`,
-        settled,
-        options?.remoteTaskId ?? null,
-        options?.note ?? null,
-        now,
-        ledgerId,
-      );
+      if (options?.actualCents !== undefined && Number.isFinite(options.actualCents)) {
+        const settled = Math.max(0, Math.round(options.actualCents));
+        db.run(
+          `UPDATE budget_ledger
+           SET status = 'settled', reserved_cents = 0, settled_cents = ?,
+               remote_task_id = COALESCE(?, remote_task_id),
+               note = COALESCE(?, note), updated_at = ?
+           WHERE id = ?`,
+          settled,
+          options?.remoteTaskId ?? null,
+          options?.note ?? null,
+          now,
+          ledgerId,
+        );
+      } else {
+        db.run(
+          `UPDATE budget_ledger
+           SET status = 'settled_estimated', reserved_cents = 0, settled_cents = NULL,
+               remote_task_id = COALESCE(?, remote_task_id),
+               note = COALESCE(?, note), updated_at = ?
+           WHERE id = ?`,
+          options?.remoteTaskId ?? null,
+          options?.note ?? "远端已完成（服务商未返回实付金额，按预估占用预算额度，请以实际账单为准）",
+          now,
+          ledgerId,
+        );
+      }
     } else if (outcome === "failed") {
       db.run(
         `UPDATE budget_ledger
