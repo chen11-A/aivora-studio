@@ -460,6 +460,14 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       errorCount: 0, warnCount: 0, issues: [], highRiskSeamShotIds: [], summary: "浏览器预览模式",
     }),
     generateContactSheet: async () => ({ ok: false, message: "请在桌面端生成帧缩略图网格" }),
+    getBudgetOverview: async (projectId) => ({
+      summary: { projectId, maxBudgetCents: 0, settledCents: 0, estimatedSettledCents: 0, reservedCents: 0, unknownHoldCents: 0, unknownHoldCount: 0, remainingCents: null },
+      recoveryItems: [],
+    }),
+    setProjectBudgetCap: async ({ projectId, maxBudgetCents }) => ({
+      projectId, maxBudgetCents, settledCents: 0, estimatedSettledCents: 0, reservedCents: 0, unknownHoldCents: 0, unknownHoldCount: 0, remainingCents: maxBudgetCents > 0 ? maxBudgetCents : null,
+    }),
+    resumePlannedLedger: async () => ({ ok: false, action: "blocked_unknown", message: "请在桌面端执行中断任务续跑" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
     resolveDroppedFilePath: () => null,
   };

@@ -10,6 +10,7 @@ import type {
   Take,
   TakeKind,
 } from "../../shared/types/domain";
+import { listDeliveryRecords, reconcilePendingDeliveryRecords } from "../media/delivery-journal";
 import type { SqliteDriver } from "./sqlite-driver";
 
 export function readWorkspaceFromDb(
@@ -182,5 +183,29 @@ export function readWorkspaceFromDb(
       updatedAt: String(r.updated_at),
     }));
 
-  return { project, dirPath, episodes, assets, scenes, shots, takes, jobs };
+  let deliveryRecords: ProjectWorkspace["deliveryRecords"] = [];
+  const hasDeliveryTable = Boolean(
+    db.get<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'export_delivery_records'`,
+    ),
+  );
+  if (hasDeliveryTable) {
+    reconcilePendingDeliveryRecords(db);
+    deliveryRecords = listDeliveryRecords(db, projectId).map((rec) => ({
+      id: rec.id,
+      projectId: rec.projectId,
+      episodeId: rec.episodeId,
+      snapshotDigest: rec.snapshotDigest,
+      exportMode: rec.exportMode,
+      status: rec.status,
+      outputPath: rec.outputPath,
+      outputSha256: rec.outputSha256,
+      contentQcOk: Boolean(rec.contentQc?.ok),
+      techQcOk: Boolean(rec.techQc?.ok),
+      createdAt: rec.createdAt,
+      updatedAt: rec.updatedAt,
+    }));
+  }
+
+  return { project, dirPath, episodes, assets, scenes, shots, takes, jobs, deliveryRecords };
 }

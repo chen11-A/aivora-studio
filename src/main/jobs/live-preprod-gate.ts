@@ -211,6 +211,16 @@ export function evaluateLivePreprodForShot(params: {
         .join("、");
       suffixParts.push(`身体左右与动作约束（${bodyStr}）`);
     }
+  } else {
+    // Derive live staging context directly from existing 4-stage tables (scenes + shots + cast)
+    const visibleNames = shot.characterAssetIds
+      .map((id) => assetById.get(id)?.name)
+      .filter((n): n is string => Boolean(n));
+    const liveBits = [
+      locAsset ? `场景地点:${locAsset.name}` : curScene?.title ? `场次:${curScene.title}` : "",
+      visibleNames.length > 0 ? `在场人物:${visibleNames.join("、")}` : "",
+    ].filter(Boolean);
+    if (liveBits.length > 0) suffixParts.push(`场记环境（${liveBits.join("，")}）`);
   }
 
   if (myDecision) {

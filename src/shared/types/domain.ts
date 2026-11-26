@@ -186,6 +186,22 @@ export const JobSchema = z.object({
 });
 export type Job = z.infer<typeof JobSchema>;
 
+export const FormalDeliveryRecordSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  episodeId: z.string().min(1),
+  snapshotDigest: z.string().min(1),
+  exportMode: z.enum(["formal", "preview"]),
+  status: z.enum(["publishing", "published", "aborted"]),
+  outputPath: z.string(),
+  outputSha256: z.string(),
+  contentQcOk: z.boolean(),
+  techQcOk: z.boolean(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type FormalDeliveryRecord = z.infer<typeof FormalDeliveryRecordSchema>;
+
 export const ProjectWorkspaceSchema = z.object({
   project: ProjectSchema,
   dirPath: z.string(),
@@ -195,6 +211,7 @@ export const ProjectWorkspaceSchema = z.object({
   shots: z.array(ShotSchema),
   takes: z.array(TakeSchema),
   jobs: z.array(JobSchema),
+  deliveryRecords: z.array(FormalDeliveryRecordSchema).optional(),
 });
 export type ProjectWorkspace = z.infer<typeof ProjectWorkspaceSchema>;
 

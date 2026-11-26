@@ -112,6 +112,9 @@ const api: AivoraDesktopApi = {
   exportFinishingPack: (input) => ipcRenderer.invoke(IPC_CHANNELS.DELIVERY_EXPORT_FINISHING_PACK, input),
   runEpisodeContentQc: (input) => ipcRenderer.invoke(IPC_CHANNELS.DELIVERY_RUN_CONTENT_QC, input),
   generateContactSheet: (input) => ipcRenderer.invoke(IPC_CHANNELS.MEDIA_GENERATE_CONTACT_SHEET, input),
+  getBudgetOverview: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.BUDGET_GET_OVERVIEW, projectId),
+  setProjectBudgetCap: (input) => ipcRenderer.invoke(IPC_CHANNELS.BUDGET_SET_CAP, input),
+  resumePlannedLedger: (input) => ipcRenderer.invoke(IPC_CHANNELS.BUDGET_RESUME_PLANNED, input),
   mediaUrl: (projectId, relativePath) =>
     `aivora-media://${encodeURIComponent(projectId)}/${relativePath
       .replace(/^\/+/, "")

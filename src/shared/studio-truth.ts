@@ -24,6 +24,8 @@ export type EpisodeDeliveryTruth = {
   reportStale: boolean;
   canPreviewExport: boolean;
   canFormalDeliver: boolean;
+  formallyDelivered: boolean;
+  deliveredOutputPath: string | null;
   svgPlaceholderCount: number;
   intentionalStillCount: number;
   missingVisualCount: number;
@@ -143,6 +145,26 @@ export function deriveEpisodeDeliveryEligibility(input: {
     .filter((s) => s.episodeId === episodeId)
     .sort((a, b) => a.orderIndex - b.orderIndex);
 
+  const verifiedDelivery = (workspace.deliveryRecords ?? []).find(
+    (rec) =>
+      rec.episodeId === episodeId &&
+      rec.exportMode === "formal" &&
+      rec.status === "published" &&
+      rec.snapshotDigest === snapshotDigest &&
+      rec.contentQcOk &&
+      rec.techQcOk,
+  );
+  const hadStaleDelivery = Boolean(
+    !verifiedDelivery &&
+      (workspace.deliveryRecords ?? []).some(
+        (rec) => rec.episodeId === episodeId && rec.exportMode === "formal" && rec.status === "published",
+      ),
+  );
+  const baseDeliveryFields = {
+    formallyDelivered: Boolean(verifiedDelivery),
+    deliveredOutputPath: verifiedDelivery?.outputPath ?? null,
+  };
+
   if (epShots.length === 0) {
     return {
       episodeId,
@@ -151,6 +173,8 @@ export function deriveEpisodeDeliveryEligibility(input: {
       reportStale: false,
       canPreviewExport: false,
       canFormalDeliver: false,
+      formallyDelivered: false,
+      deliveredOutputPath: null,
       svgPlaceholderCount: 0,
       intentionalStillCount: 0,
       missingVisualCount: 0,
@@ -182,6 +206,8 @@ export function deriveEpisodeDeliveryEligibility(input: {
       reportStale: Boolean(qcReport && !isExportQcReportCurrent(qcReport, snapshotDigest)),
       canPreviewExport: false,
       canFormalDeliver: false,
+      formallyDelivered: false,
+      deliveredOutputPath: null,
       svgPlaceholderCount,
       intentionalStillCount,
       missingVisualCount,
@@ -199,6 +225,8 @@ export function deriveEpisodeDeliveryEligibility(input: {
       reportStale,
       canPreviewExport: true,
       canFormalDeliver: false,
+      formallyDelivered: false,
+      deliveredOutputPath: null,
       svgPlaceholderCount,
       intentionalStillCount,
       missingVisualCount: 0,
@@ -207,17 +235,36 @@ export function deriveEpisodeDeliveryEligibility(input: {
   }
 
   if (!qcReport) {
+    if (verifiedDelivery) {
+      return {
+        episodeId,
+        snapshotDigest,
+        eligibility: "deliverable",
+        reportStale: false,
+        canPreviewExport: true,
+        canFormalDeliver: true,
+        ...baseDeliveryFields,
+        svgPlaceholderCount: 0,
+        intentionalStillCount,
+        missingVisualCount: 0,
+        reason: "当前版本已通过内容审与技术质检并完成正式交付。",
+      };
+    }
     return {
       episodeId,
       snapshotDigest,
-      eligibility: "unchecked",
-      reportStale: false,
+      eligibility: hadStaleDelivery ? "ready_for_review" : "unchecked",
+      reportStale: hadStaleDelivery,
       canPreviewExport: true,
       canFormalDeliver: true,
+      formallyDelivered: false,
+      deliveredOutputPath: null,
       svgPlaceholderCount: 0,
       intentionalStillCount,
       missingVisualCount: 0,
-      reason: "素材已齐，尚未完成当前版本成片质检。",
+      reason: hadStaleDelivery
+        ? "上次正式交付后剪辑或素材已修改，原交付记录已失效，需重新导出校验。"
+        : "素材已齐，尚未完成当前版本成片质检。",
     };
   }
 
@@ -229,6 +276,8 @@ export function deriveEpisodeDeliveryEligibility(input: {
       reportStale: true,
       canPreviewExport: true,
       canFormalDeliver: true,
+      formallyDelivered: false,
+      deliveredOutputPath: null,
       svgPlaceholderCount: 0,
       intentionalStillCount,
       missingVisualCount: 0,
@@ -244,6 +293,8 @@ export function deriveEpisodeDeliveryEligibility(input: {
       reportStale: false,
       canPreviewExport: true,
       canFormalDeliver: true,
+      formallyDelivered: false,
+      deliveredOutputPath: null,
       svgPlaceholderCount: 0,
       intentionalStillCount,
       missingVisualCount: 0,
@@ -259,6 +310,8 @@ export function deriveEpisodeDeliveryEligibility(input: {
       reportStale: false,
       canPreviewExport: true,
       canFormalDeliver: true,
+      formallyDelivered: false,
+      deliveredOutputPath: null,
       svgPlaceholderCount: 0,
       intentionalStillCount,
       missingVisualCount: 0,
@@ -273,9 +326,12 @@ export function deriveEpisodeDeliveryEligibility(input: {
     reportStale: false,
     canPreviewExport: true,
     canFormalDeliver: true,
+    ...baseDeliveryFields,
     svgPlaceholderCount: 0,
     intentionalStillCount,
     missingVisualCount: 0,
-    reason: "当前版本已通过内容审与技术质检，可正式交付。",
+    reason: verifiedDelivery
+      ? "当前版本已通过内容审与技术质检并完成正式交付。"
+      : "当前版本已通过内容审与技术质检，可正式交付。",
   };
 }

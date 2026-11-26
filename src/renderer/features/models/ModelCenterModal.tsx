@@ -34,6 +34,7 @@ import {
 } from "../../lib/provider-auto-route";
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
+import { ProjectBudgetSection } from "./ProjectBudgetSection";
 import { ProviderEditorForm } from "./ProviderEditorForm";
 
 const CAPABILITIES: Array<{ key: CapabilityKey; label: string }> = [
@@ -419,6 +420,7 @@ export function ModelCenterModal() {
                 })}
               </div>
             </section>
+            <ProjectBudgetSection />
           </div>
         </>
       )}
