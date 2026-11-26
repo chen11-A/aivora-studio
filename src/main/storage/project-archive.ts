@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
-  copyFileSync,
+  cpSync,
   existsSync,
-  mkdirSync,
   mkdtempSync,
-  readdirSync,
   renameSync,
   rmSync,
 } from "node:fs";
@@ -27,7 +25,7 @@ export async function exportProjectArchive(
   try {
     const cleanDbPath = join(stage, "project.db");
     db.vacuumInto(cleanDbPath);
-    const verify = openSqlite(cleanDbPath);
+    const verify = openSqlite(cleanDbPath, { readOnly: true });
     try {
       if (!verify.integrityCheck()) throw new Error("备份数据库完整性校验失败");
     } finally {
@@ -37,10 +35,7 @@ export async function exportProjectArchive(
     const assetsSrc = join(projectDir, "assets");
     if (existsSync(assetsSrc)) {
       const assetsDst = join(stage, "assets");
-      mkdirSync(assetsDst, { recursive: true });
-      for (const item of readdirSync(assetsSrc)) {
-        copyFileSync(join(assetsSrc, item), join(assetsDst, item));
-      }
+      cpSync(assetsSrc, assetsDst, { recursive: true });
     }
     await writeProjectZip(stage, resolve(outputZipPath));
   } finally {
@@ -73,9 +68,16 @@ export async function importProjectArchive(
         try {
           db.transaction(() => {
             db.run(`UPDATE projects SET id = ?, name = ? WHERE id = ?`, newId, `${projectName} (恢复副本)`, projectId);
-            db.run(`UPDATE episodes SET project_id = ? WHERE project_id = ?`, newId, projectId);
-            db.run(`UPDATE assets SET project_id = ? WHERE project_id = ?`, newId, projectId);
-            db.run(`UPDATE jobs SET project_id = ? WHERE project_id = ?`, newId, projectId);
+            const tables = db.all<{ name: string }>(
+              `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'projects'`,
+            );
+            for (const { name } of tables) {
+              if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) continue;
+              const cols = db.all<{ name: string }>(`PRAGMA table_info(${name})`);
+              if (cols.some((c) => c.name === "project_id")) {
+                db.run(`UPDATE ${name} SET project_id = ? WHERE project_id = ?`, newId, projectId);
+              }
+            }
           });
         } finally {
           db.exec(`PRAGMA foreign_keys = ON;`);

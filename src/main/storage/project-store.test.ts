@@ -241,4 +241,44 @@ describe("ProjectStore & VACUUM INTO ZIP archive", () => {
     }
     store.closeAll();
   });
+
+  it("archives nested assets/ subdirectories recursively, re-keys v2 project_id tables on duplicate import, and leaves no WAL sidecars in .backups", async () => {
+    const { mkdirSync, readdirSync, writeFileSync } = await import("node:fs");
+    const { createVerifiedRollingBackup } = await import("./backup-manager");
+    const { setProjectBudgetCap } = await import("../jobs/budget-ledger");
+    const base = makeTempDir("aivora-archive-nested-");
+    const store = new ProjectStore(join(base, "嵌套备份 空间"));
+    const demo = store.openDemoProject();
+
+    // Seed nested assets/takes/ file and a v2 budget_policies row
+    const nestedDir = join(demo.dirPath, "assets", "takes");
+    mkdirSync(nestedDir, { recursive: true });
+    writeFileSync(join(nestedDir, "nested-sample.txt"), "nested-ok", "utf8");
+    store.withProjectDb(demo.project.id, (db) => {
+      setProjectBudgetCap(db, demo.project.id, 1234);
+      createVerifiedRollingBackup(demo.dirPath, db, { label: "readonly-check" });
+    });
+
+    // Verify .backups/ contains zero -wal or -shm sidecar files
+    const backupFiles = readdirSync(join(demo.dirPath, ".backups"));
+    expect(backupFiles.some((f) => f.endsWith("-wal") || f.endsWith("-shm"))).toBe(false);
+
+    // Export ZIP (must copy assets/takes/ recursively without EISDIR) & re-import as duplicate
+    const zipPath = join(base, "nested-export.zip");
+    await store.exportArchiveToPath(demo.project.id, zipPath);
+    const imported = await store.importArchiveFromPath(zipPath);
+    expect(imported.project.id).not.toBe(demo.project.id);
+    expect(existsSync(join(imported.dirPath, "assets", "takes", "nested-sample.txt"))).toBe(true);
+
+    // Verify v2 budget_policies row was re-keyed to the new project_id
+    const importedLimit = store.withProjectDb(imported.project.id, (db) => {
+      const row = db.get<{ max_budget_cents: number }>(
+        `SELECT max_budget_cents FROM budget_policies WHERE project_id = ?`,
+        imported.project.id,
+      );
+      return row?.max_budget_cents ?? null;
+    });
+    expect(importedLimit).toBe(1234);
+    store.closeAll();
+  });
 });

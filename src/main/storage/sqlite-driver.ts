@@ -20,6 +20,7 @@ export interface SqliteDriver {
 
 export type OpenSqliteOptions = {
   busyTimeoutMs?: number;
+  readOnly?: boolean;
 };
 
 /**
@@ -27,19 +28,22 @@ export type OpenSqliteOptions = {
  * Every database operation goes through this seam so swapping engines stays a 1-file change.
  */
 export function openSqlite(dbPath: string, options: OpenSqliteOptions = {}): SqliteDriver {
-  if (dbPath !== ":memory:") {
+  const readOnly = Boolean(options.readOnly);
+  if (dbPath !== ":memory:" && !readOnly) {
     mkdirSync(dirname(dbPath), { recursive: true });
   }
   const busyTimeoutMs =
     typeof options.busyTimeoutMs === "number" && Number.isFinite(options.busyTimeoutMs)
       ? Math.max(0, Math.floor(options.busyTimeoutMs))
       : 5000;
-  const db = new DatabaseSync(dbPath);
-  db.exec("PRAGMA foreign_keys = ON;");
+  const db = readOnly ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
   db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs};`);
-  if (dbPath !== ":memory:") {
-    db.exec("PRAGMA journal_mode = WAL;");
-    db.exec("PRAGMA synchronous = FULL;");
+  if (!readOnly) {
+    db.exec("PRAGMA foreign_keys = ON;");
+    if (dbPath !== ":memory:") {
+      db.exec("PRAGMA journal_mode = WAL;");
+      db.exec("PRAGMA synchronous = FULL;");
+    }
   }
 
   let inTransaction = false;

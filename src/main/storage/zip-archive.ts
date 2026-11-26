@@ -247,9 +247,17 @@ export async function extractProjectZip(zipPath: string, destinationDir: string)
         plainBuf = compBuf;
       } else if (method === 8) {
         const chunks: Buffer[] = [];
+        let inflatedBytes = 0;
         const inflate = createInflateRaw();
         await pipeline(Readable.from([compBuf]), inflate, async function (source) {
-          for await (const chunk of source) chunks.push(Buffer.from(chunk as Uint8Array));
+          for await (const chunk of source) {
+            const buf = Buffer.from(chunk as Uint8Array);
+            inflatedBytes += buf.length;
+            if (inflatedBytes > uncompSize || inflatedBytes > MAX_ARCHIVE_BYTES) {
+              failArchive("ZIP 解压数据超出声明体积或安全上限");
+            }
+            chunks.push(buf);
+          }
         });
         plainBuf = Buffer.concat(chunks);
       } else {

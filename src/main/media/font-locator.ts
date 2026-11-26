@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { escapeFilterPath } from "./filter-path";
 
 export type BundledFontInfo = {
   available: boolean;
@@ -54,20 +55,20 @@ export function resolveBundledFontInfo(): BundledFontInfo {
 
 /**
  * Escapes a filesystem path for FFmpeg libass filter arguments (`ass=filename=...:fontsdir=...`),
- * safely handling Windows backslashes, drive colons (`C\:`), spaces, and Chinese characters.
+ * safely handling Windows backslashes, drive colons, single quotes (`O'Brien`), spaces, and CJK characters.
  */
 export function escapeFfmpegFilterPath(rawPath: string): string {
-  return path
-    .resolve(rawPath)
-    .replaceAll("\\", "/")
-    .replaceAll(":", "\\:")
-    .replaceAll("'", "\\'");
+  return escapeFilterPath(path.resolve(rawPath).replaceAll("\\", "/"));
 }
 
-export function buildAssFilterArg(assFileName: string): string {
+export function buildAssFilterArg(assFileName: string, overrideFontsDir?: string): string {
+  const safeAss = escapeFilterPath(assFileName.replaceAll("\\", "/"));
+  if (overrideFontsDir) {
+    return `ass=filename=${safeAss}:fontsdir=${escapeFfmpegFilterPath(overrideFontsDir)}`;
+  }
   const font = resolveBundledFontInfo();
   if (font.available && font.fontsDir) {
-    return `ass=filename=${assFileName}:fontsdir='${escapeFfmpegFilterPath(font.fontsDir)}'`;
+    return `ass=filename=${safeAss}:fontsdir=${escapeFfmpegFilterPath(font.fontsDir)}`;
   }
-  return `ass=filename=${assFileName}`;
+  return `ass=filename=${safeAss}`;
 }

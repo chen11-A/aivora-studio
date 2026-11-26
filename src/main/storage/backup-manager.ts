@@ -66,7 +66,7 @@ export function createVerifiedRollingBackup(
 
   try {
     db.vacuumInto(stagingPath);
-    const verifyDb = openSqlite(stagingPath);
+    const verifyDb = openSqlite(stagingPath, { readOnly: true });
     try {
       if (!verifyDb.integrityCheck()) {
         throw new Error("备份快照完整性校验失败（PRAGMA integrity_check 未通过）");
