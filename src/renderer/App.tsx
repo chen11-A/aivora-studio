@@ -6,6 +6,7 @@ import { JobDrawer } from "./components/JobDrawer";
 import { StudioShell } from "./components/StudioShell";
 import { StageContainer } from "./components/ui/StageContainer";
 import { CastStage } from "./features/cast/CastStage";
+import { DeliveryStage } from "./features/delivery/DeliveryStage";
 import { EditorStage } from "./features/editor/EditorStage";
 import { ExportModal } from "./features/editor/ExportModal";
 import { ProjectHome } from "./features/home/ProjectHome";
@@ -49,6 +50,8 @@ export function App() {
             <CastStage />
           ) : activeStage === "storyboard" ? (
             <StoryboardStage />
+          ) : activeStage === "delivery" && workspace.episodes.length >= 2 ? (
+            <DeliveryStage />
           ) : (
             <EditorStage />
           )}

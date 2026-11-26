@@ -325,14 +325,10 @@ async function runAudit() {
         await page.locator('[data-testid^="shot-item-"]').nth(0).click();
         uxAssertions.push("stage-no-flicker-inert-and-shot-switch-disarm:ok");
 
-        // 5. Clicking topbar Export from Storyboard opens ExportModal WITHOUT switching stage away
-        await page.click('[data-testid="open-export-modal"]');
-        await page.waitForSelector('[data-testid="export-modal"]');
-        await page.keyboard.press("Escape");
-        await page.waitForTimeout(240);
-        const stillStoryboard = await page.locator('[data-testid="take-filmstrip"]').count();
-        if (stillStoryboard !== 1) runtimeErrors.push("Export modal yanked user away from Storyboard!");
-        uxAssertions.push("non-interrupting-export-modal:ok");
+        // 5. v2.0 layout boundary: topbar has NO competing permanent Export button (Editor owns single-episode Export)
+        const topbarExportCount = await page.locator('[data-testid="studio-topbar"] [data-testid="open-export-modal"]').count();
+        if (topbarExportCount !== 0) runtimeErrors.push("Topbar still has competing Export button!");
+        uxAssertions.push("clean-topbar-no-competing-export:ok");
 
         // 5b. ConfirmJobModal must NOT collapse to tiny empty box mid-exit animation
         await page.click('[data-testid="btn-generate-video"]');

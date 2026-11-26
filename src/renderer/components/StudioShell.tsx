@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   Clock,
   Cpu,
-  Download,
   Film,
   FolderOpen,
   LayoutGrid,
@@ -13,6 +12,7 @@ import {
   Monitor,
   Moon,
   MoreHorizontal,
+  PackageCheck,
   Scissors,
   ScrollText,
   Sparkles,
@@ -34,12 +34,13 @@ import { useStudioStore } from "../store/useStudioStore";
 import { useAnimatedPresence, useEscapeLayer } from "./ui/OverlayShell";
 import { SlidingSegmentedControl } from "./ui/SlidingSegmentedControl";
 
-const STAGES: Array<{ id: StageId; step: string; label: string; icon: typeof ScrollText }> = [
+const BASE_STAGES: Array<{ id: StageId; step: string; label: string; icon: typeof ScrollText }> = [
   { id: "script", step: "1", label: "剧本", icon: ScrollText },
   { id: "cast", step: "2", label: "角色场景", icon: Users },
   { id: "storyboard", step: "3", label: "分镜", icon: LayoutGrid },
   { id: "editor", step: "4", label: "剪辑", icon: Scissors },
 ];
+const DELIVERY_STAGE = { id: "delivery" as StageId, step: "5", label: "交付", icon: PackageCheck };
 
 export function StudioShell({ children }: { children: ReactNode }) {
   const workspace = useStudioStore((s) => s.workspace);
@@ -55,7 +56,6 @@ export function StudioShell({ children }: { children: ReactNode }) {
   const returnHome = useStudioStore((s) => s.returnHome);
   const setStage = useStudioStore((s) => s.setStage);
   const setModelCenterOpen = useStudioStore((s) => s.setModelCenterOpen);
-  const setExportModalOpen = useStudioStore((s) => s.setExportModalOpen);
   const exportArchive = useStudioStore((s) => s.exportArchive);
   const cleanUnreferencedAssets = useStudioStore((s) => s.cleanUnreferencedAssets);
   const revealPath = useStudioStore((s) => s.revealPath);
@@ -175,25 +175,27 @@ export function StudioShell({ children }: { children: ReactNode }) {
             onChange={(stage) => void setStage(stage)}
             className="justify-self-center max-w-full"
             buttonClassName="px-1.5 sm:px-3 text-[11px] sm:text-[12px]"
-            options={STAGES.map(({ id, step, label, icon: Icon }) => ({
-              id,
-              testId: `stage-tab-${id}`,
-              content: (active) => (
-                <>
-                  <span
-                    className={`hidden sm:flex w-4 h-4 rounded-full text-[10px] items-center justify-center font-semibold transition-colors ${
-                      active
-                        ? "bg-white/25 text-white"
-                        : "bg-[var(--bg-elevated)] text-[var(--text-muted)]"
-                    }`}
-                  >
-                    {step}
-                  </span>
-                  <Icon className="w-3.5 h-3.5 shrink-0 hidden md:inline" />
-                  <span>{label}</span>
-                </>
-              ),
-            }))}
+            options={(workspace.episodes.length >= 2 ? [...BASE_STAGES, DELIVERY_STAGE] : BASE_STAGES).map(
+              ({ id, step, label, icon: Icon }) => ({
+                id,
+                testId: `stage-tab-${id}`,
+                content: (active) => (
+                  <>
+                    <span
+                      className={`hidden sm:flex w-4 h-4 rounded-full text-[10px] items-center justify-center font-semibold transition-colors ${
+                        active
+                          ? "bg-white/25 text-white"
+                          : "bg-[var(--bg-elevated)] text-[var(--text-muted)]"
+                      }`}
+                    >
+                      {step}
+                    </span>
+                    <Icon className="w-3.5 h-3.5 shrink-0 hidden md:inline" />
+                    <span>{label}</span>
+                  </>
+                ),
+              }),
+            )}
           />
         ) : (
           <div />
@@ -325,18 +327,6 @@ export function StudioShell({ children }: { children: ReactNode }) {
               />
             )}
           </button>
-
-          {workspace && (
-            <button
-              type="button"
-              className="btn-primary"
-              data-testid="open-export-modal"
-              onClick={() => setExportModalOpen(true)}
-            >
-              <Download className="w-3.5 h-3.5 shrink-0" />
-              <span className="hidden sm:inline">导出成片</span>
-            </button>
-          )}
         </div>
       </header>
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Monitor, Pause, Play, RotateCcw, Scissors, Smartphone } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, Monitor, Pause, Play, RotateCcw, Scissors, Smartphone } from "lucide-react";
 import { evaluateEpisodeExportReadiness, isVideoMediaPath, resolveActiveVisualTake, resolveSelectedSpeechTake, resolveShotTrimWindow } from "@shared/media-selection";
 import { SlidingSegmentedControl } from "../../components/ui/SlidingSegmentedControl";
 import { getDesktopClient } from "../../lib/desktop-client";
@@ -25,6 +25,7 @@ export function EditorStage() {
   const clearProjectBgm = useStudioStore((s) => s.clearProjectBgm);
   const jumpToShot = useStudioStore((s) => s.jumpToShot);
   const editShot = useStudioStore((s) => s.editShot);
+  const setExportModalOpen = useStudioStore((s) => s.setExportModalOpen);
 
   const [trimPulseSeq, setTrimPulseSeq] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -321,13 +322,24 @@ export function EditorStage() {
                   : "bg-[var(--accent-amber-soft)] border-[var(--accent-amber-border)] text-[var(--accent-amber-ink)]"
               }`}
             >
-              <div className="flex items-center gap-1.5 font-semibold text-[12px]">
-                {readiness.canExport ? (
-                  <CheckCircle2 className="w-3.5 h-3.5 text-[var(--accent-success-text)]" />
-                ) : (
-                  <AlertTriangle className="w-3.5 h-3.5 text-[var(--accent-amber-text)]" />
-                )}
-                <span>{readiness.canExport ? "已就绪，点击右上角「导出成片」" : "还有镜头缺少画面"}</span>
+              <div className="flex items-center justify-between gap-2 font-semibold text-[12px]">
+                <span className="flex items-center gap-1.5 min-w-0">
+                  {readiness.canExport ? (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-[var(--accent-success-text)] shrink-0" />
+                  ) : (
+                    <AlertTriangle className="w-3.5 h-3.5 text-[var(--accent-amber-text)] shrink-0" />
+                  )}
+                  <span className="truncate">{readiness.canExport ? "本集就绪，可直接导出" : "还有镜头缺少画面"}</span>
+                </span>
+                <button
+                  type="button"
+                  data-testid="open-export-modal"
+                  onClick={() => setExportModalOpen(true)}
+                  className="btn-primary h-7 px-2.5 text-[11px] shrink-0"
+                >
+                  <Download className="w-3 h-3 shrink-0" />
+                  <span>导出本集</span>
+                </button>
               </div>
               <div className="text-[11px] opacity-90 tabular-nums">
                 画面：{readiness.visualReadyCount}/{readiness.totalShots} 镜（视频 {readiness.realVideoCount} · 图 {readiness.realImageCount} · 画板 {readiness.placeholderCount}）

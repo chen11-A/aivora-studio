@@ -3,7 +3,7 @@ import { z } from "zod";
 export const AspectRatioSchema = z.enum(["16:9", "9:16"]);
 export type AspectRatio = z.infer<typeof AspectRatioSchema>;
 
-export const StageIdSchema = z.enum(["script", "cast", "storyboard", "editor"]);
+export const StageIdSchema = z.enum(["script", "cast", "storyboard", "editor", "delivery"]);
 export type StageId = z.infer<typeof StageIdSchema>;
 
 export const AssetKindSchema = z.enum(["character", "scene", "prop", "voice", "music"]);
