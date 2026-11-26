@@ -7,9 +7,11 @@ import {
   resolveShotTrimWindow,
 } from "../../shared/media-selection";
 import type { AspectRatio, Shot, Take } from "../../shared/types/domain";
+import { buildAssFilterArg, resolveBundledFontInfo } from "./font-locator";
 import { runMediaBinary } from "./ffmpeg-locator";
 import { resolveConfinedMediaPath } from "./media-protocol";
 import { buildRasterMotionFilter } from "./motion-filters";
+import { buildNormalizedVideoFilter } from "./segment-cache";
 import {
   resolveEffectiveVideoDurationSec,
   type ProbedMediaInfo,
@@ -47,8 +49,7 @@ export async function probeMedia(
 }
 
 export function fitFilter(aspectRatio: AspectRatio): string {
-  const [w, h] = videoDimensions(aspectRatio);
-  return `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=#0e1014,fps=30,setsar=1`;
+  return buildNormalizedVideoFilter({ aspectRatio, fps: "30" });
 }
 
 function extractSvgCardMeta(svgPath: string, shot: Shot, take: Take): { bgHex: string; label: string } {
@@ -103,7 +104,7 @@ export async function renderShotSegment(params: {
       Number.isFinite(clipDur) && clipDur > 0 && clipDur + 0.05 < durNum
         ? durNum - clipDur + 0.5
         : 0;
-    const vf = `${fitFilter(aspectRatio)}${padSec > 0 ? `,tpad=stop_mode=clone:stop_duration=${padSec.toFixed(2)}` : ""}`;
+    const vf = buildNormalizedVideoFilter({ aspectRatio, fps: "30", padTailSec: padSec });
 
     if (win.trimInSec > 0.01) {
       args.push("-ss", String(win.trimInSec));
@@ -136,8 +137,9 @@ export async function renderShotSegment(params: {
   } else if (isSvgPlaceholderPath(visualAbs)) {
     const { bgHex, label } = extractSvgCardMeta(visualAbs, shot, take);
     const cardAss = `card_${String(index).padStart(3, "0")}.ass`;
+    const fontInfo = resolveBundledFontInfo();
     const assContent =
-      buildAssHeader(aspectRatio, "white") +
+      buildAssHeader(aspectRatio, "white", fontInfo.fontFamily) +
       `Dialogue: 0,0:00:00.00,0:59:59.00,Default,,0,0,0,,{\\an5\\pos(${Math.round(w / 2)},${Math.round(h / 2)})\\fs${aspectRatio === "9:16" ? 56 : 64}}${escapeAssText(label)}\n`;
     await writeFile(path.join(dir, cardAss), assContent, "utf8");
 
@@ -153,7 +155,7 @@ export async function renderShotSegment(params: {
       "-map",
       "1:a:0",
       "-vf",
-      `ass=filename=${cardAss}`,
+      buildAssFilterArg(cardAss),
       "-af",
       `apad=whole_dur=${durNum}`,
       "-t",

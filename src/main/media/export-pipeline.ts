@@ -17,10 +17,10 @@ import {
   type ExclusivePublishFsOps,
 } from "../storage/exclusive-file-staging";
 import {
-  assertNormalizedAudio,
-  buildAudioNormalizationFilter,
-  measureAudioLoudness,
-} from "./audio-normalize";
+  detectSpeechActivityWindows,
+  measureAndRepairMasterAudio,
+} from "./audio-contract";
+import { buildAudioNormalizationFilter } from "./audio-normalize";
 import { EXPORT_TEMP_PREFIX } from "./export-guard";
 import {
   buildFailedQcReport,
@@ -37,6 +37,7 @@ import {
   VIDEO_ENC,
 } from "./export-segment";
 import { MediaProcessAbortedError, probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
+import { buildAssFilterArg, resolveBundledFontInfo } from "./font-locator";
 import { resolveConfinedMediaPath } from "./media-protocol";
 import { buildSmoothDuckingFilter } from "./motion-filters";
 import {
@@ -192,10 +193,24 @@ export async function exportEpisodeToMp4(params: {
     const bgmAbs =
       bgmAsset?.mediaPath ? resolveConfinedMediaPath(params.projectDir, bgmAsset.mediaPath) : null;
     if (bgmAbs && existsSync(bgmAbs)) {
-      emit(70, "混合背景音乐", `正在按 ${params.workspace.project.bgmVolumeDb} dB 混入背景音乐（对白段平滑降音闪避）…`);
+      emit(70, "混合背景音乐", `正在按 ${params.workspace.project.bgmVolumeDb} dB 混入背景音乐（基于真实语音波段闪避）…`);
+      let duckWindows = dialogueIntervals;
+      if (dialogueIntervals.length > 0) {
+        try {
+          const detectedSpeech = await detectSpeechActivityWindows({
+            audioPath: path.join(scratchDir, "stitched.mp4"),
+            totalDurationSec: cursorSec,
+            ffmpegPath,
+            run: runStep,
+          });
+          if (detectedSpeech.length > 0) duckWindows = detectedSpeech;
+        } catch {
+          // Fall back cleanly to dialogueIntervals if silencedetect fails
+        }
+      }
       const bgmVolExpr = buildSmoothDuckingFilter(
         params.workspace.project.bgmVolumeDb,
-        dialogueIntervals,
+        duckWindows,
       );
       await runStep(
         ffmpegPath,
@@ -219,9 +234,11 @@ export async function exportEpisodeToMp4(params: {
     }
 
     assertNotAborted();
+    const fontInfo = resolveBundledFontInfo();
     const subs = generateSubtitles(cues, {
       aspectRatio: params.workspace.project.aspectRatio,
       style: params.workspace.project.subtitleStyle,
+      fontFamily: fontInfo.fontFamily,
     });
     const hasSubtitles = subs.cueCount > 0;
     if (hasSubtitles) {
@@ -245,7 +262,7 @@ export async function exportEpisodeToMp4(params: {
     emit(88, "封装备片", "正在烧录字幕并封装 faststart MP4…");
     const masterArgs: string[] = [...BASE_FFMPEG, "-i", preMasterFile];
     if (hasSubtitles) {
-      masterArgs.push("-vf", "ass=filename=captions.ass", ...VIDEO_ENC);
+      masterArgs.push("-vf", buildAssFilterArg("captions.ass"), ...VIDEO_ENC);
     } else {
       masterArgs.push("-c:v", "copy");
     }
@@ -255,7 +272,18 @@ export async function exportEpisodeToMp4(params: {
     assertNotAborted();
     const masterAbs = path.join(scratchDir, "master.mp4");
     if (loudnessApplied) {
-      assertNormalizedAudio(await measureAudioLoudness(masterAbs, ffmpegPath, runStep));
+      const repairRes = await measureAndRepairMasterAudio({
+        masterMp4Path: masterAbs,
+        ffmpegPath,
+        run: runStep,
+        maxAttempts: 2,
+      });
+      if (repairRes.status === "failed") {
+        throw new Error(repairRes.message);
+      }
+      if (repairRes.status === "not_applicable") {
+        loudnessApplied = false;
+      }
     }
 
     assertNotAborted();

@@ -7,6 +7,7 @@ import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
 import { ExternalWorkflowModal } from "./ExternalWorkflowModal";
 import { ShotInspector } from "./ShotInspector";
+import { TrimmedShotVideo } from "./TrimmedShotVideo";
 import { useStoryboardHotkeys } from "./useStoryboardHotkeys";
 
 const GOOGLE_FLOW_URL = "https://flow.google.com/";
@@ -287,13 +288,11 @@ export function StoryboardStage() {
               }`}
             >
               {activeSrc && activeIsVideo ? (
-                <video
-                  ref={previewVideoRef}
-                  key={activeTake?.id}
+                <TrimmedShotVideo
+                  shot={currentShot}
+                  takeId={activeTake?.id}
                   src={activeSrc}
-                  controls
-                  playsInline
-                  className="w-full h-full object-contain bg-black aivora-frame-fade"
+                  videoRef={previewVideoRef}
                 />
               ) : activeSrc ? (
                 <img
