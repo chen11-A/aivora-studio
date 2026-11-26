@@ -126,6 +126,15 @@ export function cleanUnreferencedAssetsInProject(
     }
   }
 
+  const hasArchived = db.get<{ name: string }>(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'archived_takes'`,
+  );
+  if (hasArchived) {
+    for (const row of db.all<{ media_path: string }>(`SELECT media_path FROM archived_takes`)) {
+      addRef(row.media_path);
+    }
+  }
+
   let removedFiles = 0;
   let freedBytes = 0;
 

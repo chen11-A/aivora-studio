@@ -8,6 +8,7 @@ import { GlobalConfigStore } from "../storage/global-store";
 import { ProjectStore } from "../storage/project-store";
 import { parseDirectorProposalJson } from "./director-prompt";
 import { DirectorService } from "./director-service";
+import { stampDirectorProposalSnapshot } from "./proposal-snapshot";
 
 const tempDirs: string[] = [];
 
@@ -231,7 +232,7 @@ describe("DirectorService proposal, apply, and 1-click undo", () => {
     const applied = service.applyProposal({
       projectId: demo.project.id,
       episodeId: epId,
-      proposal,
+      proposal: stampDirectorProposalSnapshot(demo, epId, proposal),
     });
     expect(applied.ok).toBe(true);
     const ws = applied.workspace!;
@@ -355,7 +356,7 @@ describe("DirectorService proposal, apply, and 1-click undo", () => {
     const applied = service.applyProposal({
       projectId: demo.project.id,
       episodeId: epId,
-      proposal,
+      proposal: stampDirectorProposalSnapshot(prepared, epId, proposal),
     });
     expect(applied.ok).toBe(true);
     const afterShots = applied.workspace!.shots
@@ -437,7 +438,11 @@ describe("DirectorService proposal, apply, and 1-click undo", () => {
       }),
       "DeepSeek",
     );
-    const applied = svc1.applyProposal({ projectId: demo.project.id, episodeId: epId, proposal });
+    const applied = svc1.applyProposal({
+      projectId: demo.project.id,
+      episodeId: epId,
+      proposal: stampDirectorProposalSnapshot(demo, epId, proposal),
+    });
     expect(applied.ok).toBe(true);
     projects1.closeAll();
     global1.close();
@@ -497,7 +502,11 @@ describe("DirectorService proposal, apply, and 1-click undo", () => {
       "DeepSeek",
     );
 
-    const applied = svc.applyProposal({ projectId: demo.project.id, episodeId: epId, proposal });
+    const applied = svc.applyProposal({
+      projectId: demo.project.id,
+      episodeId: epId,
+      proposal: stampDirectorProposalSnapshot(demo, epId, proposal),
+    });
     expect(applied.ok).toBe(true);
     expect(applied.undoToken).toBeTruthy();
 

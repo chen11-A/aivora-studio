@@ -122,6 +122,7 @@ function createHarness(client: Partial<AivoraDesktopApi>) {
     directorLoading: false,
     directorProposal: null,
     directorProposalTarget: null,
+    directorApplyError: null,
     softTargetShotsPerScene: 16,
     screenwriterOpen: false,
     screenwriterProjectId: null,
@@ -271,6 +272,48 @@ describe("Renderer story-pipeline director proposal isolation (GPT P1 regression
 
     expect(harness.getState().directorProposal).toBeNull();
     expect(harness.getState().directorProposalTarget).toBeNull();
+  });
+
+  it("F01: guards concurrent double-click applyDirector to a single IPC call and surfaces stale rejection inline without closing modal or mutating shots", async () => {
+    const ws = makeWorkspace("prj_f01_ui", "F01 前端双点与旧提案测试");
+    const epA = ws.episodes[0]!;
+    useStudioStore.setState({
+      workspace: ws,
+      activeEpisodeId: epA.id,
+      activeShotId: ws.shots[0]!.id,
+    });
+
+    let applyIpcCalls = 0;
+    let resolveApply!: (val: { ok: boolean; message: string }) => void;
+
+    const prop = makeProposal(ws.project.id, epA.id, epA.title, "新画面");
+    const initHarness = createHarness({
+      proposeDirectorSplit: async () => ({ ok: true, proposal: prop, message: "就绪" }),
+      applyDirectorProposal: () => {
+        applyIpcCalls += 1;
+        return new Promise((resolve) => {
+          resolveApply = resolve;
+        });
+      },
+    });
+
+    await initHarness.actions.proposeDirector();
+    expect(initHarness.getState().directorProposal).not.toBeNull();
+
+    // Double-click applyDirector concurrently -> ONLY 1 IPC call allowed!
+    const p1 = initHarness.actions.applyDirector();
+    const p2 = initHarness.actions.applyDirector();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(applyIpcCalls).toBe(1);
+
+    // Main process rejects stale proposal -> modal stays open with inline error, existing shots untouched
+    resolveApply({ ok: false, message: "剧本正文已修改，旧提案已失效" });
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1).toBe(false);
+    expect(r2).toBe(false);
+    expect(initHarness.getState().directorProposal).not.toBeNull();
+    expect(initHarness.getState().directorApplyError).toContain("旧提案已失效");
+    expect(useStudioStore.getState().workspace?.shots[0]?.visualPrompt).toBe("A 集原始镜头");
   });
 
   it("blocks sending script to director when local persistence flush fails", async () => {

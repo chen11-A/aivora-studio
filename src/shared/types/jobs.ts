@@ -22,6 +22,8 @@ export const DirectorProposedAssetSchema = z.object({
 export type DirectorProposedAsset = z.infer<typeof DirectorProposedAssetSchema>;
 
 export const DirectorProposedShotSchema = z.object({
+  existingShotId: z.string().optional(),
+  sourceAnchor: z.string().optional(),
   title: z.string().trim().min(1).max(120),
   scale: ShotScaleSchema.catch("中景"),
   cameraMove: CameraMoveSchema.catch("固定"),
@@ -42,6 +44,8 @@ export const DirectorProposedShotSchema = z.object({
 export type DirectorProposedShot = z.infer<typeof DirectorProposedShotSchema>;
 
 export const DirectorProposedSceneSchema = z.object({
+  existingSceneId: z.string().optional(),
+  sourceAnchor: z.string().optional(),
   title: z.string().trim().min(1).max(120),
   locationName: z.string().optional(),
   summary: z.string().default(""),
@@ -71,9 +75,13 @@ export const DirectorGroundingReportSchema = z.object({
 export type DirectorGroundingReport = z.infer<typeof DirectorGroundingReportSchema>;
 
 export const DirectorProposalSchema = z.object({
+  proposalId: z.string().optional(),
   targetProjectId: z.string().optional(),
   targetEpisodeId: z.string().optional(),
   targetEpisodeTitle: z.string().optional(),
+  targetScriptSha256: z.string().optional(),
+  targetDependencySha256: z.string().optional(),
+  sourceEvidenceDigest: z.string().optional(),
   sourceMode: z.enum(["ai", "offline_preview"]).default("ai"),
   providerSummary: z.string().default(""),
   softTargetShotsPerScene: z.number().int().min(4).max(60).optional(),

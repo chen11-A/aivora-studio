@@ -81,6 +81,7 @@ export const useAiGenerationStore = create<AiGenerationStore>((set, get) => {
     directorLoading: false,
     directorProposal: null,
     directorProposalTarget: null,
+    directorApplyError: null,
     softTargetShotsPerScene: 16,
     screenwriterOpen: false,
     screenwriterProjectId: null,

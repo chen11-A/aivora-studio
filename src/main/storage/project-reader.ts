@@ -88,6 +88,7 @@ export function readWorkspaceFromDb(
       summary: String(r.summary ?? ""),
       paragraphStart: Number(r.paragraph_start ?? 0),
       paragraphEnd: Number(r.paragraph_end ?? 0),
+      sourceAnchor: r.source_anchor ? String(r.source_anchor) : null,
     }));
 
   const shots: Shot[] = db
@@ -132,6 +133,7 @@ export function readWorkspaceFromDb(
         speakerStatus,
         subtitle: String(r.subtitle ?? ""),
         sourceSpan,
+        sourceAnchor: r.source_anchor ? String(r.source_anchor) : null,
         keyBeat: Number(r.key_beat ?? 0) === 1,
         keyBeatReason: String(r.key_beat_reason ?? ""),
         videoPlanMode,

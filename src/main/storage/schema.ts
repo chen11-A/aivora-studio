@@ -117,6 +117,35 @@ CREATE TABLE IF NOT EXISTS director_undo_snapshots (
   snapshot_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS applied_director_proposals (
+  proposal_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+  script_sha256 TEXT NOT NULL,
+  dependency_sha256 TEXT NOT NULL,
+  undo_token TEXT,
+  applied_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS archived_takes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+  original_shot_id TEXT NOT NULL,
+  original_shot_title TEXT NOT NULL,
+  original_scene_id TEXT,
+  take_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  version_number INTEGER NOT NULL,
+  media_path TEXT NOT NULL,
+  media_sha256 TEXT,
+  prompt_snapshot TEXT NOT NULL DEFAULT '',
+  provider_info TEXT NOT NULL DEFAULT '',
+  duration_sec REAL,
+  reason TEXT NOT NULL DEFAULT 'director_reapply',
+  archived_at TEXT NOT NULL
+);
 `;
 
 export const GLOBAL_SCHEMA_SQL = `
@@ -162,6 +191,12 @@ CREATE TABLE IF NOT EXISTS app_kv (
 
 export function initProjectSchema(db: SqliteDriver): void {
   db.exec(PROJECT_SCHEMA_SQL);
+  const sceneCols = new Set(
+    db.all<{ name: string }>(`PRAGMA table_info(scenes)`).map((c) => c.name),
+  );
+  if (!sceneCols.has("source_anchor")) {
+    db.exec(`ALTER TABLE scenes ADD COLUMN source_anchor TEXT`);
+  }
   const shotCols = new Set(
     db.all<{ name: string }>(`PRAGMA table_info(shots)`).map((c) => c.name),
   );
@@ -179,6 +214,9 @@ export function initProjectSchema(db: SqliteDriver): void {
   }
   if (!shotCols.has("source_span_json")) {
     db.exec(`ALTER TABLE shots ADD COLUMN source_span_json TEXT`);
+  }
+  if (!shotCols.has("source_anchor")) {
+    db.exec(`ALTER TABLE shots ADD COLUMN source_anchor TEXT`);
   }
   if (!shotCols.has("key_beat")) {
     db.exec(`ALTER TABLE shots ADD COLUMN key_beat INTEGER NOT NULL DEFAULT 0`);

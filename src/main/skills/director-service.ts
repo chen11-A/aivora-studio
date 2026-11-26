@@ -24,6 +24,7 @@ import {
   applyDirectorProposalToDb,
   applyScreenwriterOutlineToDb,
   undoDirectorApplyInDb,
+  type ApplyDirectorResult,
 } from "./director-apply";
 import { finalizeDirectorProposal, MAX_SHOTS_PER_SCENE } from "./director-grounding";
 import {
@@ -35,6 +36,7 @@ import {
   parseDirectorProposalJson,
   sanitizeDirectorProposal,
 } from "./director-prompt";
+import { stampDirectorProposalSnapshot } from "./proposal-snapshot";
 import { buildScreenwriterOutline, splitNovelParagraphs } from "./screenwriter-outline";
 import { reviewProposalAgainstScript, reviewWorkspaceEpisode } from "./script-reviewer";
 
@@ -206,16 +208,15 @@ export class DirectorService {
     const binding = snap.routing.script;
 
     if (!binding) {
-      const proposal: DirectorProposal = {
-        ...buildOfflineDirectorProposal(ep.title, ep.scriptText, {
+      const proposal = stampDirectorProposalSnapshot(
+        ws,
+        ep.id,
+        buildOfflineDirectorProposal(ep.title, ep.scriptText, {
           existingAssets: ws.assets,
           softTargetShotsPerScene: softTarget,
           sceneDrafts: persistedSceneDrafts,
         }),
-        targetProjectId: input.projectId,
-        targetEpisodeId: ep.id,
-        targetEpisodeTitle: ep.title,
-      };
+      );
       return {
         ok: true,
         proposal,
@@ -395,13 +396,10 @@ export class DirectorService {
         existingAssets: ws.assets,
         episodeTitle: ep.title,
       });
-      const proposal: DirectorProposal = {
+      const proposal = stampDirectorProposalSnapshot(ws, ep.id, {
         ...withTraces,
-        targetProjectId: input.projectId,
-        targetEpisodeId: ep.id,
-        targetEpisodeTitle: ep.title,
         reviewReport,
-      };
+      });
       return {
         ok: true,
         proposal,
@@ -419,7 +417,7 @@ export class DirectorService {
     projectId: string;
     episodeId: string;
     proposal: DirectorProposal;
-  }): { ok: boolean; workspace?: ProjectWorkspace; undoToken?: string; message: string } {
+  }): ApplyDirectorResult {
     return applyDirectorProposalToDb(this.projects, input);
   }
 

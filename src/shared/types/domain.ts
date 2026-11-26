@@ -116,6 +116,7 @@ export const SceneSchema = z.object({
   summary: z.string().default(""),
   paragraphStart: z.number().int().min(0).default(0),
   paragraphEnd: z.number().int().min(0).default(0),
+  sourceAnchor: z.string().nullable().optional(),
 });
 export type Scene = z.infer<typeof SceneSchema>;
 
@@ -153,6 +154,7 @@ export const ShotSchema = z.object({
   speakerStatus: SpeakerStatusSchema.default("none"),
   subtitle: z.string().default(""),
   sourceSpan: SourceSpanSchema.nullable().default(null),
+  sourceAnchor: z.string().nullable().optional(),
   keyBeat: z.boolean().default(false),
   keyBeatReason: z.string().default(""),
   videoPlanMode: VideoPlanModeSchema.default("paid_video"),

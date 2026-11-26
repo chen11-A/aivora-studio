@@ -18,6 +18,7 @@ export type StoryPipelineStateSlice = {
   directorLoading: boolean;
   directorProposal: DirectorProposal | null;
   directorProposalTarget: DirectorProposalTarget | null;
+  directorApplyError: string | null;
   softTargetShotsPerScene: number;
   screenwriterOpen: boolean;
   screenwriterProjectId: string | null;
@@ -53,13 +54,15 @@ function showToast(message: string) {
   useStudioStore.getState().showToast(message, 3600);
 }
 
-async function flushEdits(actionLabel: string): Promise<boolean> {
+async function flushEdits(actionLabel: string): Promise<{ ok: boolean; errorMessage: string | null }> {
   const ok = await flushPendingSaves();
   if (!ok) {
+    const errorMessage = `本地保存失败，已拦截「${actionLabel}」以防使用旧内容，请先重试保存。`;
     useStudioStore.setState({ saveState: "error" });
-    showToast(`本地保存失败，已拦截「${actionLabel}」以防使用旧内容，请先重试保存。`);
+    showToast(errorMessage);
+    return { ok: false, errorMessage };
   }
-  return ok;
+  return { ok: true, errorMessage: null };
 }
 
 function normalizeOutlineForApply(outline: ScreenwriterOutlineProposal): ScreenwriterOutlineProposal {
@@ -83,13 +86,18 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
 ): StoryPipelineActions {
   let directorReqSeq = 0;
   let undoSyncSeq = 0;
+  let applyInFlight = false;
 
   return {
     setSoftTargetShotsPerScene(target) {
       set({ softTargetShotsPerScene: Math.max(6, Math.min(40, target)) } as Partial<T>);
     },
     closeDirectorProposal() {
-      set({ directorProposal: null, directorProposalTarget: null } as Partial<T>);
+      set({
+        directorProposal: null,
+        directorProposalTarget: null,
+        directorApplyError: null,
+      } as Partial<T>);
     },
     closeScreenwriterOutline() {
       set({
@@ -126,7 +134,7 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
     },
 
     async openScreenwriterModal(rawText) {
-      if (!(await flushEdits("预分集与分场"))) return;
+      if (!(await flushEdits("预分集与分场")).ok) return;
       const { workspace, activeEpisodeId } = useStudioStore.getState();
       const ep = workspace?.episodes.find((e) => e.id === activeEpisodeId) ?? workspace?.episodes[0];
       set({
@@ -171,7 +179,7 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
       }
       set({ directorLoading: true } as Partial<T>);
       try {
-        if (!(await flushEdits("写入分集与场次"))) return null;
+        if (!(await flushEdits("写入分集与场次")).ok) return null;
         const safeOutline = normalizeOutlineForApply(outline);
         const res = await client.applyScreenwriterOutline({
           projectId: workspace.project.id,
@@ -218,9 +226,13 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
       const reqEpisodeTitle = workspace.episodes.find((e) => e.id === epId)?.title ?? "当前分集";
       const softTarget = options?.softTargetShotsPerScene ?? get().softTargetShotsPerScene;
       const seq = ++directorReqSeq;
-      set({ directorLoading: true } as Partial<T>);
+      set({ directorLoading: true, directorApplyError: null } as Partial<T>);
       try {
-        if (!(await flushEdits("生成拆镜提案"))) return;
+        const flushed = await flushEdits("生成拆镜提案");
+        if (!flushed.ok) {
+          set({ directorApplyError: flushed.errorMessage } as Partial<T>);
+          return;
+        }
         const res = await client.proposeDirectorSplit({
           projectId: reqProjectId,
           episodeId: epId,
@@ -239,12 +251,15 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
           set({
             directorProposal: res.proposal,
             directorProposalTarget: boundTarget,
+            directorApplyError: null,
           } as Partial<T>);
           const curEpId = curState.activeEpisodeId ?? curState.workspace?.episodes[0]?.id;
           if (curEpId && curEpId !== boundTarget.episodeId) {
             showToast(`「${boundTarget.episodeTitle}」拆镜提案已就绪，切回该分集即可查看与采纳`);
             return;
           }
+          // C01: Proposal summary is rendered inline inside DirectorProposalModal so no toast blocks the Accept button
+          return;
         }
         showToast(res.message);
       } catch (err) {
@@ -259,29 +274,43 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
     },
 
     async applyDirector() {
+      if (applyInFlight || get().directorLoading) return false;
       const { workspace } = useStudioStore.getState();
       const proposal = get().directorProposal;
       const storedTarget = get().directorProposalTarget;
-      if (!workspace || !proposal || get().directorLoading) return false;
+      if (!workspace || !proposal) return false;
       const targetProjectId = storedTarget?.projectId ?? proposal.targetProjectId ?? null;
       const targetEpisodeId = storedTarget?.episodeId ?? proposal.targetEpisodeId ?? null;
       if (!targetProjectId || !targetEpisodeId) {
-        showToast("拆镜提案缺少目标分集信息，请重新生成后再采纳。");
+        set({ directorApplyError: "拆镜提案缺少目标分集信息，请重新生成后再采纳。" } as Partial<T>);
         return false;
       }
       if (workspace.project.id !== targetProjectId) {
-        set({ directorProposal: null, directorProposalTarget: null } as Partial<T>);
+        set({
+          directorProposal: null,
+          directorProposalTarget: null,
+          directorApplyError: null,
+        } as Partial<T>);
         showToast("当前已切换到其他作品，已拦截旧提案写入以防覆盖。");
         return false;
       }
       if (!workspace.episodes.some((e) => e.id === targetEpisodeId)) {
-        set({ directorProposal: null, directorProposalTarget: null } as Partial<T>);
+        set({
+          directorProposal: null,
+          directorProposalTarget: null,
+          directorApplyError: null,
+        } as Partial<T>);
         showToast("提案对应的原分集已不存在，无法采纳。");
         return false;
       }
-      set({ directorLoading: true } as Partial<T>);
+      applyInFlight = true;
+      set({ directorLoading: true, directorApplyError: null } as Partial<T>);
       try {
-        if (!(await flushEdits("采纳拆镜提案"))) return false;
+        const flushed = await flushEdits("采纳拆镜提案");
+        if (!flushed.ok) {
+          set({ directorApplyError: flushed.errorMessage } as Partial<T>);
+          return false;
+        }
         const res = await client.applyDirectorProposal({
           projectId: targetProjectId,
           episodeId: targetEpisodeId,
@@ -303,6 +332,7 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
           set({
             directorProposal: null,
             directorProposalTarget: null,
+            directorApplyError: null,
             lastUndoToken: res.undoToken ?? null,
             actionPolishProposal: null,
           } as Partial<T>);
@@ -310,12 +340,15 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
           void get().runLiveEpisodeReview();
           return true;
         }
-        showToast(res.message);
+        // F01: Keep modal open with inline error banner at top so existing shots & draft remain safe
+        set({ directorApplyError: res.message } as Partial<T>);
         return false;
       } catch (err) {
-        showToast(err instanceof Error ? err.message : "采纳拆镜提案失败");
+        const msg = err instanceof Error ? err.message : "采纳拆镜提案失败";
+        set({ directorApplyError: msg } as Partial<T>);
         return false;
       } finally {
+        applyInFlight = false;
         set({ directorLoading: false } as Partial<T>);
       }
     },
@@ -333,7 +366,7 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
     },
 
     async runLiveEpisodeReview() {
-      if (!(await flushEdits("原文审片"))) return;
+      if (!(await flushEdits("原文审片")).ok) return;
       const { workspace, activeEpisodeId } = useStudioStore.getState();
       const epId = activeEpisodeId ?? workspace?.episodes[0]?.id;
       if (!workspace || !epId) return;
@@ -352,7 +385,7 @@ export function createStoryPipelineActions<T extends StoryPipelineStateSlice>(
     },
 
     async proposeActionPolish(shotId) {
-      if (!(await flushEdits("单镜动作精修"))) return;
+      if (!(await flushEdits("单镜动作精修")).ok) return;
       const { workspace } = useStudioStore.getState();
       if (!workspace) return;
       const reqProjectId = workspace.project.id;

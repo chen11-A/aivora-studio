@@ -11,6 +11,7 @@ import { ProjectStore } from "../storage/project-store";
 import { finalizeDirectorProposal } from "./director-grounding";
 import { buildOfflineDirectorProposal } from "./director-prompt";
 import { DirectorService } from "./director-service";
+import { stampDirectorProposalSnapshot } from "./proposal-snapshot";
 import {
   buildScreenwriterOutline,
   mergeAdjacentDraftScenes,
@@ -259,7 +260,7 @@ describe("《天渊麒麟录》前三章端到端回归验收 (QL-01 → QL-03 �
     const applied = director.applyProposal({
       projectId: ws.project.id,
       episodeId: ws.episodes[0]!.id,
-      proposal,
+      proposal: stampDirectorProposalSnapshot(ws, ws.episodes[0]!.id, proposal),
     });
     expect(applied.ok).toBe(true);
     const afterApply = applied.workspace!;
@@ -497,7 +498,7 @@ describe("《天渊麒麟录》前三章端到端回归验收 (QL-01 → QL-03 �
     director.applyProposal({
       projectId: ws.project.id,
       episodeId: ws.episodes[0]!.id,
-      proposal: finalized,
+      proposal: stampDirectorProposalSnapshot(ws, ws.episodes[0]!.id, finalized),
     });
 
     const vidProv = globalConfig.saveProvider({
