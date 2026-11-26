@@ -19,7 +19,7 @@ export type CrashRecoveryItemView = {
   ledgerId: string;
   jobId: string | null;
   shotId: string | null;
-  kind: "image" | "video" | "speech" | "music" | "bgm" | "visual_qc";
+  kind: "image" | "video" | "speech" | "music" | "bgm" | "text" | "visual_qc";
   action: CrashRecoveryActionView;
   remoteTaskId: string | null;
   inputSha256: string;

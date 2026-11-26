@@ -1,4 +1,4 @@
-export type PaidActionKind = "image" | "video" | "speech" | "music" | "visual_qc";
+export type PaidActionKind = "image" | "video" | "speech" | "music" | "text" | "visual_qc";
 
 export type BudgetQuote = {
   kind: PaidActionKind;
@@ -53,6 +53,7 @@ export function quotePaidAction(input: {
   durationSec?: number;
   modelId?: string;
   resolution?: string;
+  inputChars?: number;
 }): BudgetQuote {
   const dur = Math.max(1, Math.round(input.durationSec ?? 5));
   if (input.kind === "video") {
@@ -93,6 +94,23 @@ export function quotePaidAction(input: {
       quotedCents: 10,
       pricingBasis: "estimated_unit",
       summary: "预估配乐费用约 $0.10（Lyria，以账单为准）",
+    };
+  }
+  if (input.kind === "text") {
+    const m = (input.modelId ?? "").toLowerCase();
+    const base = /pro|opus|gpt-5|gpt-4o|o1|o3|claude-3\.7|claude-4/.test(m)
+      ? 3
+      : /flash|mini|lite|haiku/.test(m)
+        ? 1
+        : 2;
+    const extra = Math.max(0, Math.floor(((input.inputChars ?? 0) - 4000) / 6000));
+    const cents = Math.max(1, base + extra);
+    const modelTag = input.modelId?.trim() ? `${input.modelId.trim()} · ` : "";
+    return {
+      kind: "text",
+      quotedCents: cents,
+      pricingBasis: "estimated_unit",
+      summary: `预估文本模型费用约 $${(cents / 100).toFixed(2)}（${modelTag}以服务商实际账单为准）`,
     };
   }
   return { kind: "visual_qc", quotedCents: 3, pricingBasis: "estimated_unit", summary: "预估可选视觉抽检费用约 $0.03" };

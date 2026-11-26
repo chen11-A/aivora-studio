@@ -7,10 +7,11 @@ import type {
   ScriptReviewReport,
 } from "../../shared/types/story-pipeline";
 import type { OAuthManager } from "../auth/auth-manager";
-import { completeChatGptResponsesText } from "../auth/chatgpt-oauth";
-import { GROK_API } from "../auth/grok-oauth";
-import { runGeminiDirectorChat } from "../providers/gemini-official-adapter";
-import { runOpenAiChatCompletion } from "../providers/openai-compat-adapter";
+import {
+  checkMultiCallTextBudgetHeadroom,
+  runBudgetedTextModelCall,
+  type BudgetedTextCallResult,
+} from "../jobs/paid-text-service";
 import type { GlobalConfigStore } from "../storage/global-store";
 import { getLatestDirectorUndoToken } from "../storage/project-maintenance";
 import type { ProjectStore } from "../storage/project-store";
@@ -88,71 +89,22 @@ export class DirectorService {
     return applyScreenwriterOutlineToDb(this.projects, input);
   }
 
-  private async runConfiguredTextModel(
-    systemPrompt: string,
-    userPrompt: string,
-  ): Promise<{ ok: true; rawText: string; providerSummary: string } | { ok: false; message: string }> {
-    const snap = this.globalConfig.getSnapshot();
-    const binding = snap.routing.script;
-    if (!binding) {
-      return { ok: false, message: "未配置剧本模型" };
-    }
-    if (binding.source === "oauth") {
-      const token = await this.oauth.getValidAccessToken(
-        binding.sourceId as "chatgpt-web" | "grok-web",
-      );
-      if (binding.sourceId === "chatgpt-web") {
-        const rawText = await completeChatGptResponsesText(
-          {
-            model: binding.modelId,
-            text: userPrompt,
-            instructions: systemPrompt,
-            accessToken: token,
-          },
-          this.fetcher,
-        );
-        return { ok: true, rawText, providerSummary: `ChatGPT 网页账号 · ${binding.modelId}` };
-      }
-      const rawText = await runOpenAiChatCompletion(
-        {
-          baseUrl: GROK_API,
-          apiKey: token,
-          modelId: binding.modelId,
-          systemPrompt,
-          userPrompt,
-        },
-        this.fetcher,
-      );
-      return { ok: true, rawText, providerSummary: `Grok (xAI) · ${binding.modelId}` };
-    }
-
-    const creds = this.globalConfig.getProviderCredentials(binding.sourceId);
-    if (!creds || !creds.apiKey) {
-      return { ok: false, message: "所选剧本厂家缺少可用 API Key，请在模型中心补全" };
-    }
-    const rawText =
-      creds.view.protocol === "gemini-official"
-        ? await runGeminiDirectorChat(
-            {
-              baseUrl: creds.view.baseUrl,
-              apiKey: creds.apiKey,
-              modelId: binding.modelId,
-              systemPrompt,
-              userPrompt,
-            },
-            this.fetcher,
-          )
-        : await runOpenAiChatCompletion(
-            {
-              baseUrl: creds.view.baseUrl,
-              apiKey: creds.apiKey,
-              modelId: binding.modelId,
-              systemPrompt,
-              userPrompt,
-            },
-            this.fetcher,
-          );
-    return { ok: true, rawText, providerSummary: `${creds.view.name} · ${binding.modelId}` };
+  private async runConfiguredTextModel(input: {
+    projectId: string;
+    shotId?: string | null;
+    purpose: string;
+    systemPrompt: string;
+    userPrompt: string;
+  }): Promise<BudgetedTextCallResult> {
+    return runBudgetedTextModelCall(
+      {
+        projects: this.projects,
+        globalConfig: this.globalConfig,
+        oauth: this.oauth,
+        fetcher: this.fetcher,
+      },
+      input,
+    );
   }
 
   /**
@@ -276,7 +228,12 @@ export class DirectorService {
           sceneRangeLabel: `${ep.title}（第 1–${paragraphs.length} 段）`,
           softTargetShotsPerScene: softTarget,
         });
-        const aiRes = await this.runConfiguredTextModel(DIRECTOR_SYSTEM_PROMPT, userPrompt);
+        const aiRes = await this.runConfiguredTextModel({
+          projectId: input.projectId,
+          purpose: `导演拆镜：${ep.title}`,
+          systemPrompt: DIRECTOR_SYSTEM_PROMPT,
+          userPrompt,
+        });
         if (!aiRes.ok) return { ok: false, message: aiRes.message };
         providerSummary = aiRes.providerSummary;
         const parsed = parseDirectorProposalJson(aiRes.rawText, providerSummary);
@@ -291,6 +248,7 @@ export class DirectorService {
         }
         collectedAssets.push(...parsed.assets);
       } else {
+        const activeChunks: Array<{ scDraft: ScreenwriterSceneDraft; rangeLabel: string; userPrompt: string }> = [];
         for (let i = 0; i < sceneDrafts.length; i++) {
           const scDraft = sceneDrafts[i]!;
           const chunkParas = paragraphs.slice(scDraft.paragraphStart, scDraft.paragraphEnd + 1);
@@ -300,17 +258,36 @@ export class DirectorService {
           if (!hasBody) continue;
           const sliceText = chunkParas.join("\n");
           const rangeLabel = `第 ${i + 1}/${sceneDrafts.length} 场「${scDraft.title}」（原文第 ${scDraft.paragraphStart + 1}–${scDraft.paragraphEnd + 1} 段）`;
+          const userPrompt = buildDirectorUserPrompt({
+            episodeTitle: ep.title,
+            scriptText: sliceText,
+            aspectRatio: ws.project.aspectRatio,
+            knownCharacters,
+            knownScenes,
+            sceneRangeLabel: rangeLabel,
+            softTargetShotsPerScene: softTarget,
+          });
+          activeChunks.push({ scDraft, rangeLabel, userPrompt });
+        }
+
+        const headroom = checkMultiCallTextBudgetHeadroom(
+          { projects: this.projects, globalConfig: this.globalConfig },
+          {
+            projectId: input.projectId,
+            promptLengths: activeChunks.map((c) => DIRECTOR_SYSTEM_PROMPT.length + c.userPrompt.length),
+            purposeLabel: `逐场导演拆镜（${ep.title}）`,
+          },
+        );
+        if (!headroom.ok) return { ok: false, message: headroom.message };
+
+        for (const { scDraft, rangeLabel, userPrompt } of activeChunks) {
           try {
-            const userPrompt = buildDirectorUserPrompt({
-              episodeTitle: ep.title,
-              scriptText: sliceText,
-              aspectRatio: ws.project.aspectRatio,
-              knownCharacters,
-              knownScenes,
-              sceneRangeLabel: rangeLabel,
-              softTargetShotsPerScene: softTarget,
+            const aiRes = await this.runConfiguredTextModel({
+              projectId: input.projectId,
+              purpose: `逐场拆镜：${rangeLabel}`,
+              systemPrompt: DIRECTOR_SYSTEM_PROMPT,
+              userPrompt,
             });
-            const aiRes = await this.runConfiguredTextModel(DIRECTOR_SYSTEM_PROMPT, userPrompt);
             if (!aiRes.ok) return { ok: false, message: aiRes.message };
             providerSummary = aiRes.providerSummary;
             const parsed = parseDirectorProposalJson(aiRes.rawText, providerSummary);
@@ -465,8 +442,17 @@ export class DirectorService {
 
     try {
       const userPrompt = buildActionPolishUserPrompt(shot, ws.assets);
-      const aiRes = await this.runConfiguredTextModel(ACTION_POLISH_SYSTEM_PROMPT, userPrompt);
+      const aiRes = await this.runConfiguredTextModel({
+        projectId: input.projectId,
+        shotId: shot.id,
+        purpose: `动作精修：${shot.title}`,
+        systemPrompt: ACTION_POLISH_SYSTEM_PROMPT,
+        userPrompt,
+      });
       if (!aiRes.ok) {
+        if (aiRes.budgetBlocked) {
+          return { ok: false, message: aiRes.message };
+        }
         const fallback = buildOfflineActionPolish(shot, ws.assets);
         return { ok: true, proposal: fallback, message: `${aiRes.message}，已切换本地动作精修建议` };
       }
