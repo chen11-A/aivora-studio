@@ -74,52 +74,35 @@ jobs:
             $code = $LASTEXITCODE
             Write-Host "=== VITEST FAILED (exit=$code / 0x$($code.ToString('X8'))) — RUNNING STEP-BY-STEP 0xC0000409 PROBE ==="
             $probeFile = "src/main/storage/__win_probe.test.ts"
-            $probeCode = @'
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, it } from "vitest";
-import { ProjectStore } from "./project-store";
-
-describe("win-probe", () => {
-  it("traces project-store test #2 line by line", () => {
-    const log = (s: string) => process.stderr.write(`[PROBE] ${s}\n`);
-    log("1:mkdtemp");
-    const base = mkdtempSync(join(tmpdir(), "aivora-probe-"));
-    const ws = join(base, "测试 作品 空间");
-    log("2:new ProjectStore(ws)");
-    const s1 = new ProjectStore(ws);
-    log("3:createProject");
-    const created = s1.createProject({ name: "雨夜 归人（第一季）", aspectRatio: "16:9", stylePreset: "国漫电影质感" });
-    log("4:updateEpisode+createEpisode+createAsset+toggleAssetLock");
-    const ep1 = created.episodes[0]!;
-    s1.updateEpisode({ projectId: created.project.id, episodeId: ep1.id, title: "第 1 集", scriptText: "暴雨倾盆" });
-    s1.createEpisode(created.project.id, "第 2 集");
-    const asset = s1.createAsset({ projectId: created.project.id, kind: "character", name: "沈知行", description: "风衣" });
-    s1.toggleAssetLock(created.project.id, asset.id);
-    log("5:createShot+updateShot+addSyntheticTake+selectTake");
-    const shot = s1.createShot({ projectId: created.project.id, episodeId: ep1.id, sceneId: created.scenes[0]!.id });
-    s1.updateShot({ projectId: created.project.id, shotId: shot.id, title: "镜 01", scale: "特写", cameraMove: "缓推", durationSec: 5, visualPrompt: "雨滴" });
-    const t1 = s1.addSyntheticTake({ projectId: created.project.id, shotId: shot.id, kind: "image", label: "初版" });
-    s1.addSyntheticTake({ projectId: created.project.id, shotId: shot.id, kind: "image", label: "暖光版" });
-    s1.selectTake({ projectId: created.project.id, shotId: shot.id, takeId: t1.takes.find((t) => t.shotId === shot.id)!.id, kind: "image" });
-    log("6:s1.closeAll");
-    s1.closeAll();
-    log("7:new ProjectStore(ws) scanProjects readOnly");
-    const s2 = new ProjectStore(ws);
-    log("8:s2.listProjects");
-    s2.listProjects();
-    log("9:s2.openProject");
-    s2.openProject(created.project.id);
-    log("10:s2.closeAll");
-    s2.closeAll();
-    log("11:rmSync");
-    rmSync(base, { recursive: true, force: true });
-    log("12:ALL_STEPS_DONE");
-  });
-});
-'@
-            Set-Content -Path $probeFile -Value $probeCode -Encoding utf8
+            $probeLines = @(
+              'import { mkdtempSync, rmSync } from "node:fs";',
+              'import { tmpdir } from "node:os";',
+              'import { join } from "node:path";',
+              'import { describe, it } from "vitest";',
+              'import { ProjectStore } from "./project-store";',
+              'describe("win-probe", () => {',
+              '  it("traces project-store test 2", () => {',
+              '    const log = (s: string) => process.stderr.write("[PROBE] " + s + "\n");',
+              '    log("1:mkdtemp"); const base = mkdtempSync(join(tmpdir(), "aivora-probe-")); const ws = join(base, "测试 作品 空间");',
+              '    log("2:new ProjectStore(ws)"); const s1 = new ProjectStore(ws);',
+              '    log("3:createProject"); const created = s1.createProject({ name: "雨夜 归人（第一季）", aspectRatio: "16:9", stylePreset: "国漫电影质感" });',
+              '    log("4:updateEpisode"); const ep1 = created.episodes[0]!; s1.updateEpisode({ projectId: created.project.id, episodeId: ep1.id, title: "第 1 集", scriptText: "暴雨倾盆" });',
+              '    log("4b:createEpisode"); s1.createEpisode(created.project.id, "第 2 集");',
+              '    log("4c:createAsset"); const asset = s1.createAsset({ projectId: created.project.id, kind: "character", name: "沈知行", description: "风衣" });',
+              '    log("4d:toggleAssetLock"); s1.toggleAssetLock(created.project.id, asset.id);',
+              '    log("5:createShot+updateShot"); const shot = s1.createShot({ projectId: created.project.id, episodeId: ep1.id, sceneId: created.scenes[0]!.id }); s1.updateShot({ projectId: created.project.id, shotId: shot.id, title: "镜 01", scale: "特写", cameraMove: "缓推", durationSec: 5, visualPrompt: "雨滴" });',
+              '    log("5b:addSyntheticTake+selectTake"); const t1 = s1.addSyntheticTake({ projectId: created.project.id, shotId: shot.id, kind: "image", label: "初版" }); s1.addSyntheticTake({ projectId: created.project.id, shotId: shot.id, kind: "image", label: "暖光版" }); s1.selectTake({ projectId: created.project.id, shotId: shot.id, takeId: t1.takes.find((t) => t.shotId === shot.id)!.id, kind: "image" });',
+              '    log("6:s1.closeAll"); s1.closeAll();',
+              '    log("7:new ProjectStore(ws) scanProjects"); const s2 = new ProjectStore(ws);',
+              '    log("8:s2.listProjects"); s2.listProjects();',
+              '    log("9:s2.openProject"); s2.openProject(created.project.id);',
+              '    log("10:s2.closeAll"); s2.closeAll();',
+              '    log("11:rmSync"); rmSync(base, { recursive: true, force: true });',
+              '    log("12:ALL_STEPS_DONE");',
+              '  });',
+              '});'
+            )
+            Set-Content -Path $probeFile -Value ($probeLines -join "`n") -Encoding utf8
             try {
               node ./node_modules/vitest/vitest.mjs run $probeFile --reporter=verbose --pool=threads --poolOptions.threads.maxThreads=1 --poolOptions.threads.minThreads=1
               Write-Host "=== PROBE(threads) EXIT=$LASTEXITCODE / 0x$($LASTEXITCODE.ToString('X8')) ==="
