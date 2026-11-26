@@ -11,6 +11,7 @@ import {
 } from "../../shared/media-selection";
 import { computeEpisodeExportSnapshotDigest } from "../../shared/studio-truth";
 import type { ProjectWorkspace } from "../../shared/types/domain";
+import type { ProjectStore } from "../storage/project-store";
 import {
   ExclusivePublishError,
   publishFileExclusively,
@@ -21,6 +22,13 @@ import {
   measureAndRepairMasterAudio,
 } from "./audio-contract";
 import { buildAudioNormalizationFilter } from "./audio-normalize";
+import { runEpisodeContentAndSubtitleQc, type ContentQcReport } from "./content-qc";
+import {
+  beginDeliveryPublishJournal,
+  markDeliveryAborted,
+  markDeliveryPublished,
+  sha256FileHex,
+} from "./delivery-journal";
 import { EXPORT_TEMP_PREFIX } from "./export-guard";
 import {
   buildFailedQcReport,
@@ -53,7 +61,10 @@ export async function exportEpisodeToMp4(params: {
   outputPath: string;
   runQc?: boolean;
   exportMode?: ExportMode;
+  humanSignedOff?: boolean;
+  projects?: ProjectStore;
   fsOps?: Partial<ExclusivePublishFsOps>;
+  onAfterPublishBeforeJournalCommit?: (publishedPath: string) => void;
   onProgress?: (event: ExportProgressEvent) => void;
   signal?: AbortSignal;
 }): Promise<ExportEpisodeResult> {
@@ -96,11 +107,30 @@ export async function exportEpisodeToMp4(params: {
   const placeholderShots = resolvedShots.filter((item) => isSvgPlaceholderPath(item.take?.mediaPath));
   const effectiveMode: ExportMode =
     params.exportMode ?? (placeholderShots.length > 0 ? "preview" : "formal");
+  const snapshotDigest = computeEpisodeExportSnapshotDigest(params.workspace, params.episodeId);
+  const contentQc: ContentQcReport = runEpisodeContentAndSubtitleQc({
+    workspace: params.workspace,
+    episodeId: params.episodeId,
+    humanSignedOff: params.humanSignedOff,
+  });
+
   if (params.exportMode === "formal" && placeholderShots.length > 0) {
     return {
       ok: false,
       exportMode: "formal",
+      snapshotDigest,
       message: `包含 ${placeholderShots.length} 个占位画板镜头（如「${placeholderShots[0]!.shot.title}」），不可作为正式成片交付；请补齐真实画面素材或改选「导出试片」。`,
+    };
+  }
+
+  // Audit #4: Formal delivery runs deterministic content/subtitle QC BEFORE rendering & publishing!
+  if (params.exportMode === "formal" && contentQc.errorCount > 0) {
+    const firstErr = contentQc.issues.find((i) => i.severity === "error");
+    return {
+      ok: false,
+      exportMode: "formal",
+      snapshotDigest,
+      message: `正式交付内容质检未通过（共 ${contentQc.errorCount} 项阻塞错误，未写入最终成片）：${firstErr ? `第 ${firstErr.shotIndex} 镜「${firstErr.shotTitle}」${firstErr.message}` : contentQc.summary}`,
     };
   }
 
@@ -114,13 +144,14 @@ export async function exportEpisodeToMp4(params: {
     };
   }
 
-  const snapshotDigest = computeEpisodeExportSnapshotDigest(params.workspace, params.episodeId);
   const scratchDir = await mkdtemp(path.join(tmpdir(), EXPORT_TEMP_PREFIX));
   let publishedPath: string | null = null;
   let publishedDurationSec = 0;
   let publishedWidth: number | undefined;
   let publishedHeight: number | undefined;
   let publishedLoudnessApplied = false;
+  let publishedQcReport: ExportEpisodeResult["qcReport"] | undefined;
+  let activeJournalId: string | null = null;
 
   try {
     assertNotAborted();
@@ -308,24 +339,16 @@ export async function exportEpisodeToMp4(params: {
       );
     }
 
-    assertNotAborted();
-    // F05: Exclusive atomic publish (fsync + hard-link + temp unlink). NEVER overwrites an existing target.
-    const pub = await publishFileExclusively(masterAbs, params.outputPath, { fsOps: params.fsOps });
-    const published = pub.outputPath;
-    publishedPath = published;
-    publishedDurationSec = actualDuration;
-    publishedWidth = vStream.width;
-    publishedHeight = vStream.height;
-    publishedLoudnessApplied = loudnessApplied;
-
+    // Audit #4: Run technical QC on the staged master BEFORE publishing to final outputPath!
     let qcReport: NonNullable<ExportEpisodeResult["qcReport"]>;
     if (params.runQc === false) {
       qcReport = { ...buildSkippedQcReport(actualDuration), snapshotDigest };
     } else {
-      emit(97, "成片质检", "正在扫描黑屏、静帧、无声与 -16 LUFS 峰值…");
+      assertNotAborted();
+      emit(96, "发布前质检", "正在对暂存成片扫描黑屏、静帧、无声与 -16 LUFS 峰值…");
       try {
         const scanned = await runPostExportQc({
-          mp4Path: published,
+          mp4Path: masterAbs,
           ffmpegPath,
           durationSec: actualDuration,
           hasAudioStream: Boolean(aStream),
@@ -337,19 +360,63 @@ export async function exportEpisodeToMp4(params: {
         qcReport = { ...scanned, snapshotDigest };
       } catch (qcErr) {
         if (qcErr instanceof MediaProcessAbortedError || signal?.aborted) {
-          qcReport = {
-            ...buildSkippedQcReport(actualDuration),
-            snapshotDigest,
-            summary: "成片已安全发布保存（导出后质检已取消，可随时重新体检）。",
-          };
-        } else {
-          qcReport = {
-            ...buildFailedQcReport(actualDuration, qcErr instanceof Error ? qcErr.message : String(qcErr)),
-            snapshotDigest,
-          };
+          throw new MediaProcessAbortedError();
         }
+        qcReport = {
+          ...buildFailedQcReport(actualDuration, qcErr instanceof Error ? qcErr.message : String(qcErr)),
+          snapshotDigest,
+        };
+      }
+      const blockingTechErr = qcReport.issues.find((i) => i.severity === "error" || i.type === "black");
+      if (params.exportMode === "formal" && (qcReport.status === "failed" || blockingTechErr)) {
+        return {
+          ok: false,
+          exportMode: "formal",
+          snapshotDigest,
+          qcReport,
+          message: `正式成片发布前技术质检未通过，已拦截写入最终文件：${blockingTechErr ? blockingTechErr.message : qcReport.summary}`,
+        };
       }
     }
+
+    assertNotAborted();
+    emit(98, "排他发布", "质检完成，正在排他原子发布成片…");
+    const masterSha256 = sha256FileHex(masterAbs);
+    if (params.projects) {
+      const rec = params.projects.withProjectDb(params.workspace.project.id, (db) =>
+        beginDeliveryPublishJournal(db, {
+          projectId: params.workspace.project.id,
+          episodeId: params.episodeId,
+          exportMode: effectiveMode,
+          outputPath: params.outputPath,
+          outputSha256: masterSha256,
+          snapshotDigest,
+          contentQc,
+          techQc: qcReport,
+        }),
+      );
+      activeJournalId = rec.id;
+    }
+
+    // F05: Exclusive atomic publish (fsync + hard-link + temp unlink). NEVER overwrites an existing target.
+    const pub = await publishFileExclusively(masterAbs, params.outputPath, { fsOps: params.fsOps });
+    const published = pub.outputPath;
+    publishedPath = published;
+    publishedDurationSec = actualDuration;
+    publishedWidth = vStream.width;
+    publishedHeight = vStream.height;
+    publishedLoudnessApplied = loudnessApplied;
+    publishedQcReport = qcReport;
+
+    params.onAfterPublishBeforeJournalCommit?.(published);
+    if (params.projects && activeJournalId) {
+      const jId = activeJournalId;
+      params.projects.withProjectDb(params.workspace.project.id, (db) =>
+        markDeliveryPublished(db, jId),
+      );
+    }
+
+    emit(99, "落盘校验", `已发布并登记${effectiveMode === "preview" ? "试片" : "成片"}记录`);
     emit(100, "导出完成", `已保存${effectiveMode === "preview" ? "试片" : "成片"}：${published}`);
 
     const baseMsg = resolveExportResultMessage(qcReport);
@@ -366,12 +433,18 @@ export async function exportEpisodeToMp4(params: {
       message: effectiveMode === "preview" ? `试片已导出（非正式交付版本）。${baseMsg}` : baseMsg,
     };
   } catch (err) {
+    if (!publishedPath && params.projects && activeJournalId) {
+      const jId = activeJournalId;
+      params.projects.withProjectDb(params.workspace.project.id, (db) =>
+        markDeliveryAborted(db, jId),
+      );
+    }
     // F05 Cancel-vs-Published boundary: once publishedPath is on disk, NEVER misreport as canceled!
     if (publishedPath) {
-      const fallbackQc = {
+      const fallbackQc = publishedQcReport ?? {
         ...buildSkippedQcReport(publishedDurationSec),
         snapshotDigest,
-        summary: "成片已安全发布保存（质检阶段中断，文件完整可播）。",
+        summary: "成片已安全发布保存（后置步骤中断，文件完整可播）。",
       };
       return {
         ok: true,
@@ -383,7 +456,7 @@ export async function exportEpisodeToMp4(params: {
         height: publishedHeight,
         loudnessApplied: publishedLoudnessApplied,
         qcReport: fallbackQc,
-        message: "成片已安全发布保存（质检阶段已中断，文件完整可播）。",
+        message: "成片已安全发布保存（后置登记中断，重开作品可自动核验恢复）。",
       };
     }
     if (err instanceof ExclusivePublishError) {

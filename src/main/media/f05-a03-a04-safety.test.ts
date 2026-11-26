@@ -10,6 +10,7 @@ import {
 } from "../../shared/studio-truth";
 import { createVerifiedRollingBackup, listVerifiedBackups } from "../storage/backup-manager";
 import { ProjectStore } from "../storage/project-store";
+import { listDeliveryRecords, reconcilePendingDeliveryRecords } from "./delivery-journal";
 import { exportEpisodeToMp4 } from "./export-pipeline";
 import { probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
 
@@ -171,7 +172,7 @@ describe("F05 exclusive export publish, A03 stale-report guard, A04 archive safe
     expect(retryRes.ok).toBe(true);
     expect(existsSync(retryOut)).toBe(true);
 
-    // 6. Cancel-vs-Published boundary: abort triggered AFTER publish (during QC) MUST NOT misreport canceled
+    // 6. Cancel-vs-Published boundary: abort triggered AFTER publish MUST NOT misreport canceled
     const postPublishOut = path.join(base, "导出 目录", "发布后取消质检.mp4");
     const ac = new AbortController();
     const postPublishRes = await exportEpisodeToMp4({
@@ -182,8 +183,8 @@ describe("F05 exclusive export publish, A03 stale-report guard, A04 archive safe
       exportMode: "formal",
       runQc: true,
       signal: ac.signal,
-      onProgress: (ev) => {
-        if (ev.percent >= 97) ac.abort();
+      onAfterPublishBeforeJournalCommit: () => {
+        ac.abort();
       },
     });
     expect(postPublishRes.ok).toBe(true);
@@ -214,6 +215,140 @@ describe("F05 exclusive export publish, A03 stale-report guard, A04 archive safe
     expect(truthAfterEdit.eligibility).not.toBe("deliverable");
 
     store.closeAll();
+  }, 60_000);
+
+  it("Audit #4: blocks formal publish BEFORE writing outputPath on content/technical QC errors and recovers published MP4 + QC record after crash-before-journal-commit", async () => {
+    const ff = await probeFfmpegStatus();
+    expect(ff.available).toBe(true);
+    const ffmpeg = ff.ffmpegPath!;
+
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-audit4-preqc-"));
+    tempDirs.push(base);
+    const wsRoot = path.join(base, "ws");
+    const store = new ProjectStore(wsRoot);
+    const created = store.createProject({ name: "发布前质检与崩溃恢复", aspectRatio: "16:9" });
+    const epId = created.episodes[0]!.id;
+    const shotId = created.shots[0]!.id;
+
+    // 1. Real raster image + unconfirmed speaker dialogue -> Content QC blocks formal export BEFORE writing file!
+    const validPng = path.join(base, "scene.png");
+    await runMediaBinary(ffmpeg, [
+      "-hide_banner", "-nostdin", "-y",
+      "-f", "lavfi", "-i", "testsrc2=size=640x360:duration=1",
+      "-frames:v", "1", validPng,
+    ]);
+    store.importShotTakeFromPath({
+      projectId: created.project.id,
+      shotId,
+      kind: "image",
+      sourceFilePath: validPng,
+    });
+    store.updateShot({
+      projectId: created.project.id,
+      shotId,
+      durationSec: 1.5,
+      dialogue: "这是未确认说话人的台词",
+      speakerStatus: "unconfirmed",
+      videoPlanMode: "still_motion",
+    });
+    const wsBadContent = store.openProject(created.project.id);
+    const blockedContentOut = path.join(base, "out", "内容质检拦截.mp4");
+    const contentBlocked = await exportEpisodeToMp4({
+      workspace: wsBadContent,
+      projectDir: wsBadContent.dirPath,
+      episodeId: epId,
+      outputPath: blockedContentOut,
+      exportMode: "formal",
+      projects: store,
+    });
+    expect(contentBlocked.ok).toBe(false);
+    expect(contentBlocked.message).toContain("内容质检未通过");
+    expect(existsSync(blockedContentOut)).toBe(false);
+
+    // 2. Confirm speaker, but supply a pure-black video -> Pre-publish technical QC blocks formal publish BEFORE writing file!
+    const blackMp4 = path.join(base, "pure-black.mp4");
+    await runMediaBinary(ffmpeg, [
+      "-hide_banner", "-nostdin", "-y",
+      "-f", "lavfi", "-i", "color=c=black:s=640x360:r=24:d=2.5",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=2.5",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", blackMp4,
+    ]);
+    store.updateShot({
+      projectId: created.project.id,
+      shotId,
+      durationSec: 2.5,
+      dialogue: "",
+      subtitle: "",
+      speakerStatus: "confirmed",
+      videoPlanMode: "paid_video",
+    });
+    store.importShotTakeFromPath({
+      projectId: created.project.id,
+      shotId,
+      kind: "video",
+      sourceFilePath: blackMp4,
+    });
+    const wsBlack = store.openProject(created.project.id);
+    const blockedTechOut = path.join(base, "out", "黑屏拦截.mp4");
+    const techBlocked = await exportEpisodeToMp4({
+      workspace: wsBlack,
+      projectDir: wsBlack.dirPath,
+      episodeId: epId,
+      outputPath: blockedTechOut,
+      exportMode: "formal",
+      runQc: true,
+      projects: store,
+    });
+    expect(techBlocked.ok).toBe(false);
+    expect(techBlocked.message).toContain("技术质检未通过");
+    expect(existsSync(blockedTechOut)).toBe(false);
+
+    // 3. Valid moving video -> crash injected AFTER publishFileExclusively BEFORE journal commits -> reopen reconciles cleanly!
+    const goodMp4 = path.join(base, "good-moving.mp4");
+    await runMediaBinary(ffmpeg, [
+      "-hide_banner", "-nostdin", "-y",
+      "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24:duration=2",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", goodMp4,
+    ]);
+    store.updateShot({ projectId: created.project.id, shotId, durationSec: 2 });
+    store.importShotTakeFromPath({
+      projectId: created.project.id,
+      shotId,
+      kind: "video",
+      sourceFilePath: goodMp4,
+    });
+    const wsGood = store.openProject(created.project.id);
+    const crashOut = path.join(base, "out", "发布后崩溃可恢复.mp4");
+    const crashRes = await exportEpisodeToMp4({
+      workspace: wsGood,
+      projectDir: wsGood.dirPath,
+      episodeId: epId,
+      outputPath: crashOut,
+      exportMode: "formal",
+      runQc: true,
+      projects: store,
+      onAfterPublishBeforeJournalCommit: () => {
+        throw new Error("SIMULATED_POWER_LOSS_AFTER_LINK");
+      },
+    });
+    expect(crashRes.ok).toBe(true);
+    expect(existsSync(crashOut)).toBe(true);
+    store.closeAll();
+
+    // Reopen fresh ProjectStore (simulating app restart) and reconcile pending delivery journal!
+    const reopened = new ProjectStore(wsRoot);
+    const recResult = reopened.withProjectDb(created.project.id, (db) => {
+      const rec = reconcilePendingDeliveryRecords(db);
+      const list = listDeliveryRecords(db, created.project.id, epId);
+      return { rec, list };
+    });
+    expect(recResult.rec.recoveredPublished).toHaveLength(1);
+    expect(recResult.list[0]!.status).toBe("published");
+    expect(recResult.list[0]!.outputSha256).toBe(sha256File(crashOut));
+    expect(recResult.list[0]!.snapshotDigest).toBe(computeEpisodeExportSnapshotDigest(wsGood, epId));
+    expect(recResult.list[0]!.techQc?.status).toBe("passed");
+    reopened.closeAll();
   }, 60_000);
 
   it("A04 + Backup Base: rejects corrupt/truncated archive ZIP with zero fake projects, and verified rolling backups never delete sole valid backup on failure", async () => {

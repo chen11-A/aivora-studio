@@ -126,6 +126,30 @@ export const V2_MIGRATIONS: ReadonlyArray<{
       `);
     },
   },
+  {
+    version: "v2.0.0_003_export_delivery_journal",
+    description: "Crash-safe formal export delivery journal binding published MP4 SHA-256, snapshotDigest, and pre-publish QC reports",
+    apply: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS export_delivery_records (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          episode_id TEXT NOT NULL,
+          export_mode TEXT NOT NULL,
+          status TEXT NOT NULL,
+          output_path TEXT NOT NULL,
+          output_sha256 TEXT NOT NULL,
+          snapshot_digest TEXT NOT NULL,
+          content_qc_json TEXT,
+          tech_qc_json TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_delivery_records_proj_ep
+          ON export_delivery_records(project_id, episode_id, status);
+      `);
+    },
+  },
 ];
 
 export type MigrationRunReport = {
