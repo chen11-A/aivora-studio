@@ -84,7 +84,7 @@ describe("F11 & F12 media engine: bundled font, ContactSheet, segment cache/refr
     expect(font.available).toBe(true);
     expect(font.fontFamily).toBe("Noto Sans CJK SC");
     expect(buildAssFilterArg("captions.ass")).toContain("fontsdir=");
-    expect(escapeFfmpegFilterPath("C:\\Users\\测试\\fonts")).toContain("C\\:/");
+    expect(escapeFfmpegFilterPath("C:\\Users\\测试\\fonts")).toContain("C\\\\:/");
 
     // 2. Real 3s video clips A & B for ContactSheet + Reframe + Localized Transition
     const clipA = path.join(base, "clipA.mp4");
