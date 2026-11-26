@@ -392,4 +392,89 @@ describe("F05 exclusive export publish, A03 stale-report guard, A04 archive safe
 
     store.closeAll();
   });
+
+  it("enforces technical QC on formal export even when caller passes runQc: false, and verifies persisted same-snapshot human sign-off", async () => {
+    const { recordEpisodeReviewSignOff } = await import("./delivery-journal");
+    const { computeEpisodeExportSnapshotDigest } = await import("../../shared/studio-truth");
+    const ff = await probeFfmpegStatus();
+    if (!ff.available || !ff.ffmpegPath) return;
+
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-formal-gate-"));
+    tempDirs.push(base);
+    const store = new ProjectStore(path.join(base, "ws"));
+    const created = store.createProject({ name: "正式门禁测试", aspectRatio: "16:9" });
+    const epId = created.episodes[0]!.id;
+    const shotId = created.shots[0]!.id;
+
+    // 1. Create a pure-black 2s video so technical QC MUST catch black frame
+    const blackRel = "assets/black-2s.mp4";
+    const blackAbs = path.join(created.dirPath, blackRel);
+    mkdirSync(path.dirname(blackAbs), { recursive: true });
+    await runMediaBinary(ff.ffmpegPath, [
+      "-y", "-f", "lavfi", "-i", "color=c=black:s=320x180:r=24:d=2",
+      "-f", "lavfi", "-i", "sine=f=440:r=48000:d=2",
+      "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", blackAbs,
+    ]);
+    store.withProjectDb(created.project.id, (db) => {
+      const now = new Date().toISOString();
+      db.run(
+        `INSERT INTO takes (id, shot_id, kind, version_number, media_path, is_selected, duration_sec, created_at)
+         VALUES ('tk-black', ?, 'video', 1, ?, 1, 2, ?)`,
+        shotId, blackRel, now,
+      );
+      db.run(`UPDATE shots SET selected_video_take_id = 'tk-black', subtitle = '', dialogue = '', duration_sec = 2 WHERE id = ?`, shotId);
+    });
+
+    const ws1 = store.openProject(created.project.id);
+    const outBlockedByQc = path.join(base, "formal-skip-qc-attempt.mp4");
+    // Even with runQc: false, formal mode MUST run technical QC and block black frame BEFORE creating outputPath!
+    const res1 = await exportEpisodeToMp4({
+      workspace: ws1, projectDir: ws1.dirPath, episodeId: epId, outputPath: outBlockedByQc,
+      exportMode: "formal", runQc: false, projects: store,
+    });
+    expect(res1.ok).toBe(false);
+    expect(existsSync(outBlockedByQc)).toBe(false);
+    expect(res1.qcReport?.status).not.toBe("skipped");
+
+    // 2. Replace with a valid non-black 2s clip, require persisted human sign-off -> blocked until signed off!
+    const validRel = "assets/valid-2s.mp4";
+    const validAbs = path.join(created.dirPath, validRel);
+    await runMediaBinary(ff.ffmpegPath, [
+      "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24:duration=2",
+      "-f", "lavfi", "-i", "sine=f=440:r=48000:d=2",
+      "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", validAbs,
+    ]);
+    store.withProjectDb(created.project.id, (db) => {
+      const now = new Date().toISOString();
+      db.run(
+        `INSERT INTO takes (id, shot_id, kind, version_number, media_path, is_selected, duration_sec, created_at)
+         VALUES ('tk-valid', ?, 'video', 2, ?, 1, 2, ?)`,
+        shotId, validRel, now,
+      );
+      db.run(`UPDATE shots SET selected_video_take_id = 'tk-valid' WHERE id = ?`, shotId);
+    });
+    const ws2 = store.openProject(created.project.id);
+    const outUnsigned = path.join(base, "formal-unsigned.mp4");
+    const resUnsigned = await exportEpisodeToMp4({
+      workspace: ws2, projectDir: ws2.dirPath, episodeId: epId, outputPath: outUnsigned,
+      exportMode: "formal", runQc: false, requireHumanSignOff: true, projects: store,
+    });
+    expect(resUnsigned.ok).toBe(false);
+    expect(resUnsigned.message).toContain("人工审片确认");
+    expect(existsSync(outUnsigned)).toBe(false);
+
+    // Sign off current snapshot -> formal export succeeds and runs mandatory technical QC!
+    const digest = computeEpisodeExportSnapshotDigest(ws2, epId);
+    store.withProjectDb(created.project.id, (db) => recordEpisodeReviewSignOff(db, epId, digest));
+    const outSigned = path.join(base, "formal-signed.mp4");
+    const resSigned = await exportEpisodeToMp4({
+      workspace: ws2, projectDir: ws2.dirPath, episodeId: epId, outputPath: outSigned,
+      exportMode: "formal", runQc: false, requireHumanSignOff: true, projects: store,
+    });
+    expect(resSigned.ok).toBe(true);
+    expect(resSigned.qcReport?.status).not.toBe("skipped");
+    expect(existsSync(outSigned)).toBe(true);
+
+    store.closeAll();
+  }, 60_000);
 });

@@ -26,6 +26,7 @@ import { buildAudioNormalizationFilter } from "./audio-normalize";
 import { runEpisodeContentAndSubtitleQc, type ContentQcReport } from "./content-qc";
 import {
   beginDeliveryPublishJournal,
+  hasEpisodeReviewSignOff,
   markDeliveryAborted,
   markDeliveryPublished,
   sha256FileHex,
@@ -67,6 +68,7 @@ export async function exportEpisodeToMp4(params: {
   runQc?: boolean;
   exportMode?: ExportMode;
   humanSignedOff?: boolean;
+  requireHumanSignOff?: boolean;
   projects?: ProjectStore;
   seamTransitions?: Record<number, SeamTransitionSpec>;
   onSegmentCacheResult?: (info: { shotId: string; cacheKey: string; cached: boolean }) => void;
@@ -348,42 +350,39 @@ export async function exportEpisodeToMp4(params: {
       );
     }
 
-    // Audit #4: Run technical QC on the staged master BEFORE publishing to final outputPath!
+    // Main-process formal delivery gate: NEVER allow `runQc: false` to bypass technical QC in formal mode.
+    if (effectiveMode === "formal" && params.requireHumanSignOff && params.projects) {
+      const signed = params.projects.withProjectDb(params.workspace.project.id, (db) =>
+        hasEpisodeReviewSignOff(db, params.episodeId, snapshotDigest),
+      );
+      if (!signed) {
+        return {
+          ok: false, exportMode: "formal", snapshotDigest,
+          message: "正式交付前须先完成当前版本的人工审片确认（修改剪点/台词/素材后须重新确认）；可先导出试片。",
+        };
+      }
+    }
+    const mustRunTechQc = effectiveMode === "formal" ? true : params.runQc !== false;
     let qcReport: NonNullable<ExportEpisodeResult["qcReport"]>;
-    if (params.runQc === false) {
+    if (!mustRunTechQc) {
       qcReport = { ...buildSkippedQcReport(actualDuration), snapshotDigest };
     } else {
       assertNotAborted();
       emit(96, "发布前质检", "正在对暂存成片扫描黑屏、静帧、无声与 -16 LUFS 峰值…");
       try {
         const scanned = await runPostExportQc({
-          mp4Path: masterAbs,
-          ffmpegPath,
-          durationSec: actualDuration,
-          hasAudioStream: Boolean(aStream),
-          shotWindows,
-          dialogueIntervals,
-          exemptBlackIntervals,
-          loudnessNormalized: loudnessApplied,
-          signal,
+          mp4Path: masterAbs, ffmpegPath, durationSec: actualDuration, hasAudioStream: Boolean(aStream),
+          shotWindows, dialogueIntervals, exemptBlackIntervals, loudnessNormalized: loudnessApplied, signal,
         });
         qcReport = { ...scanned, snapshotDigest };
       } catch (qcErr) {
-        if (qcErr instanceof MediaProcessAbortedError || signal?.aborted) {
-          throw new MediaProcessAbortedError();
-        }
-        qcReport = {
-          ...buildFailedQcReport(actualDuration, qcErr instanceof Error ? qcErr.message : String(qcErr)),
-          snapshotDigest,
-        };
+        if (qcErr instanceof MediaProcessAbortedError || signal?.aborted) throw new MediaProcessAbortedError();
+        qcReport = { ...buildFailedQcReport(actualDuration, qcErr instanceof Error ? qcErr.message : String(qcErr)), snapshotDigest };
       }
       const blockingTechErr = qcReport.issues.find((i) => i.severity === "error" || i.type === "black");
-      if (params.exportMode === "formal" && (qcReport.status === "failed" || blockingTechErr)) {
+      if (effectiveMode === "formal" && (qcReport.status === "failed" || blockingTechErr)) {
         return {
-          ok: false,
-          exportMode: "formal",
-          snapshotDigest,
-          qcReport,
+          ok: false, exportMode: "formal", snapshotDigest, qcReport,
           message: `正式成片发布前技术质检未通过，已拦截写入最终文件：${blockingTechErr ? blockingTechErr.message : qcReport.summary}`,
         };
       }

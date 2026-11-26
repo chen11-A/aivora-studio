@@ -62,12 +62,14 @@ type Props = {
   mergeAll: boolean;
   allIssues: DeliveryIssueRow[];
   contentQc: EpisodeContentQcResult | null;
+  humanReviewed: boolean;
   queue: DeliveryQueueView | null;
   onClose: () => void;
   onToggleMergeAll: (checked: boolean) => void;
   onRevealPath: (p: string) => void;
   onJumpToIssue: (issue: DeliveryIssueRow) => void;
   onRunContentQc: () => void;
+  onSignOffEpisode: () => void;
 };
 
 export function DeliveryDrawer({
@@ -75,12 +77,14 @@ export function DeliveryDrawer({
   mergeAll,
   allIssues,
   contentQc,
+  humanReviewed,
   queue,
   onClose,
   onToggleMergeAll,
   onRevealPath,
   onJumpToIssue,
   onRunContentQc,
+  onSignOffEpisode,
 }: Props) {
   return (
     <aside className="w-full lg:w-[300px] xl:w-[320px] shrink-0 border-t lg:border-t-0 lg:border-l border-[var(--border-subtle)] bg-[var(--bg-surface)] flex flex-col min-h-0 max-h-[38vh] lg:max-h-none">
@@ -161,6 +165,16 @@ export function DeliveryDrawer({
               ) : (
                 <div className="text-[11px] text-[var(--text-muted)]">点击复查核验当前集台词、说话人与字幕折行安全区</div>
               )}
+              <button
+                type="button"
+                data-testid="delivery-sign-off-episode"
+                disabled={humanReviewed || Boolean(contentQc && !contentQc.ok)}
+                onClick={onSignOffEpisode}
+                className="btn-secondary h-7 px-2 text-[11px] justify-center disabled:opacity-50"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-[var(--accent-success-text)]" />
+                <span>{humanReviewed ? "当前版本已完成人工审片确认" : "确认本集当前版本审片通过"}</span>
+              </button>
             </div>
 
             {allIssues.length === 0 ? (

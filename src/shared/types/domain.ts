@@ -212,6 +212,7 @@ export const ProjectWorkspaceSchema = z.object({
   takes: z.array(TakeSchema),
   jobs: z.array(JobSchema),
   deliveryRecords: z.array(FormalDeliveryRecordSchema).optional(),
+  signedOffEpisodeDigests: z.record(z.string()).optional(),
 });
 export type ProjectWorkspace = z.infer<typeof ProjectWorkspaceSchema>;
 

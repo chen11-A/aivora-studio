@@ -7,7 +7,9 @@ import type {
   RunMultiEpisodeDeliveryInput,
   RunMultiEpisodeDeliveryResult,
 } from "../../shared/types/delivery";
+import { computeEpisodeExportSnapshotDigest } from "../../shared/studio-truth";
 import { runEpisodeContentAndSubtitleQc } from "../media/content-qc";
+import { hasEpisodeReviewSignOff, recordEpisodeReviewSignOff } from "../media/delivery-journal";
 import {
   loadMultiEpisodeQueue,
   runOrResumeMultiEpisodeExport,
@@ -62,6 +64,35 @@ export function registerDeliveryIpcHandlers(deps: DeliveryIpcDeps): void {
         const existingQueue = input.queueId
           ? loadMultiEpisodeQueue(deps.projects, input.projectId, input.queueId)
           : null;
+        const requestedMode = input.exportMode ?? "preview";
+        const effectiveRunQc = requestedMode === "formal" ? true : (input.runQc ?? false);
+
+        // Main-process formal delivery gate: every episode MUST have persisted human sign-off for its current snapshot!
+        if (requestedMode === "formal") {
+          const unsignedTitles: string[] = [];
+          for (const epId of input.episodeIds) {
+            const digest = computeEpisodeExportSnapshotDigest(ws, epId);
+            const signed = deps.projects.withProjectDb(input.projectId, (db) =>
+              hasEpisodeReviewSignOff(db, epId, digest),
+            );
+            if (!signed) {
+              const title = ws.episodes.find((e) => e.id === epId)?.title ?? epId;
+              unsignedTitles.push(title);
+            }
+          }
+          if (unsignedTitles.length > 0) {
+            return {
+              ok: false,
+              queue: existingQueue,
+              rerenderedCount: 0,
+              skippedVerifiedCount: 0,
+              failedEpisodeIds: [],
+              mergedOutputPath: null,
+              message: `正式多集交付已拦截：以下分集尚未完成当前版本的人工审片确认（${unsignedTitles.slice(0, 3).join("、")}）；请先审片确认或改用试片导出。`,
+            };
+          }
+        }
+
         const outputDir = existingQueue?.outputDir
           ? resolveConfinedExportsDir(ws.dirPath, existingQueue.outputDir)
           : resolveConfinedExportsDir(ws.dirPath, input.outputDir);
@@ -74,8 +105,8 @@ export function registerDeliveryIpcHandlers(deps: DeliveryIpcDeps): void {
           episodeIds: input.episodeIds,
           outputDir,
           queueId: input.queueId,
-          exportMode: input.exportMode ?? "preview",
-          runQc: input.runQc ?? false,
+          exportMode: requestedMode,
+          runQc: effectiveRunQc,
           mergeAll: input.mergeAll,
         });
 
@@ -113,11 +144,43 @@ export function registerDeliveryIpcHandlers(deps: DeliveryIpcDeps): void {
     IPC_CHANNELS.DELIVERY_RUN_CONTENT_QC,
     (input: { projectId: string; episodeId: string; humanSignedOff?: boolean }): EpisodeContentQcResult => {
       const ws = deps.projects.openProject(input.projectId);
+      const digest = computeEpisodeExportSnapshotDigest(ws, input.episodeId);
+      const persistedSignedOff = deps.projects.withProjectDb(input.projectId, (db) =>
+        hasEpisodeReviewSignOff(db, input.episodeId, digest),
+      );
       return runEpisodeContentAndSubtitleQc({
         workspace: ws,
         episodeId: input.episodeId,
-        humanSignedOff: input.humanSignedOff,
+        humanSignedOff: persistedSignedOff,
       });
+    },
+  );
+
+  handle(
+    IPC_CHANNELS.DELIVERY_SIGN_OFF_EPISODE,
+    (input: { projectId: string; episodeId: string }) => {
+      const ws = deps.projects.openProject(input.projectId);
+      const contentQc = runEpisodeContentAndSubtitleQc({
+        workspace: ws,
+        episodeId: input.episodeId,
+        humanSignedOff: false,
+      });
+      if (!contentQc.ok) {
+        return {
+          ok: false,
+          snapshotDigest: contentQc.snapshotDigest,
+          message: `当前分集仍有 ${contentQc.errorCount} 项阻塞级内容质检问题，修复后才能确认审片通过。`,
+        };
+      }
+      deps.projects.withProjectDb(input.projectId, (db) => {
+        recordEpisodeReviewSignOff(db, input.episodeId, contentQc.snapshotDigest);
+      });
+      return {
+        ok: true,
+        snapshotDigest: contentQc.snapshotDigest,
+        workspace: deps.projects.openProject(input.projectId),
+        message: "已记录当前版本人工审片确认；如后续修改剪点、台词或素材，该确认将自动失效。",
+      };
     },
   );
 }

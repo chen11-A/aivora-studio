@@ -130,6 +130,8 @@ export type EpisodeExportRunner = (params: {
   outputPath: string;
   exportMode: ExportMode;
   runQc: boolean;
+  projects?: ProjectStore;
+  requireHumanSignOff?: boolean;
 }) => Promise<ExportEpisodeResult>;
 
 /**
@@ -163,6 +165,8 @@ export async function runOrResumeMultiEpisodeExport(input: {
         outputPath: args.outputPath,
         exportMode: args.exportMode,
         runQc: args.runQc,
+        projects: args.projects,
+        requireHumanSignOff: args.requireHumanSignOff,
       }));
 
   mkdirSync(input.outputDir, { recursive: true });
@@ -229,13 +233,16 @@ export async function runOrResumeMultiEpisodeExport(input: {
     }
 
     try {
+      const effectiveRunQc = exportMode === "formal" ? true : runQc;
       const res = await exporter({
         workspace: ws,
         projectDir: ws.dirPath,
         episodeId: item.episodeId,
         outputPath: targetPath,
         exportMode,
-        runQc,
+        runQc: effectiveRunQc,
+        projects: input.projects,
+        requireHumanSignOff: exportMode === "formal",
       });
       rerenderedCount += 1;
       if (res.ok && res.outputPath && existsSync(res.outputPath)) {

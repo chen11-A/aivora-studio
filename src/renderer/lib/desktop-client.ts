@@ -458,6 +458,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       episodeId, snapshotDigest: "preview", ok: true, requiresHumanSignOff: true, humanSignedOff: false,
       errorCount: 0, warnCount: 0, issues: [], highRiskSeamShotIds: [], summary: "浏览器预览模式",
     }),
+    signOffEpisodeReview: async () => ({ ok: false, snapshotDigest: "preview", message: "请在桌面端确认审片" }),
     getBudgetOverview: async (projectId) => ({
       summary: { projectId, maxBudgetCents: 0, settledCents: 0, estimatedSettledCents: 0, reservedCents: 0, unknownHoldCents: 0, unknownHoldCount: 0, remainingCents: null },
       recoveryItems: [],

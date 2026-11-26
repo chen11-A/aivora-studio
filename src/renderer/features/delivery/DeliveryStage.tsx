@@ -143,14 +143,14 @@ export function DeliveryStage() {
     try {
       const canAllFormal = targetIds.every((id) => {
         const card = episodeCards.find((c) => c.ep.id === id);
-        return card ? card.truth.canFormalDeliver : false;
+        return card ? card.truth.canFormalDeliver && card.truth.humanReviewed : false;
       });
       const res = await client.runMultiEpisodeDelivery({
         projectId,
         episodeIds: targetIds,
         mergeAll: resumeQueueId && queueState ? queueState.mergeAll : session.mergeAll,
         exportMode: canAllFormal ? "formal" : "preview",
-        runQc: false,
+        runQc: canAllFormal,
         queueId: resumeQueueId,
       });
       if (res.queue) setQueueState(res.queue);
@@ -420,6 +420,7 @@ export function DeliveryStage() {
             mergeAll={session.mergeAll}
             allIssues={allIssues}
             contentQc={contentQc}
+            humanReviewed={Boolean(activePreviewCard?.truth.humanReviewed)}
             queue={queueState}
             onClose={() => patchSession(projectId, { issuesDrawerOpen: false, settingsDrawerOpen: false })}
             onToggleMergeAll={(checked) => patchSession(projectId, { mergeAll: checked })}
@@ -430,6 +431,15 @@ export function DeliveryStage() {
               void client
                 .runEpisodeContentQc({ projectId, episodeId: activePreviewCard.ep.id })
                 .then(setContentQc);
+            }}
+            onSignOffEpisode={() => {
+              if (!activePreviewCard) return;
+              void client
+                .signOffEpisodeReview({ projectId, episodeId: activePreviewCard.ep.id })
+                .then((res) => {
+                  if (res.workspace) useStudioStore.setState({ workspace: res.workspace });
+                  showToast(res.message);
+                });
             }}
           />
         )}

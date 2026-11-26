@@ -10,7 +10,11 @@ import type {
   Take,
   TakeKind,
 } from "../../shared/types/domain";
-import { listDeliveryRecords, reconcilePendingDeliveryRecords } from "../media/delivery-journal";
+import {
+  listDeliveryRecords,
+  listSignedOffEpisodeDigests,
+  reconcilePendingDeliveryRecords,
+} from "../media/delivery-journal";
 import type { SqliteDriver } from "./sqlite-driver";
 
 export function readWorkspaceFromDb(
@@ -207,5 +211,6 @@ export function readWorkspaceFromDb(
     }));
   }
 
-  return { project, dirPath, episodes, assets, scenes, shots, takes, jobs, deliveryRecords };
+  const signedOffEpisodeDigests = listSignedOffEpisodeDigests(db);
+  return { project, dirPath, episodes, assets, scenes, shots, takes, jobs, deliveryRecords, signedOffEpisodeDigests };
 }

@@ -158,3 +158,66 @@ export function listDeliveryRecords(
       );
   return rows.map(rowToRecord);
 }
+
+function ensureSignOffTable(db: SqliteDriver): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS episode_review_signoffs (
+      episode_id TEXT PRIMARY KEY,
+      snapshot_digest TEXT NOT NULL,
+      signed_at TEXT NOT NULL
+    );
+  `);
+}
+
+function hasSignOffTable(db: SqliteDriver): boolean {
+  return Boolean(
+    db.get<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'episode_review_signoffs'`,
+    ),
+  );
+}
+
+export function recordEpisodeReviewSignOff(
+  db: SqliteDriver,
+  episodeId: string,
+  snapshotDigest: string,
+): { episodeId: string; snapshotDigest: string; signedAt: string } {
+  ensureSignOffTable(db);
+  const signedAt = new Date().toISOString();
+  db.run(
+    `INSERT INTO episode_review_signoffs (episode_id, snapshot_digest, signed_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(episode_id) DO UPDATE SET
+       snapshot_digest = excluded.snapshot_digest,
+       signed_at = excluded.signed_at`,
+    episodeId,
+    snapshotDigest,
+    signedAt,
+  );
+  return { episodeId, snapshotDigest, signedAt };
+}
+
+export function hasEpisodeReviewSignOff(
+  db: SqliteDriver,
+  episodeId: string,
+  currentSnapshotDigest: string,
+): boolean {
+  if (!hasSignOffTable(db)) return false;
+  const row = db.get<{ snapshot_digest: string }>(
+    `SELECT snapshot_digest FROM episode_review_signoffs WHERE episode_id = ?`,
+    episodeId,
+  );
+  return row?.snapshot_digest === currentSnapshotDigest;
+}
+
+export function listSignedOffEpisodeDigests(db: SqliteDriver): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!hasSignOffTable(db)) return result;
+  const rows = db.all<{ episode_id: string; snapshot_digest: string }>(
+    `SELECT episode_id, snapshot_digest FROM episode_review_signoffs`,
+  );
+  for (const row of rows) {
+    if (row.episode_id && row.snapshot_digest) result[row.episode_id] = row.snapshot_digest;
+  }
+  return result;
+}

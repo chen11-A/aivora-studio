@@ -110,6 +110,7 @@ const api: AivoraDesktopApi = {
   loadDeliveryQueue: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.DELIVERY_LOAD_QUEUE, projectId),
   runMultiEpisodeDelivery: (input) => ipcRenderer.invoke(IPC_CHANNELS.DELIVERY_RUN_MULTI_EPISODE, input),
   runEpisodeContentQc: (input) => ipcRenderer.invoke(IPC_CHANNELS.DELIVERY_RUN_CONTENT_QC, input),
+  signOffEpisodeReview: (input) => ipcRenderer.invoke(IPC_CHANNELS.DELIVERY_SIGN_OFF_EPISODE, input),
   getBudgetOverview: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.BUDGET_GET_OVERVIEW, projectId),
   setProjectBudgetCap: (input) => ipcRenderer.invoke(IPC_CHANNELS.BUDGET_SET_CAP, input),
   resumePlannedLedger: (input) => ipcRenderer.invoke(IPC_CHANNELS.BUDGET_RESUME_PLANNED, input),

@@ -341,6 +341,7 @@ export type AivoraDesktopApi = {
   loadDeliveryQueue: (projectId: string) => Promise<DeliveryQueueView | null>;
   runMultiEpisodeDelivery: (input: RunMultiEpisodeDeliveryInput) => Promise<RunMultiEpisodeDeliveryResult>;
   runEpisodeContentQc: (input: { projectId: string; episodeId: string; humanSignedOff?: boolean }) => Promise<EpisodeContentQcResult>;
+  signOffEpisodeReview: (input: { projectId: string; episodeId: string }) => Promise<{ ok: boolean; snapshotDigest: string; workspace?: ProjectWorkspace; message: string }>;
   getBudgetOverview: (projectId: string) => Promise<ProjectBudgetOverview>;
   setProjectBudgetCap: (input: SetProjectBudgetCapInput) => Promise<BudgetSummaryView>;
   resumePlannedLedger: (input: ResumePlannedLedgerInput) => Promise<ResumePlannedLedgerResult>;
@@ -390,6 +391,7 @@ export const IPC_CHANNELS = {
   DELIVERY_LOAD_QUEUE: "aivora:delivery:load-queue",
   DELIVERY_RUN_MULTI_EPISODE: "aivora:delivery:run-multi-episode",
   DELIVERY_RUN_CONTENT_QC: "aivora:delivery:run-content-qc",
+  DELIVERY_SIGN_OFF_EPISODE: "aivora:delivery:sign-off-episode",
   BUDGET_GET_OVERVIEW: "aivora:budget:overview",
   BUDGET_SET_CAP: "aivora:budget:set-cap",
   BUDGET_RESUME_PLANNED: "aivora:budget:resume-planned",
