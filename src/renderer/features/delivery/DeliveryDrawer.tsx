@@ -1,4 +1,4 @@
-import { FolderArchive, FolderOpen, RefreshCw, ShieldCheck, X } from "lucide-react";
+import { FolderOpen, RefreshCw, ShieldCheck, X } from "lucide-react";
 import {
   isSvgPlaceholderPath,
   resolveActiveVisualTake,
@@ -7,11 +7,7 @@ import {
 } from "@shared/media-selection";
 import { deriveEpisodeDeliveryEligibility, type EpisodeDeliveryTruth } from "@shared/studio-truth";
 import type { Episode, ProjectWorkspace, Shot } from "@shared/types/domain";
-import type {
-  DeliveryQueueView,
-  EpisodeContentQcResult,
-  ExportFinishingPackResult,
-} from "@shared/types/delivery";
+import type { DeliveryQueueView, EpisodeContentQcResult } from "@shared/types/delivery";
 
 export type DeliveryIssueRow = {
   id: string;
@@ -64,15 +60,11 @@ export function buildDeliveryEpisodeCards(
 type Props = {
   settingsOpen: boolean;
   mergeAll: boolean;
-  activeEpisodeTitle: string | null;
   allIssues: DeliveryIssueRow[];
   contentQc: EpisodeContentQcResult | null;
   queue: DeliveryQueueView | null;
-  packingBusy: boolean;
-  packResult: ExportFinishingPackResult | null;
   onClose: () => void;
   onToggleMergeAll: (checked: boolean) => void;
-  onExportFinishingPack: () => void;
   onRevealPath: (p: string) => void;
   onJumpToIssue: (issue: DeliveryIssueRow) => void;
   onRunContentQc: () => void;
@@ -81,15 +73,11 @@ type Props = {
 export function DeliveryDrawer({
   settingsOpen,
   mergeAll,
-  activeEpisodeTitle,
   allIssues,
   contentQc,
   queue,
-  packingBusy,
-  packResult,
   onClose,
   onToggleMergeAll,
-  onExportFinishingPack,
   onRevealPath,
   onJumpToIssue,
   onRunContentQc,
@@ -98,7 +86,7 @@ export function DeliveryDrawer({
     <aside className="w-full lg:w-[300px] xl:w-[320px] shrink-0 border-t lg:border-t-0 lg:border-l border-[var(--border-subtle)] bg-[var(--bg-surface)] flex flex-col min-h-0 max-h-[38vh] lg:max-h-none">
       <div className="px-3.5 py-2.5 border-b border-[var(--border-subtle)] flex items-center justify-between shrink-0">
         <span className="text-[12px] font-semibold text-[var(--text-primary)]">
-          {settingsOpen ? "导出方式与精剪素材包" : `跨集问题清单（${allIssues.length}）`}
+          {settingsOpen ? "多集导出设置与队列状态" : `跨集问题清单（${allIssues.length}）`}
         </span>
         <button
           type="button"
@@ -147,47 +135,6 @@ export function DeliveryDrawer({
                 )}
               </div>
             )}
-
-            <div className="rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] p-3 flex flex-col gap-2">
-              <div className="font-medium text-[var(--text-primary)] flex items-center gap-1.5">
-                <FolderArchive className="w-3.5 h-3.5 text-[var(--accent-primary-text)]" />
-                <span>标准精剪素材包（F18）</span>
-              </div>
-              <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
-                导出可重连媒体、4 条独立 48kHz WAV 分轨（对白/环境/音效/配乐）、UTF-8 SRT、有理数帧率 EDL/JSON 与 SHA-256 清单，不含任何密钥。
-              </p>
-              <button
-                type="button"
-                data-testid="delivery-export-finishing-pack"
-                disabled={packingBusy || !activeEpisodeTitle}
-                onClick={onExportFinishingPack}
-                className="btn-secondary h-8 px-2.5 text-[12px] justify-center"
-              >
-                <FolderArchive className="w-3.5 h-3.5" />
-                <span>{packingBusy ? "正在打包精剪包…" : `导出「${activeEpisodeTitle ?? "当前集"}」精剪包`}</span>
-              </button>
-              {packResult && (
-                <div
-                  data-testid="delivery-finishing-pack-result"
-                  className={`text-[11px] rounded-lg p-2 border ${
-                    packResult.ok
-                      ? "bg-[var(--accent-success-soft)] border-[var(--accent-success)]/30 text-[var(--accent-success-text)]"
-                      : "bg-[var(--accent-danger-soft)] border-[var(--accent-danger)]/30 text-[var(--accent-danger-text)]"
-                  }`}
-                >
-                  <div>{packResult.message}</div>
-                  {packResult.ok && packResult.packDir && (
-                    <button
-                      type="button"
-                      onClick={() => onRevealPath(packResult.packDir!)}
-                      className="mt-1 underline cursor-pointer"
-                    >
-                      在文件夹中查看
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
           </>
         ) : (
           <>

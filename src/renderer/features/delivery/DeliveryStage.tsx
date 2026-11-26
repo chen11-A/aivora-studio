@@ -6,18 +6,12 @@ import {
   CheckCircle2,
   Download,
   Film,
-  Grid2x2,
   ListChecks,
   RotateCcw,
   SlidersHorizontal,
 } from "lucide-react";
 import { isVideoMediaPath, resolveActiveVisualTake } from "@shared/media-selection";
-import type {
-  DeliveryQueueView,
-  EpisodeContentQcResult,
-  ExportFinishingPackResult,
-  GenerateContactSheetResult,
-} from "@shared/types/delivery";
+import type { DeliveryQueueView, EpisodeContentQcResult } from "@shared/types/delivery";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useDeliveryStore, type DeliveryFilterMode } from "../../store/useDeliveryStore";
 import { useStudioStore } from "../../store/useStudioStore";
@@ -44,11 +38,7 @@ export function DeliveryStage() {
   const [queueState, setQueueState] = useState<DeliveryQueueView | null>(null);
   const [queueMessage, setQueueMessage] = useState<string>("");
   const [exportRunning, setExportRunning] = useState(false);
-  const [packingBusy, setPackingBusy] = useState(false);
-  const [packResult, setPackResult] = useState<ExportFinishingPackResult | null>(null);
   const [contentQc, setContentQc] = useState<EpisodeContentQcResult | null>(null);
-  const [contactSheet, setContactSheet] = useState<GenerateContactSheetResult | null>(null);
-  const [csBusy, setCsBusy] = useState(false);
 
   const projectId = workspace?.project.id ?? "";
   const rawEpisodeIds = useMemo(
@@ -109,7 +99,6 @@ export function DeliveryStage() {
     episodeCards.find((c) => c.ep.id === session.previewEpisodeId) ?? episodeCards[0] ?? null;
 
   useEffect(() => {
-    setContactSheet(null);
     if (!projectId || !activePreviewCard) return;
     let cancelled = false;
     void getDesktopClient()
@@ -172,42 +161,16 @@ export function DeliveryStage() {
     }
   }
 
-  async function handleExportFinishingPack() {
-    if (!activePreviewCard) return;
-    setPackingBusy(true);
-    try {
-      const res = await client.exportFinishingPack({
-        projectId,
-        episodeId: activePreviewCard.ep.id,
-        fps: "30/1",
-      });
-      setPackResult(res);
-      showToast(res.message);
-    } finally {
-      setPackingBusy(false);
-    }
-  }
-
-  async function handleGenerateContactSheet() {
-    if (!previewShot) return;
-    setCsBusy(true);
-    try {
-      const res = await client.generateContactSheet({ projectId, shotId: previewShot.id, frameCount: 9, cols: 3 });
-      setContactSheet(res);
-      if (!res.ok) showToast(res.message);
-    } finally {
-      setCsBusy(false);
-    }
-  }
-
-  const eligibilityLabel = (e: string) =>
-    e === "deliverable"
-      ? "可交付"
-      : e === "preview_only"
-        ? "仅可试片"
-        : e === "ready_for_review" || e === "unchecked"
-          ? "素材齐待审"
-          : "待处理";
+  const eligibilityLabel = (truth: { eligibility: string; formallyDelivered: boolean }) =>
+    truth.formallyDelivered
+      ? "已正式交付"
+      : truth.eligibility === "deliverable"
+        ? "可交付"
+        : truth.eligibility === "preview_only"
+          ? "仅可试片"
+          : truth.eligibility === "ready_for_review" || truth.eligibility === "unchecked"
+            ? "素材齐待审"
+            : "待处理";
 
   return (
     <div className="h-full w-full flex flex-col min-h-0 overflow-hidden bg-[var(--bg-canvas)]" data-testid="delivery-stage">
@@ -267,7 +230,7 @@ export function DeliveryStage() {
             className={`btn-secondary h-8 px-2.5 text-[12px] ${session.settingsDrawerOpen ? "border-[var(--accent-primary)]" : ""}`}
           >
             <SlidersHorizontal className="w-3.5 h-3.5" />
-            <span>导出与精剪包</span>
+            <span>导出设置</span>
           </button>
           <button
             type="button"
@@ -325,6 +288,7 @@ export function DeliveryStage() {
                   <div className="flex items-start gap-2">
                     <input
                       type="checkbox"
+                      data-testid={`delivery-check-${card.ep.id}`}
                       checked={checked}
                       onClick={(e) => e.stopPropagation()}
                       onChange={() => toggleEpisodeSelected(projectId, card.ep.id)}
@@ -352,7 +316,7 @@ export function DeliveryStage() {
                           ) : (
                             <AlertTriangle className="w-3 h-3" />
                           )}
-                          {eligibilityLabel(card.truth.eligibility)}
+                          {eligibilityLabel(card.truth)}
                         </span>
                         {qItem && (
                           <span
@@ -374,6 +338,7 @@ export function DeliveryStage() {
                       <button
                         type="button"
                         aria-label="上移分集"
+                        data-testid={`delivery-move-up-${card.ep.id}`}
                         disabled={idx === 0}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -386,6 +351,7 @@ export function DeliveryStage() {
                       <button
                         type="button"
                         aria-label="下移分集"
+                        data-testid={`delivery-move-down-${card.ep.id}`}
                         disabled={idx === filteredCards.length - 1}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -403,7 +369,7 @@ export function DeliveryStage() {
           </div>
         </section>
 
-        {/* Center: Cross-Episode Preview + ContactSheet inspection */}
+        {/* Center: Cross-Episode Preview */}
         <section className="flex-1 min-w-0 min-h-0 flex flex-col p-4 gap-3 overflow-hidden">
           {activePreviewCard ? (
             <>
@@ -416,33 +382,12 @@ export function DeliveryStage() {
                     {activePreviewCard.truth.reason}
                   </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {previewShot && isVideoMediaPath(previewTake?.mediaPath) && (
-                    <button
-                      type="button"
-                      data-testid="delivery-contact-sheet-btn"
-                      disabled={csBusy}
-                      onClick={() => void handleGenerateContactSheet()}
-                      className="btn-secondary h-7 px-2 text-[11px]"
-                    >
-                      <Grid2x2 className="w-3.5 h-3.5" />
-                      <span>{csBusy ? "生成中…" : "帧网格抽查"}</span>
-                    </button>
-                  )}
-                  <span className="text-[11px] text-[var(--text-muted)] tabular-nums">
-                    {activePreviewCard.shots.length} 镜 · {activePreviewCard.totalSec}s
-                  </span>
-                </div>
+                <span className="text-[11px] text-[var(--text-muted)] tabular-nums shrink-0">
+                  {activePreviewCard.shots.length} 镜 · {activePreviewCard.totalSec}s
+                </span>
               </div>
               <div className="flex-1 min-h-0 flex items-center justify-center bg-[var(--bg-surface)] rounded-xl border border-[var(--border-subtle)] overflow-hidden">
-                {contactSheet?.ok && contactSheet.relativeMediaPath ? (
-                  <img
-                    data-testid="delivery-contact-sheet-img"
-                    src={client.mediaUrl(workspace.project.id, contactSheet.relativeMediaPath)}
-                    alt="带时间戳帧网格"
-                    className="w-full h-full object-contain"
-                  />
-                ) : previewSrc && isVideoMediaPath(previewTake?.mediaPath) ? (
+                {previewSrc && isVideoMediaPath(previewTake?.mediaPath) ? (
                   <video
                     ref={videoRef}
                     key={previewTake?.id}
@@ -473,15 +418,11 @@ export function DeliveryStage() {
           <DeliveryDrawer
             settingsOpen={session.settingsDrawerOpen}
             mergeAll={session.mergeAll}
-            activeEpisodeTitle={activePreviewCard?.ep.title ?? null}
             allIssues={allIssues}
             contentQc={contentQc}
             queue={queueState}
-            packingBusy={packingBusy}
-            packResult={packResult}
             onClose={() => patchSession(projectId, { issuesDrawerOpen: false, settingsDrawerOpen: false })}
             onToggleMergeAll={(checked) => patchSession(projectId, { mergeAll: checked })}
-            onExportFinishingPack={() => void handleExportFinishingPack()}
             onRevealPath={(p) => void client.revealPathInFolder(p)}
             onJumpToIssue={(issue) => void handleJumpToIssue(issue)}
             onRunContentQc={() => {
