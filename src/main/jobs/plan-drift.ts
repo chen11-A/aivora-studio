@@ -82,7 +82,8 @@ export function detectGenerationPlanDrift(
     shot,
     plan.kind === "video" ? (confirmedFirstFrame?.mediaPath ?? null) : null,
   );
-  if (prepared.finalPrompt !== locked.finalPrompt) reasons.push("提示词");
+  const lockedBasePrompt = locked.finalPrompt.split("\n[场记与连戏约束]")[0] ?? locked.finalPrompt;
+  if (prepared.finalPrompt !== lockedBasePrompt) reasons.push("提示词");
   if (shot.negativePrompt !== locked.negativePrompt) reasons.push("反向提示词");
   if (plan.kind === "video" && shot.durationSec !== locked.durationSec) reasons.push("时长");
   if (ws.project.aspectRatio !== locked.aspectRatio) reasons.push("画幅比例");

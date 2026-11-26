@@ -9,6 +9,7 @@ import { clampSeedanceDurationSec } from "../providers/seedance-adapter";
 import type { GlobalConfigStore } from "../storage/global-store";
 import type { ProjectStore } from "../storage/project-store";
 import { hasPendingJobForInputInDb, type LockedProviderSnapshot } from "./job-persistence";
+import { evaluateLivePreprodForShot, runLiveVideoProviderPreflight } from "./live-preprod-gate";
 
 export function buildGenerationPlan(params: {
   projects: ProjectStore;
@@ -47,6 +48,10 @@ export function buildGenerationPlan(params: {
         primaryReferenceMediaPath: null,
         primaryReferenceMediaSha256: null,
       };
+
+  const preprod = shot
+    ? evaluateLivePreprodForShot({ projects, workspace: ws, shot, kind: input.kind })
+    : { blockingReason: null, continuityPromptSuffix: "", lipsyncRequired: false, inheritTailFromShotId: null };
 
   const capability: CapabilityKey =
     input.kind === "speech" ? "tts" : input.kind === "video" ? "video" : "image";
@@ -105,6 +110,25 @@ export function buildGenerationPlan(params: {
     else if (policy.notice) modelPolicyNotice = policy.notice;
   }
 
+  // Audit #3 / M01-M04: Run official provider preflight contract checks (0 network calls on violation)
+  if (!blockingReason && shot && input.kind === "video" && modelId) {
+    const preflight = runLiveVideoProviderPreflight({
+      protocol,
+      modelId,
+      aspectRatio: ws.project.aspectRatio,
+      durationSec: shot.durationSec,
+      hasFirstFrame: Boolean(confirmedFirstFrame || prepared.primaryReferenceMediaPath),
+      subjectImageCount: prepared.orderedReferenceItems.length,
+    });
+    if (!preflight.ok) blockingReason = preflight.reason;
+    else if (preflight.notice && !modelPolicyNotice) modelPolicyNotice = preflight.notice;
+  }
+
+  // Audit #3: Enforce active v2 pre-production stage gate (animatic & art-lock) before live video dispatch
+  if (!blockingReason && preprod.blockingReason) {
+    blockingReason = preprod.blockingReason;
+  }
+
   const missingRequiredRefs = input.kind === "speech" || isPortrait ? [] : prepared.missingRequiredRefs;
   if (!blockingReason && missingRequiredRefs.length > 0) {
     blockingReason = missingRequiredRefs[0]?.reason ?? "必需参考图缺失";
@@ -126,7 +150,7 @@ export function buildGenerationPlan(params: {
   const promptPreview =
     shot && input.kind === "speech"
       ? shot.dialogue.trim() || shot.subtitle.trim()
-      : prepared.finalPrompt;
+      : `${prepared.finalPrompt}${preprod.continuityPromptSuffix}`;
   const speechVoice =
     shot && input.kind === "speech" ? resolveShotSpeechVoiceId(shot, ws.assets) : "";
   const lockedInput: LockedGenerationInput = {

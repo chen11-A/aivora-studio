@@ -372,7 +372,7 @@ describe("GenerationJobQueue anti-duplicate-charge guarantees", () => {
     expect(activeDuringFetch).toBe(true);
     expect(queue.hasActiveJobs()).toBe(false);
     expect(res.ok).toBe(false);
-    expect(res.job.status).toBe("failed");
+    expect(res.job.status).toBe("unknown");
     expect(res.message).toContain("上游可能已完成扣费");
     expect(res.message).toContain("绝不会自动重发");
 
