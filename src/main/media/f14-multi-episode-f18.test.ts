@@ -77,7 +77,23 @@ describe("F14 Content QC, 10-Episode Multi-Episode Resume Gate, and F18 Standard
         "-hide_banner", "-nostdin", "-y",
         "-i", sampleMp4, "-c", "copy", args.outputPath,
       ]);
-      return { ok: true, outputPath: args.outputPath, durationSec: 0.6, message: "ok" };
+      return {
+        ok: true,
+        outputPath: args.outputPath,
+        durationSec: 0.6,
+        qcReport: {
+          ok: true,
+          status: "passed" as const,
+          checkedAt: new Date().toISOString(),
+          durationSec: 0.6,
+          integratedLufs: -16,
+          truePeakDbtp: -1.5,
+          loudnessNormalized: false,
+          issues: [],
+          summary: "mock passed",
+        },
+        message: "ok",
+      };
     };
 
     // Run 1: Episode 3 fails; Episodes 1,2,4..10 succeed and persist SHA-256
@@ -129,6 +145,100 @@ describe("F14 Content QC, 10-Episode Multi-Episode Resume Gate, and F18 Standard
 
     store2.closeAll();
   }, 45_000);
+
+  it("multi-episode resume NEVER reuses a preview MP4 when resuming the same queueId in formal mode, and reuses only verified formal QC outputs", async () => {
+    const ff = await probeFfmpegStatus();
+    expect(ff.available).toBe(true);
+    const ffmpeg = ff.ffmpegPath!;
+    const { computeEpisodeExportSnapshotDigest } = await import("../../shared/studio-truth");
+    const { recordEpisodeReviewSignOff } = await import("./delivery-journal");
+
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-resume-mode-gate-"));
+    tempDirs.push(base);
+    const store = new ProjectStore(path.join(base, "ws"));
+    const outDir = path.join(base, "exports");
+
+    const validMp4 = path.join(base, "valid-2s.mp4");
+    await runMediaBinary(ffmpeg, [
+      "-hide_banner", "-nostdin", "-y",
+      "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24:duration=2",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+      "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+      validMp4,
+    ]);
+
+    const created = store.createProject({ name: "试片升级正式续跑校验", aspectRatio: "16:9" });
+    const epId = created.episodes[0]!.id;
+    const shotId = created.shots[0]!.id;
+    store.updateShot({
+      projectId: created.project.id,
+      shotId,
+      durationSec: 2,
+      dialogue: "",
+      subtitle: "",
+      speakerStatus: "confirmed",
+    });
+    store.importShotTakeFromPath({
+      projectId: created.project.id,
+      shotId,
+      kind: "video",
+      sourceFilePath: validMp4,
+    });
+
+    // 1. Run in preview mode (runQc: false) -> writes preview MP4 without technical QC
+    const previewRun = await runOrResumeMultiEpisodeExport({
+      projects: store,
+      projectId: created.project.id,
+      episodeIds: [epId],
+      outputDir: outDir,
+      exportMode: "preview",
+      runQc: false,
+      mergeAll: false,
+    });
+    expect(previewRun.ok).toBe(true);
+    expect(previewRun.rerenderedCount).toBe(1);
+    expect(previewRun.queue.items[0]?.exportMode).toBe("preview");
+    expect(previewRun.queue.items[0]?.qcVerified).toBe(false);
+    const previewFile = previewRun.queue.items[0]!.outputPath!;
+
+    // 2. Sign off the episode, then resume the SAME queueId in formal mode -> MUST NOT reuse preview file!
+    const wsSigned = store.openProject(created.project.id);
+    const digest = computeEpisodeExportSnapshotDigest(wsSigned, epId);
+    store.withProjectDb(created.project.id, (db) => recordEpisodeReviewSignOff(db, epId, digest));
+
+    const formalUpgrade = await runOrResumeMultiEpisodeExport({
+      projects: store,
+      projectId: created.project.id,
+      episodeIds: [epId],
+      outputDir: outDir,
+      queueId: previewRun.queue.queueId,
+      exportMode: "formal",
+      runQc: false,
+      mergeAll: false,
+    });
+    expect(formalUpgrade.ok).toBe(true);
+    expect(formalUpgrade.skippedVerifiedCount).toBe(0);
+    expect(formalUpgrade.rerenderedCount).toBe(1);
+    expect(formalUpgrade.queue.items[0]?.exportMode).toBe("formal");
+    expect(formalUpgrade.queue.items[0]?.qcVerified).toBe(true);
+    expect(formalUpgrade.queue.items[0]?.outputPath).not.toBe(previewFile);
+
+    // 3. Resume the SAME queueId in formal mode again -> NOW it reuses the verified formal QC output!
+    const formalReuse = await runOrResumeMultiEpisodeExport({
+      projects: store,
+      projectId: created.project.id,
+      episodeIds: [epId],
+      outputDir: outDir,
+      queueId: previewRun.queue.queueId,
+      exportMode: "formal",
+      mergeAll: false,
+    });
+    expect(formalReuse.ok).toBe(true);
+    expect(formalReuse.skippedVerifiedCount).toBe(1);
+    expect(formalReuse.rerenderedCount).toBe(0);
+
+    store.closeAll();
+  }, 60_000);
 
   it("F14 + F18: runs snapshot-bound content/subtitle QC without auto-approving, and exports clean Standard Finishing Pack with 4 WAV stems, SRT, EDL/JSON, verified checksums, and zero credentials", async () => {
     const ff = await probeFfmpegStatus();

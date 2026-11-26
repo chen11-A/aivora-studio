@@ -10,7 +10,11 @@ import {
 } from "../../shared/studio-truth";
 import { createVerifiedRollingBackup, listVerifiedBackups } from "../storage/backup-manager";
 import { ProjectStore } from "../storage/project-store";
-import { listDeliveryRecords, reconcilePendingDeliveryRecords } from "./delivery-journal";
+import {
+  listDeliveryRecords,
+  reconcilePendingDeliveryRecords,
+  recordEpisodeReviewSignOff,
+} from "./delivery-journal";
 import { exportEpisodeToMp4 } from "./export-pipeline";
 import { probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
 
@@ -289,6 +293,9 @@ describe("F05 exclusive export publish, A03 stale-report guard, A04 archive safe
       sourceFilePath: blackMp4,
     });
     const wsBlack = store.openProject(created.project.id);
+    store.withProjectDb(created.project.id, (db) =>
+      recordEpisodeReviewSignOff(db, epId, computeEpisodeExportSnapshotDigest(wsBlack, epId)),
+    );
     const blockedTechOut = path.join(base, "out", "黑屏拦截.mp4");
     const techBlocked = await exportEpisodeToMp4({
       workspace: wsBlack,
@@ -319,6 +326,9 @@ describe("F05 exclusive export publish, A03 stale-report guard, A04 archive safe
       sourceFilePath: goodMp4,
     });
     const wsGood = store.openProject(created.project.id);
+    store.withProjectDb(created.project.id, (db) =>
+      recordEpisodeReviewSignOff(db, epId, computeEpisodeExportSnapshotDigest(wsGood, epId)),
+    );
     const crashOut = path.join(base, "out", "发布后崩溃可恢复.mp4");
     const crashRes = await exportEpisodeToMp4({
       workspace: wsGood,
@@ -426,8 +436,11 @@ describe("F05 exclusive export publish, A03 stale-report guard, A04 archive safe
     });
 
     const ws1 = store.openProject(created.project.id);
+    store.withProjectDb(created.project.id, (db) =>
+      recordEpisodeReviewSignOff(db, epId, computeEpisodeExportSnapshotDigest(ws1, epId)),
+    );
     const outBlockedByQc = path.join(base, "formal-skip-qc-attempt.mp4");
-    // Even with runQc: false, formal mode MUST run technical QC and block black frame BEFORE creating outputPath!
+    // Even with runQc: false and valid sign-off, formal mode MUST run technical QC and block black frame BEFORE creating outputPath!
     const res1 = await exportEpisodeToMp4({
       workspace: ws1, projectDir: ws1.dirPath, episodeId: epId, outputPath: outBlockedByQc,
       exportMode: "formal", runQc: false, projects: store,
@@ -436,7 +449,7 @@ describe("F05 exclusive export publish, A03 stale-report guard, A04 archive safe
     expect(existsSync(outBlockedByQc)).toBe(false);
     expect(res1.qcReport?.status).not.toBe("skipped");
 
-    // 2. Replace with a valid non-black 2s clip, require persisted human sign-off -> blocked until signed off!
+    // 2. Replace with a valid non-black 2s clip -> single-episode formal path (even WITHOUT explicit requireHumanSignOff) MUST block until signed off!
     const validRel = "assets/valid-2s.mp4";
     const validAbs = path.join(created.dirPath, validRel);
     await runMediaBinary(ff.ffmpegPath, [
@@ -457,7 +470,7 @@ describe("F05 exclusive export publish, A03 stale-report guard, A04 archive safe
     const outUnsigned = path.join(base, "formal-unsigned.mp4");
     const resUnsigned = await exportEpisodeToMp4({
       workspace: ws2, projectDir: ws2.dirPath, episodeId: epId, outputPath: outUnsigned,
-      exportMode: "formal", runQc: false, requireHumanSignOff: true, projects: store,
+      exportMode: "formal", runQc: false, projects: store,
     });
     expect(resUnsigned.ok).toBe(false);
     expect(resUnsigned.message).toContain("人工审片确认");
@@ -469,7 +482,7 @@ describe("F05 exclusive export publish, A03 stale-report guard, A04 archive safe
     const outSigned = path.join(base, "formal-signed.mp4");
     const resSigned = await exportEpisodeToMp4({
       workspace: ws2, projectDir: ws2.dirPath, episodeId: epId, outputPath: outSigned,
-      exportMode: "formal", runQc: false, requireHumanSignOff: true, projects: store,
+      exportMode: "formal", runQc: false, projects: store,
     });
     expect(resSigned.ok).toBe(true);
     expect(resSigned.qcReport?.status).not.toBe("skipped");

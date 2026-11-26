@@ -296,10 +296,12 @@ export function registerIpcHandlers(deps: {
         const w = deps.getWindow();
         if (w && !w.isDestroyed()) w.webContents.send(IPC_CHANNELS.EXPORT_PROGRESS_EVENT, event);
       };
+      const requestedMode: ExportMode = input.exportMode ?? "formal";
       const res = await deps.exportGuard.runGuarded((signal) =>
         exportEpisodeToMp4({
           workspace, projectDir, episodeId: input.episodeId, outputPath: chosen.filePath!,
-          runQc: input.runQc, exportMode: input.exportMode, projects: deps.projects, onProgress: emitProgress, signal,
+          runQc: requestedMode === "formal" ? true : input.runQc, exportMode: requestedMode,
+          requireHumanSignOff: requestedMode === "formal", projects: deps.projects, onProgress: emitProgress, signal,
         }),
       );
       if (res.ok && res.outputPath) allowedRevealPaths.add(path.resolve(res.outputPath));

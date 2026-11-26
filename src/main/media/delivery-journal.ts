@@ -221,3 +221,26 @@ export function listSignedOffEpisodeDigests(db: SqliteDriver): Record<string, st
   }
   return result;
 }
+
+/**
+ * Verifies that a published formal delivery record exists in SQLite for the exact
+ * (projectId, episodeId, snapshotDigest, outputSha256) tuple AND passed both content QC
+ * and technical QC (not skipped, not failed, zero blocking errors or black-frame alerts).
+ */
+export function hasPassedFormalDeliveryRecord(
+  db: SqliteDriver,
+  projectId: string,
+  episodeId: string,
+  snapshotDigest: string,
+  outputSha256: string,
+): boolean {
+  const records = listDeliveryRecords(db, projectId, episodeId);
+  return records.some((rec) => {
+    if (rec.status !== "published" || rec.exportMode !== "formal") return false;
+    if (rec.snapshotDigest !== snapshotDigest || rec.outputSha256 !== outputSha256) return false;
+    if (!rec.contentQc || !rec.contentQc.ok) return false;
+    if (!rec.techQc || rec.techQc.status === "failed" || rec.techQc.status === "skipped") return false;
+    const hasBlockingTech = rec.techQc.issues.some((i) => i.severity === "error" || i.type === "black");
+    return !hasBlockingTech;
+  });
+}

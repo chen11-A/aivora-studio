@@ -117,13 +117,19 @@ export async function exportEpisodeToMp4(params: {
   const effectiveMode: ExportMode =
     params.exportMode ?? (placeholderShots.length > 0 ? "preview" : "formal");
   const snapshotDigest = computeEpisodeExportSnapshotDigest(params.workspace, params.episodeId);
+  const persistedSignedOff = Boolean(
+    params.projects &&
+      params.projects.withProjectDb(params.workspace.project.id, (db) =>
+        hasEpisodeReviewSignOff(db, params.episodeId, snapshotDigest),
+      ),
+  );
   const contentQc: ContentQcReport = runEpisodeContentAndSubtitleQc({
     workspace: params.workspace,
     episodeId: params.episodeId,
-    humanSignedOff: params.humanSignedOff,
+    humanSignedOff: params.projects ? persistedSignedOff : params.humanSignedOff,
   });
 
-  if (params.exportMode === "formal" && placeholderShots.length > 0) {
+  if (effectiveMode === "formal" && placeholderShots.length > 0) {
     return {
       ok: false,
       exportMode: "formal",
@@ -132,13 +138,23 @@ export async function exportEpisodeToMp4(params: {
     };
   }
 
-  if (params.exportMode === "formal" && contentQc.errorCount > 0) {
+  if (effectiveMode === "formal" && contentQc.errorCount > 0) {
     const firstErr = contentQc.issues.find((i) => i.severity === "error");
     return {
       ok: false,
       exportMode: "formal",
       snapshotDigest,
       message: `正式交付内容质检未通过（共 ${contentQc.errorCount} 项阻塞错误，未写入最终成片）：${firstErr ? `第 ${firstErr.shotIndex} 镜「${firstErr.shotTitle}」${firstErr.message}` : contentQc.summary}`,
+    };
+  }
+
+  // Main-process formal delivery gate: enforce persisted same-snapshot human sign-off by default whenever projects is present.
+  if (effectiveMode === "formal" && params.projects && params.requireHumanSignOff !== false && !persistedSignedOff) {
+    return {
+      ok: false,
+      exportMode: "formal",
+      snapshotDigest,
+      message: "正式交付前须先完成当前版本的人工审片确认（修改剪点/台词/素材后须重新确认）；可先导出试片。",
     };
   }
 
@@ -351,17 +367,6 @@ export async function exportEpisodeToMp4(params: {
     }
 
     // Main-process formal delivery gate: NEVER allow `runQc: false` to bypass technical QC in formal mode.
-    if (effectiveMode === "formal" && params.requireHumanSignOff && params.projects) {
-      const signed = params.projects.withProjectDb(params.workspace.project.id, (db) =>
-        hasEpisodeReviewSignOff(db, params.episodeId, snapshotDigest),
-      );
-      if (!signed) {
-        return {
-          ok: false, exportMode: "formal", snapshotDigest,
-          message: "正式交付前须先完成当前版本的人工审片确认（修改剪点/台词/素材后须重新确认）；可先导出试片。",
-        };
-      }
-    }
     const mustRunTechQc = effectiveMode === "formal" ? true : params.runQc !== false;
     let qcReport: NonNullable<ExportEpisodeResult["qcReport"]>;
     if (!mustRunTechQc) {

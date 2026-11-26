@@ -39,12 +39,19 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
   const [canceling, setCanceling] = useState(false);
   const [runQc, setRunQc] = useState(true);
   const [exportMode, setExportMode] = useState<ExportMode>("formal");
+  const [signingOff, setSigningOff] = useState(false);
+  const [signOffNote, setSignOffNote] = useState<string | null>(null);
 
   const episodeId = activeEpisodeId ?? workspace?.episodes[0]?.id ?? null;
 
   const liveSnapshotDigest = useMemo(
     () => (workspace && episodeId ? computeEpisodeExportSnapshotDigest(workspace, episodeId) : null),
     [workspace, episodeId],
+  );
+  const isHumanSignedOff = Boolean(
+    episodeId &&
+      liveSnapshotDigest &&
+      workspace?.signedOffEpisodeDigests?.[episodeId] === liveSnapshotDigest,
   );
   const deliveryTruth = useMemo(
     () =>
@@ -64,7 +71,8 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
     } else if (deliveryTruth?.canFormalDeliver) {
       setExportMode("formal");
     }
-  }, [deliveryTruth?.canFormalDeliver, deliveryTruth?.canPreviewExport, open]);
+    setSignOffNote(null);
+  }, [deliveryTruth?.canFormalDeliver, deliveryTruth?.canPreviewExport, open, episodeId]);
 
   useEffect(() => {
     if (!open || !workspace || !episodeId) {
@@ -98,12 +106,37 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
   const preflightWarnings = preflight?.warnings ?? [];
   const formalBlockedByPlaceholder =
     exportMode === "formal" && Boolean(deliveryTruth && deliveryTruth.svgPlaceholderCount > 0);
+  const formalBlockedBySignOff = exportMode === "formal" && !isHumanSignedOff;
   const blocked =
-    !readiness.canExport || !ffReady || preflightBlocking.length > 0 || formalBlockedByPlaceholder;
+    !readiness.canExport ||
+    !ffReady ||
+    preflightBlocking.length > 0 ||
+    formalBlockedByPlaceholder ||
+    formalBlockedBySignOff;
   const qcReport = lastExportResult?.qcReport;
   const qcIsStale = Boolean(
     qcReport && liveSnapshotDigest && !isExportQcReportCurrent(qcReport, liveSnapshotDigest),
   );
+
+  async function handleSignOffEpisode() {
+    if (!workspace || !episodeId || signingOff) return;
+    setSigningOff(true);
+    setSignOffNote(null);
+    try {
+      const res = await getDesktopClient().signOffEpisodeReview({
+        projectId: workspace.project.id,
+        episodeId,
+      });
+      if (res.ok && res.workspace) {
+        useStudioStore.setState({ workspace: res.workspace });
+      }
+      setSignOffNote(res.message);
+    } catch (err) {
+      setSignOffNote(`确认审片失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSigningOff(false);
+    }
+  }
 
   async function handleCancelExport() {
     setCanceling(true);
@@ -216,6 +249,27 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
                           : "已就绪"}
                 </span>
               </div>
+              {exportMode === "formal" && (
+                <div className="flex items-center justify-between gap-2 pt-1 border-t border-[var(--border-subtle)]">
+                  <span>人工审片确认</span>
+                  {isHumanSignedOff ? (
+                    <span data-testid="export-modal-signed-badge" className="text-[var(--accent-success-text)] font-medium">
+                      当前版本已审片确认
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={exporting || signingOff || !episodeId || formalBlockedByPlaceholder}
+                      data-testid="export-modal-signoff-btn"
+                      onClick={() => void handleSignOffEpisode()}
+                      className="btn-secondary h-6 px-2 text-[11px]"
+                    >
+                      {signingOff ? "正在核验…" : "确认当前版本审片通过"}
+                    </button>
+                  )}
+                </div>
+              )}
+              {signOffNote && <div className="text-[11px] text-[var(--text-primary)]">{signOffNote}</div>}
             </div>
 
             {blocked && (
@@ -229,7 +283,9 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
                         ? deliveryTruth?.reason
                         : !readiness.canExport
                           ? readiness.blockingReason
-                          : preflightBlocking[0]}
+                          : preflightBlocking.length > 0
+                            ? preflightBlocking[0]
+                            : "正式成片须先完成当前版本的人工审片确认（修改剪点/台词/素材后须重新确认）；也可改选「快速试片」。"}
                   </span>
                 </div>
                 {preflightBlocking.slice(1, 3).map((msg, i) => (
@@ -378,12 +434,16 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
             <label className="flex items-center gap-2 text-[11px] text-[var(--text-secondary)] cursor-pointer select-none">
               <input
                 type="checkbox"
-                checked={runQc}
-                disabled={exporting}
+                checked={exportMode === "formal" ? true : runQc}
+                disabled={exporting || exportMode === "formal"}
                 onChange={(e) => setRunQc(e.target.checked)}
                 className="accent-[#3b82f6]"
               />
-              <span>导出后自动检查画面与声音（黑屏、静帧、无声、破音，不阻断保存）</span>
+              <span>
+                {exportMode === "formal"
+                  ? "正式成片强制执行发布前技术质检（黑屏、静帧、无声、-16 LUFS，未通过不写入最终文件）"
+                  : "试片可选导出后画面与声音体检（黑屏、静帧、无声、破音）"}
+              </span>
             </label>
 
             <div className="flex items-start gap-2 text-[11px] text-[var(--text-muted)]">
@@ -416,7 +476,7 @@ export function ExportModal({ readiness }: { readiness: EpisodeExportReadiness }
               type="button"
               disabled={blocked || exporting || preflightLoading}
               data-testid="confirm-export-mp4"
-              onClick={() => void exportCurrentEpisode({ runQc, exportMode })}
+              onClick={() => void exportCurrentEpisode({ runQc: exportMode === "formal" ? true : runQc, exportMode })}
               className="btn-primary"
             >
               <Download className="w-3.5 h-3.5" />

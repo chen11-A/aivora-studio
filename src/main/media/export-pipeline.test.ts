@@ -461,6 +461,8 @@ describe("export-pipeline & ExportWriteGuard", () => {
         durationSec: 4,
         trimInSec: 0.5,
         trimOutSec: 2.5,
+        speaker: "旁白",
+        speakerStatus: "confirmed",
         dialogue: "裁切后只取中间两秒。",
         subtitle: "裁切后只取中间两秒。",
       });
@@ -533,6 +535,8 @@ describe("export-pipeline & ExportWriteGuard", () => {
         shotId,
         cameraMove: "缓推",
         durationSec: 2,
+        speaker: "旁白",
+        speakerStatus: "confirmed",
         dialogue: "静帧推镜加平滑配乐闪避。",
         subtitle: "静帧推镜加平滑配乐闪避。",
       });

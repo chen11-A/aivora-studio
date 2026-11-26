@@ -6,6 +6,8 @@ export type DeliveryQueueItemView = {
   orderIndex: number;
   status: DeliveryQueueItemStatus;
   snapshotDigest: string;
+  exportMode?: "formal" | "preview";
+  qcVerified?: boolean;
   outputPath: string | null;
   outputSha256: string | null;
   errorMessage: string | null;

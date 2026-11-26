@@ -62,10 +62,29 @@ jobs:
           & (Join-Path $mediaDir "ffmpeg.exe") -version | Select-Object -First 2
 
       - name: Typecheck, lint, and unit tests (with real Windows FFmpeg)
+        shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           pnpm typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm vitest run --reporter=verbose
+          if ($LASTEXITCODE -ne 0) {
+            $code = $LASTEXITCODE
+            Write-Host "=== VITEST FAILED (exit=$code / 0x$($code.ToString('X8'))) — RUNNING PER-FILE ISOLATED DIAGNOSTIC ==="
+            $testFiles = Get-ChildItem -Path src -Recurse -Include *.test.ts,*.test.tsx | Sort-Object FullName
+            foreach ($f in $testFiles) {
+              $rel = (Resolve-Path -Relative $f.FullName) -replace '^\.[\\/]', ''
+              Write-Host ">>> TEST: $rel"
+              pnpm vitest run $rel --reporter=verbose --no-file-parallelism
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "!!! FAILED FILE: $rel (exit=$LASTEXITCODE / 0x$($LASTEXITCODE.ToString('X8')))"
+                exit $LASTEXITCODE
+              }
+            }
+            exit $code
+          }
 
       - name: Verify bundled CJK font and build Windows x64 NSIS installer (with bundled FFmpeg)
         shell: pwsh

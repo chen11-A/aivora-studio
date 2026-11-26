@@ -6,6 +6,7 @@ import { computeEpisodeExportSnapshotDigest } from "../../shared/studio-truth";
 import type { ProjectWorkspace } from "../../shared/types/domain";
 import { publishFileExclusively } from "../storage/exclusive-file-staging";
 import type { ProjectStore } from "../storage/project-store";
+import { hasPassedFormalDeliveryRecord } from "./delivery-journal";
 import { exportEpisodeToMp4 } from "./export-pipeline";
 import { BASE_FFMPEG } from "./export-segment";
 import { probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
@@ -18,6 +19,8 @@ export type MultiEpisodeQueueItem = {
   orderIndex: number;
   status: MultiEpisodeItemStatus;
   snapshotDigest: string;
+  exportMode?: ExportMode;
+  qcVerified?: boolean;
   outputPath: string | null;
   outputSha256: string | null;
   errorMessage: string | null;
@@ -47,6 +50,12 @@ export type MultiEpisodeRunReport = {
 
 function sha256File(filePath: string): string {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");
+}
+
+function isPassingTechQcReport(qcReport: ExportEpisodeResult["qcReport"]): boolean {
+  if (!qcReport) return false;
+  if (qcReport.status === "failed" || qcReport.status === "skipped") return false;
+  return !qcReport.issues.some((i) => i.severity === "error" || i.type === "black");
 }
 
 function persistQueueState(projects: ProjectStore, state: MultiEpisodeQueueState): void {
@@ -109,12 +118,35 @@ export function loadMultiEpisodeQueue(
   });
 }
 
+/**
+ * Reuse gate for multi-episode resume:
+ * ONLY reuses a previously completed file when ALL of the following match:
+ * 1. Exact same `snapshotDigest` (no script/edit/take drift).
+ * 2. Exact same `exportMode` (a `preview` file can NEVER be reused for a `formal` run).
+ * 3. For `formal` runs: explicit passing QC (`item.qcVerified === true`), PLUS when using the
+ *    real exporter, a matching `published` formal record in `export_delivery_records` with passed QC.
+ * 4. The file still exists on disk and its SHA-256 matches `item.outputSha256`.
+ */
 function isVerifiedCompletedItem(
   item: MultiEpisodeQueueItem,
   currentDigest: string,
+  requiredMode: ExportMode,
+  projects: ProjectStore,
+  projectId: string,
+  hasCustomExporter: boolean,
 ): boolean {
   if (item.status !== "completed" || !item.outputPath || !item.outputSha256) return false;
   if (item.snapshotDigest !== currentDigest) return false;
+  if (item.exportMode !== requiredMode) return false;
+  if (requiredMode === "formal") {
+    if (item.qcVerified !== true) return false;
+    if (!hasCustomExporter) {
+      const hasFormalRecord = projects.withProjectDb(projectId, (db) =>
+        hasPassedFormalDeliveryRecord(db, projectId, item.episodeId, currentDigest, item.outputSha256!),
+      );
+      if (!hasFormalRecord) return false;
+    }
+  }
   if (!existsSync(item.outputPath)) return false;
   try {
     return sha256File(item.outputPath) === item.outputSha256;
@@ -136,9 +168,9 @@ export type EpisodeExportRunner = (params: {
 
 /**
  * Multi-Episode Persistent Export Queue & Crash/Failure Resume (Stage 5 Open Gate):
- * - Persists queue order, per-episode status, snapshot digest, and output SHA-256 to SQLite after every episode.
- * - On resume after failure/restart, verifies every previously completed episode file on disk (SHA-256 + snapshotDigest)
- *   and skips verified files with ZERO re-render, re-rendering ONLY failed/missing/modified episodes!
+ * - Persists queue order, per-episode status, snapshot digest, exportMode, qcVerified, and output SHA-256 to SQLite after every episode.
+ * - On resume after failure/restart, verifies every previously completed episode file on disk (SHA-256 + snapshotDigest + exportMode + formal QC record)
+ *   and skips verified files with ZERO re-render, re-rendering ONLY failed/missing/modified/mode-upgraded episodes!
  * - Optionally merges all verified episodes in exact queue order into a single concatenated MP4.
  */
 export async function runOrResumeMultiEpisodeExport(input: {
@@ -155,6 +187,7 @@ export async function runOrResumeMultiEpisodeExport(input: {
   const ws = input.projects.openProject(input.projectId);
   const exportMode: ExportMode = input.exportMode ?? "formal";
   const runQc = input.runQc ?? false;
+  const hasCustomExporter = Boolean(input.exporter);
   const exporter: EpisodeExportRunner =
     input.exporter ??
     ((args) =>
@@ -180,7 +213,7 @@ export async function runOrResumeMultiEpisodeExport(input: {
     const ep = ws.episodes.find((e) => e.id === epId);
     const prev = existingByEp.get(epId);
     const currentDigest = computeEpisodeExportSnapshotDigest(ws, epId);
-    if (prev && isVerifiedCompletedItem(prev, currentDigest)) {
+    if (prev && isVerifiedCompletedItem(prev, currentDigest, exportMode, input.projects, input.projectId, hasCustomExporter)) {
       return { ...prev, orderIndex: idx, episodeTitle: ep?.title ?? prev.episodeTitle };
     }
     return {
@@ -189,6 +222,8 @@ export async function runOrResumeMultiEpisodeExport(input: {
       orderIndex: idx,
       status: "pending",
       snapshotDigest: currentDigest,
+      exportMode,
+      qcVerified: false,
       outputPath: null,
       outputSha256: null,
       errorMessage: null,
@@ -215,7 +250,7 @@ export async function runOrResumeMultiEpisodeExport(input: {
   for (let i = 0; i < state.items.length; i += 1) {
     const item = state.items[i]!;
     const currentDigest = computeEpisodeExportSnapshotDigest(ws, item.episodeId);
-    if (isVerifiedCompletedItem(item, currentDigest)) {
+    if (isVerifiedCompletedItem(item, currentDigest, exportMode, input.projects, input.projectId, hasCustomExporter)) {
       skippedVerifiedCount += 1;
       continue;
     }
@@ -248,17 +283,23 @@ export async function runOrResumeMultiEpisodeExport(input: {
       if (res.ok && res.outputPath && existsSync(res.outputPath)) {
         item.status = "completed";
         item.snapshotDigest = currentDigest;
+        item.exportMode = exportMode;
+        item.qcVerified = isPassingTechQcReport(res.qcReport);
         item.outputPath = res.outputPath;
         item.outputSha256 = sha256File(res.outputPath);
         item.errorMessage = null;
       } else {
         item.status = "failed";
+        item.exportMode = exportMode;
+        item.qcVerified = false;
         item.errorMessage = res.message || "分集导出失败";
         failedEpisodeIds.push(item.episodeId);
       }
     } catch (err) {
       rerenderedCount += 1;
       item.status = "failed";
+      item.exportMode = exportMode;
+      item.qcVerified = false;
       item.errorMessage = err instanceof Error ? err.message : String(err);
       failedEpisodeIds.push(item.episodeId);
     }
