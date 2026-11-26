@@ -1,13 +1,13 @@
-import { randomUUID } from "node:crypto";
-import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { randomUUID, createHash } from "node:crypto";
 import type { ProjectWorkspace } from "../../shared/types/domain";
+import { ExclusiveAssetFileTracker } from "./exclusive-file-staging";
 import type { SqliteDriver } from "./sqlite-driver";
 
 /**
  * Generates crisp local SVG preview frames saved under `<projectDir>/assets/`
  * so the demo project《晚照书店》renders 16:9 / 9:16 visuals offline.
+ * Uses exclusive staging (`ExclusiveAssetFileTracker`) so failed DB transactions
+ * only delete files exclusively created by that transaction.
  */
 export function writeCinematicFrameSvg(
   projectDir: string,
@@ -18,7 +18,8 @@ export function writeCinematicFrameSvg(
     palette: [string, string, string];
     aspectRatio: "16:9" | "9:16";
   },
-): { mediaPath: string; mediaSha256: string } {
+  tracker?: ExclusiveAssetFileTracker,
+): { mediaPath: string; mediaSha256: string; createdExclusively: boolean } {
   const [width, height] = options.aspectRatio === "16:9" ? [1280, 720] : [720, 1280];
   const [bg1, bg2, accent] = options.palette;
   const esc = (s: string) =>
@@ -53,11 +54,17 @@ export function writeCinematicFrameSvg(
 
   const bytes = Buffer.from(svg, "utf8");
   const sha = createHash("sha256").update(bytes).digest("hex");
-  const assetsDir = join(projectDir, "assets");
-  mkdirSync(assetsDir, { recursive: true });
   const fileName = `${sha.slice(0, 24)}.svg`;
-  writeFileSync(join(assetsDir, fileName), bytes);
-  return { mediaPath: `assets/${fileName}`, mediaSha256: sha };
+  const effectiveTracker = tracker ?? new ExclusiveAssetFileTracker();
+  const written = effectiveTracker.writeExclusiveAsset(projectDir, fileName, bytes);
+  if (!tracker) {
+    effectiveTracker.commit();
+  }
+  return {
+    mediaPath: written.mediaPath,
+    mediaSha256: sha,
+    createdExclusively: written.createdExclusively,
+  };
 }
 
 export const DEMO_SCRIPT_EP1 = `第一场：晚照书店外 · 傍晚 · 雨后初晴

@@ -12,22 +12,31 @@ export interface SqliteDriver {
   all<T extends Record<string, unknown>>(sql: string, ...params: SqlParam[]): T[];
   run(sql: string, ...params: SqlParam[]): { changes: number | bigint };
   transaction<T>(fn: () => T): T;
+  isInTransaction(): boolean;
   vacuumInto(destinationPath: string): void;
   integrityCheck(): boolean;
   close(): void;
 }
 
+export type OpenSqliteOptions = {
+  busyTimeoutMs?: number;
+};
+
 /**
  * Thin SQLite abstraction over Electron's built-in `node:sqlite` (zero native ABI build risk).
  * Every database operation goes through this seam so swapping engines stays a 1-file change.
  */
-export function openSqlite(dbPath: string): SqliteDriver {
+export function openSqlite(dbPath: string, options: OpenSqliteOptions = {}): SqliteDriver {
   if (dbPath !== ":memory:") {
     mkdirSync(dirname(dbPath), { recursive: true });
   }
+  const busyTimeoutMs =
+    typeof options.busyTimeoutMs === "number" && Number.isFinite(options.busyTimeoutMs)
+      ? Math.max(0, Math.floor(options.busyTimeoutMs))
+      : 5000;
   const db = new DatabaseSync(dbPath);
   db.exec("PRAGMA foreign_keys = ON;");
-  db.exec("PRAGMA busy_timeout = 5000;");
+  db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs};`);
   if (dbPath !== ":memory:") {
     db.exec("PRAGMA journal_mode = WAL;");
     db.exec("PRAGMA synchronous = FULL;");
@@ -53,19 +62,28 @@ export function openSqlite(dbPath: string): SqliteDriver {
       const result = db.prepare(sql).run(...params);
       return { changes: result.changes };
     },
+    isInTransaction(): boolean {
+      return inTransaction;
+    },
     transaction<T>(fn: () => T): T {
       if (inTransaction) return fn();
-      inTransaction = true;
+      // DB1: Only enter transaction state AFTER BEGIN IMMEDIATE succeeds so a busy lock
+      // never poisons subsequent transactions into executing bare writes without rollback.
       db.exec("BEGIN IMMEDIATE;");
+      inTransaction = true;
+      let committed = false;
       try {
         const result = fn();
         db.exec("COMMIT;");
+        committed = true;
         return result;
       } catch (error) {
-        try {
-          db.exec("ROLLBACK;");
-        } catch {
-          // Ignore rollback error after failed statement.
+        if (!committed) {
+          try {
+            db.exec("ROLLBACK;");
+          } catch {
+            // Preserve the primary error; never let cleanup failure mask root cause.
+          }
         }
         throw error;
       } finally {

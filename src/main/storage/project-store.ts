@@ -19,6 +19,7 @@ import {
   type UpdateShotInput,
 } from "../../shared/types/domain";
 import { DEMO_SCRIPT_EP1, populateDemoProject, writeCinematicFrameSvg } from "./demo-seed";
+import { ExclusiveAssetFileTracker } from "./exclusive-file-staging";
 import {
   applyProjectBgmAssetInDb, deleteProjectBgmCandidateInDb, importAssetImageInDb,
   importProjectBgmInDb, importShotTakeInDb, parseCandidatePaths,
@@ -327,34 +328,39 @@ export class ProjectStore {
     };
   }
 
-  createAsset(input: {
-    projectId: string;
-    kind: AssetKind;
-    name: string;
-    description?: string;
-    voiceId?: string | null;
-  }): Asset {
+  createAsset(
+    input: { projectId: string; kind: AssetKind; name: string; description?: string; voiceId?: string | null },
+    options?: { fileTracker?: ExclusiveAssetFileTracker },
+  ): Asset {
     const db = this.getDb(input.projectId);
     const dir = this.resolveProjectDir(input.projectId)!;
     const now = new Date().toISOString();
     const id = `ast_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
     const proj = db.get<{ aspect_ratio: string }>(`SELECT aspect_ratio FROM projects WHERE id = ?`, input.projectId);
+    const ownTracker = !options?.fileTracker;
+    const tracker = options?.fileTracker ?? new ExclusiveAssetFileTracker();
     const card = writeCinematicFrameSvg(dir, {
       title: input.name,
       subtitle: input.description || "待生成参考定妆图",
       tag: input.kind === "character" ? "角色设定" : input.kind === "scene" ? "场景设定" : "道具设定",
       palette: ["#151B26", "#232F44", "#3B82F6"],
       aspectRatio: proj?.aspect_ratio === "9:16" ? "9:16" : "16:9",
-    });
-    db.transaction(() => {
-      db.run(
-        `INSERT INTO assets (id, project_id, kind, name, description, media_path, media_sha256, candidate_paths_json, locked_ref, voice_id, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-        id, input.projectId, input.kind, input.name.trim(), input.description?.trim() ?? "",
-        card.mediaPath, card.mediaSha256, JSON.stringify([card.mediaPath]), input.voiceId ?? null, now,
-      );
-      db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
-    });
+    }, tracker);
+    try {
+      db.transaction(() => {
+        db.run(
+          `INSERT INTO assets (id, project_id, kind, name, description, media_path, media_sha256, candidate_paths_json, locked_ref, voice_id, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+          id, input.projectId, input.kind, input.name.trim(), input.description?.trim() ?? "",
+          card.mediaPath, card.mediaSha256, JSON.stringify([card.mediaPath]), input.voiceId ?? null, now,
+        );
+        db.run(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, input.projectId);
+      });
+      if (ownTracker) tracker.commit();
+    } catch (err) {
+      if (ownTracker) tracker.cleanupOnRollback(db);
+      throw err;
+    }
     return {
       id, projectId: input.projectId, kind: input.kind, name: input.name.trim(),
       description: input.description?.trim() ?? "", mediaPath: card.mediaPath,
