@@ -71,9 +71,9 @@ export function assertNormalizedAudio(measured: LoudnessMeasurement): { applicab
     (!Number.isFinite(integrated) ||
       !Number.isFinite(Number(measured.input_tp)) ||
       Math.abs(integrated + 16) > 1.0 ||
-      Number(measured.input_tp) > -0.5)
+      Number(measured.input_tp) > -1.0)
   ) {
-    throw new Error("导出音频未达到目标响度（-16 LUFS），已中止发布成片");
+    throw new Error("导出音频未达到目标响度（-16 LUFS / <= -1.0 dBTP），已中止发布成片");
   }
   return { applicable: integrated !== -Infinity };
 }

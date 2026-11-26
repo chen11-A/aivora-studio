@@ -19,6 +19,7 @@ import {
 } from "../storage/exclusive-file-staging";
 import {
   detectSpeechActivityWindows,
+  intersectSpeechWindowsWithDialogue,
   measureAndRepairMasterAudio,
 } from "./audio-contract";
 import { buildAudioNormalizationFilter } from "./audio-normalize";
@@ -53,6 +54,10 @@ import {
   resolveEffectiveVideoDurationSec,
 } from "./stream-duration";
 import { generateSubtitles } from "./subtitles";
+import {
+  composeSegmentsWithTransitions,
+  type SeamTransitionSpec,
+} from "./transition-composer";
 
 export async function exportEpisodeToMp4(params: {
   workspace: ProjectWorkspace;
@@ -63,6 +68,8 @@ export async function exportEpisodeToMp4(params: {
   exportMode?: ExportMode;
   humanSignedOff?: boolean;
   projects?: ProjectStore;
+  seamTransitions?: Record<number, SeamTransitionSpec>;
+  onSegmentCacheResult?: (info: { shotId: string; cacheKey: string; cached: boolean }) => void;
   fsOps?: Partial<ExclusivePublishFsOps>;
   onAfterPublishBeforeJournalCommit?: (publishedPath: string) => void;
   onProgress?: (event: ExportProgressEvent) => void;
@@ -123,7 +130,6 @@ export async function exportEpisodeToMp4(params: {
     };
   }
 
-  // Audit #4: Formal delivery runs deterministic content/subtitle QC BEFORE rendering & publishing!
   if (params.exportMode === "formal" && contentQc.errorCount > 0) {
     const firstErr = contentQc.issues.find((i) => i.severity === "error");
     return {
@@ -134,7 +140,6 @@ export async function exportEpisodeToMp4(params: {
     };
   }
 
-  // F05 fail-fast before expensive FFmpeg work (publishFileExclusively still enforces atomic EEXIST at publish)
   if (!params.fsOps && existsSync(path.resolve(params.outputPath))) {
     return {
       ok: false,
@@ -158,9 +163,10 @@ export async function exportEpisodeToMp4(params: {
     emit(5, "准备导出", `共 ${resolvedShots.length} 个镜头，正在规范化画面与音轨…`);
 
     const segmentFiles: string[] = [];
+    const segmentCacheKeys: string[] = [];
+    const segmentDurations: number[] = [];
     let cursorSec = 0;
-    const cues: Array<{ shotId: string; start: number; end: number; speaker: string; text: string }> =
-      [];
+    const cues: Array<{ shotId: string; start: number; end: number; speaker: string; text: string }> = [];
     const dialogueIntervals: Array<{ start: number; end: number }> = [];
     const shotWindows: ShotTimelineWindow[] = [];
 
@@ -169,6 +175,7 @@ export async function exportEpisodeToMp4(params: {
       const item = resolvedShots[i]!;
       const win = resolveShotTrimWindow(item.shot);
       const effDur = win.effectiveDurationSec;
+      let segCacheKey = `${item.shot.id}_${i}`;
       const seg = await renderShotSegment({
         dir: scratchDir,
         index: i,
@@ -179,9 +186,15 @@ export async function exportEpisodeToMp4(params: {
         aspectRatio: params.workspace.project.aspectRatio,
         ffmpegPath,
         ffprobePath,
+        onCacheResult: (info) => {
+          segCacheKey = info.cacheKey;
+          params.onSegmentCacheResult?.({ shotId: item.shot.id, ...info });
+        },
         signal,
       });
       segmentFiles.push(seg);
+      segmentCacheKeys.push(segCacheKey);
+      segmentDurations.push(effDur);
       shotWindows.push({
         shotId: item.shot.id,
         shotIndex: i + 1,
@@ -207,7 +220,23 @@ export async function exportEpisodeToMp4(params: {
     }
 
     assertNotAborted();
-    const concatList = segmentFiles.map((file) => `file '${file}'`).join("\n") + "\n";
+    const composed = await composeSegmentsWithTransitions({
+      scratchDir,
+      segmentFiles,
+      segmentCacheKeys,
+      segmentDurations,
+      seamTransitions: params.seamTransitions,
+      cacheDir: path.join(params.projectDir, ".cache", "transitions"),
+      signal,
+    });
+    const exemptBlackIntervals = composed.exemptBlackIntervals;
+    if (composed.totalReductionSec > 0) {
+      cursorSec = Math.max(0.2, Number((cursorSec - composed.totalReductionSec).toFixed(2)));
+    }
+    const concatList =
+      composed.concatFiles
+        .map((file) => `file '${file.replaceAll("\\", "/").replaceAll("'", "'\\''")}'`)
+        .join("\n") + "\n";
     await writeFile(path.join(scratchDir, "concat.txt"), concatList, "utf8");
     emit(60, "拼接时间轴", "正在拼接所有镜头与音轨…");
     await runStep(
@@ -221,10 +250,9 @@ export async function exportEpisodeToMp4(params: {
     const bgmAsset = params.workspace.project.bgmAssetId
       ? params.workspace.assets.find((a) => a.id === params.workspace.project.bgmAssetId)
       : null;
-    const bgmAbs =
-      bgmAsset?.mediaPath ? resolveConfinedMediaPath(params.projectDir, bgmAsset.mediaPath) : null;
+    const bgmAbs = bgmAsset?.mediaPath ? resolveConfinedMediaPath(params.projectDir, bgmAsset.mediaPath) : null;
     if (bgmAbs && existsSync(bgmAbs)) {
-      emit(70, "混合背景音乐", `正在按 ${params.workspace.project.bgmVolumeDb} dB 混入背景音乐（基于真实语音波段闪避）…`);
+      emit(70, "混合背景音乐", `正在按 ${params.workspace.project.bgmVolumeDb} dB 混入背景音乐（仅对白区间按真实语音窗闪避）…`);
       let duckWindows = dialogueIntervals;
       if (dialogueIntervals.length > 0) {
         try {
@@ -234,30 +262,20 @@ export async function exportEpisodeToMp4(params: {
             ffmpegPath,
             run: runStep,
           });
-          if (detectedSpeech.length > 0) duckWindows = detectedSpeech;
+          // FIX-07: Intersect silencedetect windows with dialogueIntervals so ambient-only shots NEVER falsely duck BGM!
+          const scoped = intersectSpeechWindowsWithDialogue(detectedSpeech, dialogueIntervals);
+          if (scoped.length > 0) duckWindows = scoped;
         } catch {
           // Fall back cleanly to dialogueIntervals if silencedetect fails
         }
       }
-      const bgmVolExpr = buildSmoothDuckingFilter(
-        params.workspace.project.bgmVolumeDb,
-        duckWindows,
-      );
+      const bgmVolExpr = buildSmoothDuckingFilter(params.workspace.project.bgmVolumeDb, duckWindows);
       await runStep(
         ffmpegPath,
         [
-          ...BASE_FFMPEG,
-          "-i", "stitched.mp4",
-          "-stream_loop", "-1",
-          "-i", bgmAbs,
-          "-filter_complex",
-          `[1:a:0]${bgmVolExpr}[bgm];[0:a:0][bgm]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]`,
-          "-map", "0:v:0",
-          "-map", "[aout]",
-          "-c:v", "copy",
-          ...AUDIO_ENC,
-          "-shortest",
-          "mixed.mp4",
+          ...BASE_FFMPEG, "-i", "stitched.mp4", "-stream_loop", "-1", "-i", bgmAbs,
+          "-filter_complex", `[1:a:0]${bgmVolExpr}[bgm];[0:a:0][bgm]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]`,
+          "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", ...AUDIO_ENC, "-shortest", "mixed.mp4",
         ],
         { cwd: scratchDir },
       );
@@ -272,19 +290,13 @@ export async function exportEpisodeToMp4(params: {
       fontFamily: fontInfo.fontFamily,
     });
     const hasSubtitles = subs.cueCount > 0;
-    if (hasSubtitles) {
-      await writeFile(path.join(scratchDir, "captions.ass"), subs.ass, "utf8");
-    }
+    if (hasSubtitles) await writeFile(path.join(scratchDir, "captions.ass"), subs.ass, "utf8");
 
     let audioFilter = "anull";
     let loudnessApplied = false;
     if (params.workspace.project.loudnessNormalize) {
       emit(80, "响度校准", "正在进行两遍 -16 LUFS 响度测量…");
-      const norm = await buildAudioNormalizationFilter(
-        path.join(scratchDir, preMasterFile),
-        ffmpegPath,
-        runStep,
-      );
+      const norm = await buildAudioNormalizationFilter(path.join(scratchDir, preMasterFile), ffmpegPath, runStep);
       audioFilter = norm.filter;
       loudnessApplied = norm.applicable;
     }
@@ -292,11 +304,8 @@ export async function exportEpisodeToMp4(params: {
     assertNotAborted();
     emit(88, "封装备片", "正在烧录字幕并封装 faststart MP4…");
     const masterArgs: string[] = [...BASE_FFMPEG, "-i", preMasterFile];
-    if (hasSubtitles) {
-      masterArgs.push("-vf", buildAssFilterArg("captions.ass"), ...VIDEO_ENC);
-    } else {
-      masterArgs.push("-c:v", "copy");
-    }
+    if (hasSubtitles) masterArgs.push("-vf", buildAssFilterArg("captions.ass"), ...VIDEO_ENC);
+    else masterArgs.push("-c:v", "copy");
     masterArgs.push("-af", audioFilter, ...AUDIO_ENC, "-movflags", "+faststart", "master.mp4");
     await runStep(ffmpegPath, masterArgs, { cwd: scratchDir });
 
@@ -354,6 +363,7 @@ export async function exportEpisodeToMp4(params: {
           hasAudioStream: Boolean(aStream),
           shotWindows,
           dialogueIntervals,
+          exemptBlackIntervals,
           loudnessNormalized: loudnessApplied,
           signal,
         });

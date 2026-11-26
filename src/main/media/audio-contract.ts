@@ -5,8 +5,26 @@ import {
   type ExecRunner,
   type LoudnessMeasurement,
 } from "./audio-normalize";
-import { AUDIO_ENC, BASE_FFMPEG } from "./export-segment";
+import { AUDIO_ENC, BASE_FFMPEG } from "./ffmpeg-presets";
 import { buildSmoothDuckingFilter } from "./motion-filters";
+
+export function intersectSpeechWindowsWithDialogue(
+  detected: SpeechWindow[],
+  dialogueIntervals: SpeechWindow[],
+): SpeechWindow[] {
+  if (dialogueIntervals.length === 0) return [];
+  const out: SpeechWindow[] = [];
+  for (const d of detected) {
+    for (const dlg of dialogueIntervals) {
+      const start = Math.max(d.start, dlg.start);
+      const end = Math.min(d.end, dlg.end);
+      if (end - start >= 0.05) {
+        out.push({ start: Number(start.toFixed(3)), end: Number(end.toFixed(3)) });
+      }
+    }
+  }
+  return out;
+}
 
 export type ShotAudioContract = "native_audio" | "silent_tts" | "env_plus_tts";
 

@@ -98,6 +98,7 @@ export function evaluateQcSignals(input: {
   durationSec: number;
   hasAudioStream: boolean;
   blackIntervals: Interval[];
+  exemptBlackIntervals?: Interval[];
   freezeIntervals: Interval[];
   silenceIntervals: Interval[];
   integratedLufs: number | null;
@@ -107,6 +108,7 @@ export function evaluateQcSignals(input: {
   loudnessNormalized: boolean;
 }): ExportQcReport {
   const { durationSec, shotWindows, dialogueIntervals } = input;
+  const exemptBlack = input.exemptBlackIntervals ?? [];
   const issues: ExportQcIssue[] = [];
 
   const pushIntervalIssue = (
@@ -140,6 +142,11 @@ export function evaluateQcSignals(input: {
     const len = end - start;
     if (len + 1e-4 < BLACK_MIN_SEC) continue;
     if (len <= BLACK_MIN_SEC + 1e-4 && (start <= 1e-4 || end >= durationSec - 1e-4)) continue;
+    // FIX-05: Exempt intentional dip_to_black transitions (0.3-0.8s) from false black-screen alerts
+    const isIntentionalDip = exemptBlack.some(
+      (ex) => start >= ex.start - 0.25 && end <= ex.end + 0.25,
+    );
+    if (isIntentionalDip) continue;
     pushIntervalIssue(
       "black",
       start,
@@ -313,6 +320,7 @@ export async function runPostExportQc(params: {
   hasAudioStream: boolean;
   shotWindows: ShotTimelineWindow[];
   dialogueIntervals: Interval[];
+  exemptBlackIntervals?: Interval[];
   loudnessNormalized: boolean;
   signal?: AbortSignal;
 }): Promise<ExportQcReport> {
@@ -368,6 +376,7 @@ export async function runPostExportQc(params: {
     durationSec: params.durationSec,
     hasAudioStream: params.hasAudioStream,
     blackIntervals,
+    exemptBlackIntervals: params.exemptBlackIntervals,
     freezeIntervals,
     silenceIntervals,
     integratedLufs,

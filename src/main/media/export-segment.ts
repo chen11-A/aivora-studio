@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -7,33 +7,26 @@ import {
   resolveShotTrimWindow,
 } from "../../shared/media-selection";
 import type { AspectRatio, Shot, Take } from "../../shared/types/domain";
-import { buildAssFilterArg, resolveBundledFontInfo } from "./font-locator";
+import { resolveShotAudioContract, type ShotAudioContract } from "./audio-contract";
 import { runMediaBinary } from "./ffmpeg-locator";
+import { AUDIO_ENC, BASE_FFMPEG, VIDEO_ENC } from "./ffmpeg-presets";
+import { buildAssFilterArg, resolveBundledFontInfo } from "./font-locator";
 import { resolveConfinedMediaPath } from "./media-protocol";
 import { buildRasterMotionFilter } from "./motion-filters";
-import { buildNormalizedVideoFilter } from "./segment-cache";
+import {
+  buildNormalizedVideoFilter,
+  computeSegmentCacheKey,
+  getCachedSegmentPath,
+  storeCachedSegment,
+  type ReframeParams,
+} from "./segment-cache";
 import {
   resolveEffectiveVideoDurationSec,
   type ProbedMediaInfo,
 } from "./stream-duration";
 import { buildAssHeader, escapeAssText, videoDimensions } from "./subtitles";
 
-export const BASE_FFMPEG = ["-hide_banner", "-nostdin", "-y", "-filter_threads", "1"];
-export const VIDEO_ENC = [
-  "-c:v",
-  "libx264",
-  "-preset",
-  "fast",
-  "-crf",
-  "20",
-  "-pix_fmt",
-  "yuv420p",
-  "-r",
-  "30",
-  "-threads",
-  "2",
-];
-export const AUDIO_ENC = ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"];
+export { AUDIO_ENC, BASE_FFMPEG, VIDEO_ENC } from "./ffmpeg-presets";
 
 export async function probeMedia(
   filePath: string,
@@ -76,11 +69,28 @@ export async function renderShotSegment(params: {
   aspectRatio: AspectRatio;
   ffmpegPath: string;
   ffprobePath: string;
+  reframe?: ReframeParams;
+  explicitAudioContract?: ShotAudioContract | null;
+  onCacheResult?: (info: { cacheKey: string; cached: boolean }) => void;
   signal?: AbortSignal;
 }): Promise<string> {
-  const { dir, index, shot, take, speechTake, projectDir, aspectRatio, ffmpegPath, ffprobePath, signal } =
-    params;
+  const {
+    dir,
+    index,
+    shot,
+    take,
+    speechTake,
+    projectDir,
+    aspectRatio,
+    ffmpegPath,
+    ffprobePath,
+    reframe,
+    explicitAudioContract,
+    onCacheResult,
+    signal,
+  } = params;
   const segName = `seg_${String(index).padStart(3, "0")}.mp4`;
+  const segAbsPath = path.join(dir, segName);
   const win = resolveShotTrimWindow(shot);
   const durNum = win.effectiveDurationSec;
   const dur = String(durNum);
@@ -92,49 +102,107 @@ export async function renderShotSegment(params: {
   }
 
   const speechAbs = speechTake ? resolveConfinedMediaPath(projectDir, speechTake.mediaPath) : null;
-  const args: string[] = [...BASE_FFMPEG];
-  let audioSourceSpec = "1:a:0";
+  const isVideo = isVideoMediaPath(visualAbs);
+  const isSvg = !isVideo && isSvgPlaceholderPath(visualAbs);
 
-  if (isVideoMediaPath(visualAbs)) {
-    const info = await probeMedia(visualAbs, ffprobePath, signal);
-    const hasClipAudio = Boolean(info.streams?.some((s) => s.codec_type === "audio"));
-    const rawClipDur = resolveEffectiveVideoDurationSec(info) ?? 0;
+  let videoInfo: ProbedMediaInfo | null = null;
+  let hasClipAudio = false;
+  if (isVideo) {
+    videoInfo = await probeMedia(visualAbs, ffprobePath, signal);
+    hasClipAudio = Boolean(videoInfo.streams?.some((s) => s.codec_type === "audio"));
+  }
+
+  // FIX-07: Resolve explicit / automatic 3-way audio contract (native_audio / silent_tts / env_plus_tts)
+  const audioContract = resolveShotAudioContract({
+    explicitContract: explicitAudioContract,
+    hasClipAudio,
+    hasSpeechTake: Boolean(speechAbs),
+  });
+
+  // FIX-07: Content-addressed per-shot segment cache under projectDir/.cache/segments (0 FFmpeg on cache hit!)
+  const cacheDir = path.join(projectDir, ".cache", "segments");
+  const cacheKey = computeSegmentCacheKey({
+    sourceSha256: take.mediaSha256 || `${take.id}:${take.mediaPath}`,
+    trimInSec: win.trimInSec,
+    trimOutSec: win.trimOutSec,
+    effectiveDurationSec: durNum,
+    aspectRatio,
+    fps: "30",
+    cameraMove: shot.cameraMove,
+    reframe,
+    speechSha256: speechTake?.mediaSha256 ?? speechTake?.id ?? null,
+    audioContract,
+    subtitleText: isSvg ? `${shot.title}:${take.versionNumber}` : "",
+    subtitleStyle: "seg-v2",
+  });
+  const cachedPath = getCachedSegmentPath(cacheDir, cacheKey);
+  if (cachedPath) {
+    copyFileSync(cachedPath, segAbsPath);
+    onCacheResult?.({ cacheKey, cached: true });
+    return segName;
+  }
+
+  const args: string[] = [...BASE_FFMPEG];
+  if (isVideo && videoInfo) {
+    const rawClipDur = resolveEffectiveVideoDurationSec(videoInfo) ?? 0;
     const clipDur = Math.max(0, rawClipDur - win.trimInSec);
     const padSec =
       Number.isFinite(clipDur) && clipDur > 0 && clipDur + 0.05 < durNum
         ? durNum - clipDur + 0.5
         : 0;
-    const vf = buildNormalizedVideoFilter({ aspectRatio, fps: "30", padTailSec: padSec });
+    const vf = buildNormalizedVideoFilter({ aspectRatio, fps: "30", reframe, padTailSec: padSec });
 
     if (win.trimInSec > 0.01) {
       args.push("-ss", String(win.trimInSec));
     }
     args.push("-i", visualAbs);
-    if (speechAbs) {
+
+    if (audioContract === "env_plus_tts" && hasClipAudio && speechAbs) {
+      // Mix ducked clip environmental audio (-10 dB) underneath crisp TTS dialogue!
       args.push("-i", speechAbs);
-      audioSourceSpec = "1:a:0";
-    } else if (hasClipAudio) {
-      audioSourceSpec = "0:a:0";
+      args.push(
+        "-filter_complex",
+        `[0:a:0]apad=whole_dur=${durNum},volume=-10dB[env];[1:a:0]apad=whole_dur=${durNum},volume=1.0[vox];[env][vox]amix=inputs=2:duration=longest:dropout_transition=0.2:normalize=0[aout]`,
+        "-map",
+        "0:v:0",
+        "-map",
+        "[aout]",
+        "-vf",
+        vf,
+        "-t",
+        dur,
+        ...VIDEO_ENC,
+        ...AUDIO_ENC,
+        segName,
+      );
     } else {
-      args.push("-f", "lavfi", "-t", dur, "-i", "anullsrc=r=48000:cl=stereo");
-      audioSourceSpec = "1:a:0";
+      let audioSourceSpec = "1:a:0";
+      if (audioContract !== "native_audio" && speechAbs) {
+        args.push("-i", speechAbs);
+        audioSourceSpec = "1:a:0";
+      } else if (audioContract === "native_audio" && hasClipAudio) {
+        audioSourceSpec = "0:a:0";
+      } else {
+        args.push("-f", "lavfi", "-t", dur, "-i", "anullsrc=r=48000:cl=stereo");
+        audioSourceSpec = "1:a:0";
+      }
+      args.push(
+        "-map",
+        "0:v:0",
+        "-map",
+        audioSourceSpec,
+        "-vf",
+        vf,
+        "-af",
+        `apad=whole_dur=${durNum}`,
+        "-t",
+        dur,
+        ...VIDEO_ENC,
+        ...AUDIO_ENC,
+        segName,
+      );
     }
-    args.push(
-      "-map",
-      "0:v:0",
-      "-map",
-      audioSourceSpec,
-      "-vf",
-      vf,
-      "-af",
-      `apad=whole_dur=${durNum}`,
-      "-t",
-      dur,
-      ...VIDEO_ENC,
-      ...AUDIO_ENC,
-      segName,
-    );
-  } else if (isSvgPlaceholderPath(visualAbs)) {
+  } else if (isSvg) {
     const { bgHex, label } = extractSvgCardMeta(visualAbs, shot, take);
     const cardAss = `card_${String(index).padStart(3, "0")}.ass`;
     const fontInfo = resolveBundledFontInfo();
@@ -165,8 +233,15 @@ export async function renderShotSegment(params: {
       segName,
     );
   } else {
-    // Real raster image (.png / .jpg / .webp) with optional Ken Burns zoompan motion
-    const motionFilter = buildRasterMotionFilter(aspectRatio, shot.cameraMove, durNum, 30);
+    // Real raster image (.png / .jpg / .webp) with optional Ken Burns zoompan motion or Reframe
+    const hasCustomReframe =
+      Boolean(reframe) &&
+      ((reframe?.zoom ?? 1) > 1.001 ||
+        Math.abs(reframe?.panX ?? 0) > 0.001 ||
+        Math.abs(reframe?.panY ?? 0) > 0.001);
+    const motionFilter = hasCustomReframe
+      ? buildNormalizedVideoFilter({ aspectRatio, fps: "30", reframe })
+      : buildRasterMotionFilter(aspectRatio, shot.cameraMove, durNum, 30);
     args.push("-framerate", "30", "-loop", "1", "-t", dur, "-i", visualAbs);
     if (speechAbs) {
       args.push("-i", speechAbs);
@@ -191,5 +266,7 @@ export async function renderShotSegment(params: {
   }
 
   await runMediaBinary(ffmpegPath, args, { cwd: dir, signal });
+  storeCachedSegment(cacheDir, cacheKey, segAbsPath);
+  onCacheResult?.({ cacheKey, cached: false });
   return segName;
 }

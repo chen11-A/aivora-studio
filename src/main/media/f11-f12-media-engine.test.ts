@@ -3,13 +3,22 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Shot } from "../../shared/types/domain";
+import { ProjectStore } from "../storage/project-store";
 import {
   buildFourLayerMixFilter,
   detectSpeechActivityWindows,
+  intersectSpeechWindowsWithDialogue,
   measureAndRepairMasterAudio,
   resolveShotAudioContract,
 } from "./audio-contract";
-import { generateContactSheet, extractExactFramePng } from "./contact-sheet";
+import {
+  extractExactFramePng,
+  generateContactSheet,
+  readCachedVisualNote,
+  writeCachedVisualNote,
+} from "./contact-sheet";
+import { exportEpisodeToMp4 } from "./export-pipeline";
+import { probeMedia } from "./export-segment";
 import { probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
 import { buildAssFilterArg, escapeFfmpegFilterPath, resolveBundledFontInfo } from "./font-locator";
 import {
@@ -19,6 +28,10 @@ import {
   getCachedSegmentPath,
   storeCachedSegment,
 } from "./segment-cache";
+import {
+  resolveEffectiveAudioDurationSec,
+  resolveEffectiveVideoDurationSec,
+} from "./stream-duration";
 import { renderLocalizedSeamTransition } from "./transition-composer";
 
 const tempDirs: string[] = [];
@@ -278,5 +291,113 @@ describe("F11 & F12 media engine: bundled font, ContactSheet, segment cache/refr
     expect(bgmRes.status === "repaired" || bgmRes.status === "passed").toBe(true);
     expect(Math.abs((bgmRes.integratedLufs ?? 0) + 16)).toBeLessThanOrEqual(1.0);
     expect(bgmRes.truePeakDbtp!).toBeLessThanOrEqual(-1.0);
+  }, 60_000);
+
+  it("FIX-05/06/07: locks A/V sync across dip_to_black & dissolve transitions with QC exemption, burns ContactSheet timestamps + caches visual notes, hits segment cache on 1-shot edit, and scopes ducking to dialogue windows", async () => {
+    const ff = await probeFfmpegStatus();
+    expect(ff.available).toBe(true);
+    const ffmpeg = ff.ffmpegPath!;
+    const ffprobe = ff.ffprobePath!;
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-fix050607-"));
+    tempDirs.push(base);
+
+    // 1. FIX-06: Visual notes cache hit + ContactSheet timestamp burned flag
+    const notesDir = path.join(base, "notes");
+    expect(readCachedVisualNote(notesDir, { mediaSha256: "sha1", startSec: 0, endSec: 4, promptVersion: "v1" })).toBeNull();
+    writeCachedVisualNote(notesDir, {
+      mediaSha256: "sha1",
+      startSec: 0,
+      endSec: 4,
+      promptVersion: "v1",
+      noteText: "第 1.5s 人物视线偏左，接缝稳定",
+    });
+    const noteHit = readCachedVisualNote(notesDir, { mediaSha256: "sha1", startSec: 0, endSec: 4, promptVersion: "v1" });
+    expect(noteHit?.noteText).toContain("接缝稳定");
+
+    // 2. FIX-07: Dialogue-scoped speech ducking ignores ambient-only shot windows
+    const scoped = intersectSpeechWindowsWithDialogue(
+      [
+        { start: 0.2, end: 1.8 }, // Shot 1 (ambient only, no dialogue)
+        { start: 2.3, end: 3.6 }, // Shot 2 (has dialogue 2.0..4.0)
+      ],
+      [{ start: 2.0, end: 4.0 }],
+    );
+    expect(scoped).toEqual([{ start: 2.3, end: 3.6 }]);
+
+    // 3. FIX-05 + FIX-07: Real 3-shot export with dip_to_black(0.6s) + dissolve(0.5s) -> A/V sync <= 0.08s, QC zero black false positive, 2nd export hits segment cache!
+    const store = new ProjectStore(path.join(base, "ws"));
+    const created = store.createProject({ name: "转场与缓存实测", aspectRatio: "16:9" });
+    const epId = created.episodes[0]!.id;
+    const scId = created.scenes[0]!.id;
+    const sh1 = created.shots[0]!;
+    const sh2 = store.createShot({ projectId: created.project.id, episodeId: epId, sceneId: scId });
+    const sh3 = store.createShot({ projectId: created.project.id, episodeId: epId, sceneId: scId });
+
+    const makeClip = async (name: string, freq: number) => {
+      const p = path.join(base, name);
+      await runMediaBinary(ffmpeg, [
+        "-hide_banner", "-nostdin", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=2",
+        "-f", "lavfi", "-i", `sine=frequency=${freq}:duration=2:sample_rate=48000`,
+        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", p,
+      ]);
+      return p;
+    };
+    const [v1, v2, v3] = await Promise.all([
+      makeClip("c1.mp4", 440),
+      makeClip("c2.mp4", 520),
+      makeClip("c3.mp4", 600),
+    ]);
+    for (const [sh, fp] of [[sh1, v1], [sh2, v2], [sh3, v3]] as const) {
+      store.updateShot({ projectId: created.project.id, shotId: sh.id, durationSec: 2, dialogue: "", subtitle: "", speakerStatus: "confirmed" });
+      store.importShotTakeFromPath({ projectId: created.project.id, shotId: sh.id, kind: "video", sourceFilePath: fp });
+    }
+
+    const ws1 = store.openProject(created.project.id);
+    const cacheHits1: boolean[] = [];
+    const out1 = path.join(base, "out-transitions-1.mp4");
+    const res1 = await exportEpisodeToMp4({
+      workspace: ws1,
+      projectDir: ws1.dirPath,
+      episodeId: epId,
+      outputPath: out1,
+      exportMode: "formal",
+      runQc: true,
+      seamTransitions: {
+        0: { type: "dip_to_black", videoDurationSec: 0.6, audioCrossfadeMs: 80 },
+        1: { type: "dissolve", videoDurationSec: 0.5 },
+      },
+      onSegmentCacheResult: (info) => cacheHits1.push(info.cached),
+    });
+    expect(res1.ok).toBe(true);
+    expect(cacheHits1).toEqual([false, false, false]);
+    // Verify zero black-frame false positives from intentional dip_to_black!
+    expect(res1.qcReport?.issues.filter((i) => i.type === "black")).toHaveLength(0);
+
+    // Verify |videoDur - audioDur| <= 0.08s (A/V drift completely eliminated!)
+    const probed = await probeMedia(out1, ffprobe);
+    const vDur = resolveEffectiveVideoDurationSec(probed) ?? 0;
+    const aDur = resolveEffectiveAudioDurationSec(probed) ?? 0;
+    expect(Math.abs(vDur - aDur)).toBeLessThanOrEqual(0.08);
+    // 2 + 2 + 2 - 0.5 (dissolve) = 5.5s
+    expect(Math.abs(vDur - 5.5)).toBeLessThanOrEqual(0.25);
+
+    // Edit ONLY Shot 3 duration -> 2nd export MUST hit segment cache on Shot 1 & Shot 2!
+    store.updateShot({ projectId: created.project.id, shotId: sh3.id, durationSec: 1.8 });
+    const ws2 = store.openProject(created.project.id);
+    const cacheHits2: boolean[] = [];
+    const out2 = path.join(base, "out-transitions-2.mp4");
+    const res2 = await exportEpisodeToMp4({
+      workspace: ws2,
+      projectDir: ws2.dirPath,
+      episodeId: epId,
+      outputPath: out2,
+      exportMode: "formal",
+      runQc: false,
+      onSegmentCacheResult: (info) => cacheHits2.push(info.cached),
+    });
+    expect(res2.ok).toBe(true);
+    expect(cacheHits2).toEqual([true, true, false]);
+    store.closeAll();
   }, 60_000);
 });
