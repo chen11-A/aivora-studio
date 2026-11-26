@@ -67,8 +67,13 @@ jobs:
           pnpm lint
           pnpm test
 
-      - name: Build Windows x64 NSIS installer (with bundled FFmpeg)
-        run: pnpm build:win
+      - name: Verify bundled CJK font and build Windows x64 NSIS installer (with bundled FFmpeg)
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "resources\fonts\NotoSansCJK-Regular.ttc") -or -not (Test-Path "resources\fonts\OFL-1.1-LICENSE.txt")) {
+            throw "缺少随包 SIL OFL 1.1 中文字体或授权文件"
+          }
+          pnpm build:win
 
       - name: Verify installer output and compute SHA-256
         id: installer
@@ -228,6 +233,14 @@ jobs:
           pnpm lint
           pnpm test
 
+      - name: Verify bundled CJK font and run layout audit
+        run: |
+          set -euo pipefail
+          test -s resources/fonts/NotoSansCJK-Regular.ttc
+          test -s resources/fonts/OFL-1.1-LICENSE.txt
+          pnpm build
+          pnpm audit:layout
+
       - name: Build Linux x64 AppImage & deb packages (with bundled FFmpeg)
         run: pnpm build:linux
 
@@ -287,6 +300,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Checkout repository for release notes
+        uses: actions/checkout@v4
+
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
@@ -299,41 +315,47 @@ jobs:
           name: AIVORA-Studio-linux-x64
           path: dist-release
 
-      - name: Publish dual-platform GitHub Release
+      - name: Create Draft dual-platform GitHub Release (requires manual review before publishing)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           TAG="$GITHUB_REF_NAME"
           cat dist-release/SHA256SUMS-win.txt dist-release/SHA256SUMS-linux.txt | tr -d '\r' > dist-release/SHA256SUMS.txt
+          test -s dist-release/SHA256SUMS.txt
           WIN_NAME=$(basename dist-release/AIVORA-Studio-Setup-*.exe)
           APPIMAGE_NAME=$(basename dist-release/AIVORA-Studio-*.AppImage)
           DEB_NAME=$(basename dist-release/AIVORA-Studio-*.deb)
 
-          cat > dist-release/RELEASE_NOTES.md <<EOF
-          ## AIVORA Studio ${TAG} — Windows + Linux 双平台正式版
+          NOTES_SRC="docs/release-notes-${TAG}.md"
+          if [ ! -f "$NOTES_SRC" ]; then
+            NOTES_SRC="docs/release-notes-v2.0.0.md"
+          fi
+          test -s "$NOTES_SRC"
 
-          ### 下载安装包（均已内置经 SHA-256 校验的 FFmpeg，零 Python / 零额外依赖）
-          - **Windows 10/11 (x64)**：\`${WIN_NAME}\`（普通用户 HKCU 安装，无需管理员权限）
-          - **Linux 通用免安装 (x64)**：\`${APPIMAGE_NAME}\`（\`chmod +x\` 后双击或终端运行；Ubuntu 24.04 如遇 AppArmor 沙箱提示请附加 \`--no-sandbox\`）
-          - **Ubuntu / Debian (x64)**：\`${DEB_NAME}\`（执行 \`sudo apt install ./${DEB_NAME}\`）
-
-          ### SHA-256 校验值
-          \`\`\`
-          $(cat dist-release/SHA256SUMS.txt)
-          \`\`\`
-
-          ### 本版亮点
-          - **Google Gemini 官方全家桶（1 个 API Key 全搞定）**：原生接入 Interactions API，支持剧本拆镜、垫图生图、异步视频（含 \`UNKNOWN\` 仅 GET 查单找回）、人物配音 TTS 与 **Lyria 3.5 AI 一键生成背景配乐**，并提供「一键套用全流程」快捷按钮；
-          - **精简轻量化模型中心**：移除偏重的远程 Colab Jupyter 托管，聚焦商业 API + Flow 网页外采/下载目录自动监听 + ComfyUI Worker 算力直连；
-          - **上手指南**：见 [docs/用户上手指南.md](https://github.com/chen11-A/aivora-studio/blob/main/docs/%E7%94%A8%E6%88%B7%E4%B8%8A%E6%89%8B%E6%8C%87%E5%8D%97.md)。
-          EOF
+          {
+            echo "## AIVORA Studio ${TAG} — Windows + Linux 双平台候选发布（草稿）"
+            echo ""
+            echo "### 安装包（均已内置经 SHA-256 校验的 FFmpeg 与 SIL OFL 1.1 中文字体，零 Python / 零额外依赖）"
+            echo "- **Windows 10/11 (x64)**：\`${WIN_NAME}\`（普通用户 HKCU 安装，无需管理员权限）"
+            echo "- **Linux 通用免安装 (x64)**：\`${APPIMAGE_NAME}\`（\`chmod +x\` 后运行；Ubuntu 24.04 如遇 AppArmor 沙箱提示请附加 \`--no-sandbox\`）"
+            echo "- **Ubuntu / Debian (x64)**：\`${DEB_NAME}\`（执行 \`sudo apt install ./${DEB_NAME}\`）"
+            echo ""
+            echo "### SHA-256 校验值"
+            echo '```'
+            cat dist-release/SHA256SUMS.txt
+            echo '```'
+            echo ""
+            cat "$NOTES_SRC"
+          } > dist-release/RELEASE_NOTES.md
 
           gh release create "$TAG" \
             -R "$GITHUB_REPOSITORY" \
+            --draft \
             "dist-release/$WIN_NAME" \
             "dist-release/$APPIMAGE_NAME" \
             "dist-release/$DEB_NAME" \
             "dist-release/SHA256SUMS.txt" \
             --title "AIVORA Studio $TAG (Windows + Linux)" \
             --notes-file dist-release/RELEASE_NOTES.md
+
