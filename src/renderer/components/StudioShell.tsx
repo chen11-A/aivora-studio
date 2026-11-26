@@ -359,7 +359,7 @@ export function StudioShell({ children }: { children: ReactNode }) {
             role="status"
             aria-live="polite"
             data-state={toastPresence.state}
-            className="aivora-toast fixed bottom-10 right-5 z-50 max-w-[420px] flex items-center gap-2 pl-3 pr-2 py-2 rounded-xl text-[12px]"
+            className="aivora-toast fixed top-14 right-5 z-30 max-w-[420px] flex items-center gap-2 pl-3 pr-2 py-2 rounded-xl text-[12px]"
           >
             {toastIsError ? (
               <AlertTriangle className="w-3.5 h-3.5 text-[var(--accent-danger-text)] shrink-0 aivora-icon-pop" />

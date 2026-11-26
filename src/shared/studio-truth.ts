@@ -1,0 +1,281 @@
+import type { ExportQcReport } from "./ipc-contract";
+import {
+  isSvgPlaceholderPath,
+  resolveActiveVisualTake,
+  resolveSelectedSpeechTake,
+  resolveShotTrimWindow,
+} from "./media-selection";
+import type { Job, ProjectWorkspace, Shot, Take } from "./types/domain";
+
+export type CreativeApprovalState = "draft" | "approved" | "needs_reapproval";
+export type RemoteJobTruthState = "pending" | "running" | "unknown" | "failed" | "succeeded";
+export type TakeAdoptionState = "candidate" | "selected";
+export type DeliveryEligibilityState =
+  | "unchecked"
+  | "preview_only"
+  | "ready_for_review"
+  | "deliverable"
+  | "rejected";
+
+export type EpisodeDeliveryTruth = {
+  episodeId: string;
+  snapshotDigest: string;
+  eligibility: DeliveryEligibilityState;
+  reportStale: boolean;
+  canPreviewExport: boolean;
+  canFormalDeliver: boolean;
+  svgPlaceholderCount: number;
+  intentionalStillCount: number;
+  missingVisualCount: number;
+  reason: string;
+};
+
+/**
+ * Pure synchronous deterministic digest (128-bit dual FNV-1a hex) that runs identically
+ * in Node main process and Electron renderer without requiring `node:crypto`.
+ */
+export function deterministicDigestHex(input: string): string {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x9e3779b9;
+  let h3 = 0x85ebca6b;
+  let h4 = 0xc2b2ae35;
+  for (let i = 0; i < input.length; i += 1) {
+    const c = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ ((c + i) & 0xffff), 0x01000193) >>> 0;
+    h3 = Math.imul((h3 + c + (i & 0xff)) ^ (h1 >>> 16), 0x85ebca6b) >>> 0;
+    h4 = Math.imul((h4 ^ (c * 31 + i)) + (h2 >>> 13), 0xc2b2ae35) >>> 0;
+  }
+  return [h1, h2, h3, h4].map((n) => n.toString(16).padStart(8, "0")).join("");
+}
+
+/**
+ * Computes the canonical export snapshot digest for an episode from persisted workspace state.
+ * Any edit to shots, trims, takes, subtitles, speaker, BGM, aspect ratio, or loudness settings
+ * produces a new digest, immediately invalidating stale QC / delivery verdicts (A03 / F14).
+ */
+export function computeEpisodeExportSnapshotDigest(
+  workspace: ProjectWorkspace,
+  episodeId: string,
+): string {
+  const epShots = workspace.shots
+    .filter((s) => s.episodeId === episodeId)
+    .sort((a, b) => a.orderIndex - b.orderIndex);
+  const bgmAsset = workspace.project.bgmAssetId
+    ? workspace.assets.find((a) => a.id === workspace.project.bgmAssetId) ?? null
+    : null;
+
+  const payload = {
+    v: 2,
+    project: {
+      aspectRatio: workspace.project.aspectRatio,
+      subtitleStyle: workspace.project.subtitleStyle,
+      loudnessNormalize: workspace.project.loudnessNormalize,
+      bgmAssetId: workspace.project.bgmAssetId,
+      bgmVolumeDb: workspace.project.bgmVolumeDb,
+      bgmSha: bgmAsset?.mediaSha256 ?? null,
+    },
+    episodeId,
+    shots: epShots.map((shot) => {
+      const visual = resolveActiveVisualTake(shot, workspace.takes);
+      const speech = resolveSelectedSpeechTake(shot, workspace.takes);
+      const win = resolveShotTrimWindow(shot);
+      return {
+        id: shot.id,
+        orderIndex: shot.orderIndex,
+        durationSec: shot.durationSec,
+        trimInSec: win.trimInSec,
+        trimOutSec: win.trimOutSec,
+        effectiveDurationSec: win.effectiveDurationSec,
+        videoPlanMode: shot.videoPlanMode,
+        cameraMove: shot.cameraMove,
+        speaker: shot.speaker,
+        dialogue: shot.dialogue,
+        subtitle: shot.subtitle,
+        selectedImageTakeId: shot.selectedImageTakeId,
+        selectedVideoTakeId: shot.selectedVideoTakeId,
+        selectedSpeechTakeId: shot.selectedSpeechTakeId,
+        visualTake: visual
+          ? { id: visual.id, kind: visual.kind, mediaPath: visual.mediaPath, sha: visual.mediaSha256 }
+          : null,
+        speechTake: speech
+          ? { id: speech.id, mediaPath: speech.mediaPath, sha: speech.mediaSha256 }
+          : null,
+      };
+    }),
+  };
+  return deterministicDigestHex(JSON.stringify(payload));
+}
+
+export function isExportQcReportCurrent(
+  report: ExportQcReport | null | undefined,
+  currentSnapshotDigest: string,
+): boolean {
+  if (!report || !report.snapshotDigest) return false;
+  return report.snapshotDigest === currentSnapshotDigest;
+}
+
+export function deriveTakeAdoptionState(shot: Shot, take: Take): TakeAdoptionState {
+  if (take.kind === "video") return shot.selectedVideoTakeId === take.id ? "selected" : "candidate";
+  if (take.kind === "speech") return shot.selectedSpeechTakeId === take.id ? "selected" : "candidate";
+  return shot.selectedImageTakeId === take.id ? "selected" : "candidate";
+}
+
+export function deriveRemoteJobTruth(job: Job): RemoteJobTruthState {
+  if (job.status === "queued" || job.status === "awaiting_confirm") return "pending";
+  if (job.status === "cancelled") return "failed";
+  return job.status;
+}
+
+/**
+ * Single shared pure derivation of episode delivery eligibility (used by both Editor & Delivery).
+ * Never lets stale QC reports or SVG placeholder shots display as formally deliverable.
+ */
+export function deriveEpisodeDeliveryEligibility(input: {
+  workspace: ProjectWorkspace;
+  episodeId: string;
+  qcReport?: ExportQcReport | null;
+  contentApproved?: boolean;
+}): EpisodeDeliveryTruth {
+  const { workspace, episodeId, qcReport = null, contentApproved = true } = input;
+  const snapshotDigest = computeEpisodeExportSnapshotDigest(workspace, episodeId);
+  const epShots = workspace.shots
+    .filter((s) => s.episodeId === episodeId)
+    .sort((a, b) => a.orderIndex - b.orderIndex);
+
+  if (epShots.length === 0) {
+    return {
+      episodeId,
+      snapshotDigest,
+      eligibility: "rejected",
+      reportStale: false,
+      canPreviewExport: false,
+      canFormalDeliver: false,
+      svgPlaceholderCount: 0,
+      intentionalStillCount: 0,
+      missingVisualCount: 0,
+      reason: "当前分集尚无镜头，无法导出或交付。",
+    };
+  }
+
+  let svgPlaceholderCount = 0;
+  let intentionalStillCount = 0;
+  let missingVisualCount = 0;
+  for (const shot of epShots) {
+    const visual = resolveActiveVisualTake(shot, workspace.takes);
+    if (!visual) {
+      missingVisualCount += 1;
+      continue;
+    }
+    if (isSvgPlaceholderPath(visual.mediaPath)) {
+      svgPlaceholderCount += 1;
+    } else if (visual.kind === "image" && shot.videoPlanMode === "still_motion") {
+      intentionalStillCount += 1;
+    }
+  }
+
+  if (missingVisualCount > 0) {
+    return {
+      episodeId,
+      snapshotDigest,
+      eligibility: "rejected",
+      reportStale: Boolean(qcReport && !isExportQcReportCurrent(qcReport, snapshotDigest)),
+      canPreviewExport: false,
+      canFormalDeliver: false,
+      svgPlaceholderCount,
+      intentionalStillCount,
+      missingVisualCount,
+      reason: `仍有 ${missingVisualCount} 个镜头缺少可用画面版本。`,
+    };
+  }
+
+  const reportStale = Boolean(qcReport && !isExportQcReportCurrent(qcReport, snapshotDigest));
+
+  if (svgPlaceholderCount > 0) {
+    return {
+      episodeId,
+      snapshotDigest,
+      eligibility: "preview_only",
+      reportStale,
+      canPreviewExport: true,
+      canFormalDeliver: false,
+      svgPlaceholderCount,
+      intentionalStillCount,
+      missingVisualCount: 0,
+      reason: `含 ${svgPlaceholderCount} 个画板占位镜头，仅可导出试片；正式交付须补齐真实画面素材。`,
+    };
+  }
+
+  if (!qcReport) {
+    return {
+      episodeId,
+      snapshotDigest,
+      eligibility: "unchecked",
+      reportStale: false,
+      canPreviewExport: true,
+      canFormalDeliver: true,
+      svgPlaceholderCount: 0,
+      intentionalStillCount,
+      missingVisualCount: 0,
+      reason: "素材已齐，尚未完成当前版本成片质检。",
+    };
+  }
+
+  if (reportStale) {
+    return {
+      episodeId,
+      snapshotDigest,
+      eligibility: "ready_for_review",
+      reportStale: true,
+      canPreviewExport: true,
+      canFormalDeliver: true,
+      svgPlaceholderCount: 0,
+      intentionalStillCount,
+      missingVisualCount: 0,
+      reason: "工程在导出后已修改，上次质检报告已过期，需重新导出校验后才能确认当前合格。",
+    };
+  }
+
+  if (qcReport.status === "failed" || qcReport.status === "issues") {
+    return {
+      episodeId,
+      snapshotDigest,
+      eligibility: "rejected",
+      reportStale: false,
+      canPreviewExport: true,
+      canFormalDeliver: true,
+      svgPlaceholderCount: 0,
+      intentionalStillCount,
+      missingVisualCount: 0,
+      reason: qcReport.summary,
+    };
+  }
+
+  if (qcReport.status === "skipped" || !contentApproved) {
+    return {
+      episodeId,
+      snapshotDigest,
+      eligibility: "ready_for_review",
+      reportStale: false,
+      canPreviewExport: true,
+      canFormalDeliver: true,
+      svgPlaceholderCount: 0,
+      intentionalStillCount,
+      missingVisualCount: 0,
+      reason: !contentApproved ? "技术检查已过，等待内容审核确认。" : "上次导出跳过了质检，待补查。",
+    };
+  }
+
+  return {
+    episodeId,
+    snapshotDigest,
+    eligibility: "deliverable",
+    reportStale: false,
+    canPreviewExport: true,
+    canFormalDeliver: true,
+    svgPlaceholderCount: 0,
+    intentionalStillCount,
+    missingVisualCount: 0,
+    reason: "当前版本已通过内容审与技术质检，可正式交付。",
+  };
+}

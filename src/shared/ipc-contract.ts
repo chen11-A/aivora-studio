@@ -101,6 +101,7 @@ export type ExportQcReport = {
   ok: boolean;
   skipped?: boolean;
   errorMessage?: string;
+  snapshotDigest?: string;
   durationSec: number;
   integratedLufs: number | null;
   truePeakDbtp: number | null;
@@ -124,9 +125,14 @@ export type BuiltinBgmTrack = {
   previewUrl: string;
 };
 
+export type ExportMode = "formal" | "preview";
+
 export type ExportEpisodeResult = {
   ok: boolean;
   canceled?: boolean;
+  targetAlreadyExists?: boolean;
+  exportMode?: ExportMode;
+  snapshotDigest?: string;
   outputPath?: string;
   durationSec?: number;
   width?: number;
@@ -267,6 +273,7 @@ export type AivoraDesktopApi = {
     projectId: string;
     episodeId: string;
     runQc?: boolean;
+    exportMode?: ExportMode;
   }) => Promise<ExportEpisodeResult>;
   cancelEpisodeExport: () => Promise<{ ok: boolean; message: string }>;
   onExportProgress: (listener: (event: ExportProgressEvent) => void) => () => void;
@@ -275,7 +282,12 @@ export type AivoraDesktopApi = {
 
   // Archive, backup & maintenance
   exportProjectArchive: (projectId: string) => Promise<ArchiveResult>;
-  importProjectArchive: () => Promise<{ ok: boolean; project?: ProjectWorkspace; message: string }>;
+  importProjectArchive: () => Promise<{
+    ok: boolean;
+    canceled?: boolean;
+    project?: ProjectWorkspace;
+    message: string;
+  }>;
   cleanUnreferencedAssets: (projectId: string) => Promise<{
     ok: boolean;
     removedFiles: number;

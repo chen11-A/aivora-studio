@@ -1,226 +1,49 @@
-import { existsSync, readFileSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { ExportEpisodeResult, ExportProgressEvent } from "../../shared/ipc-contract";
+import type { ExportEpisodeResult, ExportMode, ExportProgressEvent } from "../../shared/ipc-contract";
 import {
   isSvgPlaceholderPath,
-  isVideoMediaPath,
   resolveActiveVisualTake,
   resolveSelectedSpeechTake,
   resolveShotTrimWindow,
 } from "../../shared/media-selection";
-import type { AspectRatio, ProjectWorkspace, Shot, Take } from "../../shared/types/domain";
+import { computeEpisodeExportSnapshotDigest } from "../../shared/studio-truth";
+import type { ProjectWorkspace } from "../../shared/types/domain";
+import {
+  ExclusivePublishError,
+  publishFileExclusively,
+  type ExclusivePublishFsOps,
+} from "../storage/exclusive-file-staging";
 import {
   assertNormalizedAudio,
   buildAudioNormalizationFilter,
   measureAudioLoudness,
 } from "./audio-normalize";
 import { EXPORT_TEMP_PREFIX } from "./export-guard";
-import { buildFailedQcReport, buildSkippedQcReport, resolveExportResultMessage, runPostExportQc, type ShotTimelineWindow } from "./export-qc";
 import {
-  MediaProcessAbortedError,
-  probeFfmpegStatus,
-  runMediaBinary,
-} from "./ffmpeg-locator";
+  buildFailedQcReport,
+  buildSkippedQcReport,
+  resolveExportResultMessage,
+  runPostExportQc,
+  type ShotTimelineWindow,
+} from "./export-qc";
+import {
+  AUDIO_ENC,
+  BASE_FFMPEG,
+  probeMedia,
+  renderShotSegment,
+  VIDEO_ENC,
+} from "./export-segment";
+import { MediaProcessAbortedError, probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
 import { resolveConfinedMediaPath } from "./media-protocol";
-import { buildRasterMotionFilter, buildSmoothDuckingFilter } from "./motion-filters";
+import { buildSmoothDuckingFilter } from "./motion-filters";
 import {
   resolveEffectiveAudioDurationSec,
   resolveEffectiveVideoDurationSec,
-  type ProbedMediaInfo,
 } from "./stream-duration";
-import { buildAssHeader, escapeAssText, generateSubtitles, videoDimensions } from "./subtitles";
-
-const BASE_FFMPEG = ["-hide_banner", "-nostdin", "-y", "-filter_threads", "1"];
-const VIDEO_ENC = [
-  "-c:v",
-  "libx264",
-  "-preset",
-  "fast",
-  "-crf",
-  "20",
-  "-pix_fmt",
-  "yuv420p",
-  "-r",
-  "30",
-  "-threads",
-  "2",
-];
-const AUDIO_ENC = ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"];
-
-async function probeMedia(
-  filePath: string,
-  ffprobePath: string,
-  signal?: AbortSignal,
-): Promise<ProbedMediaInfo> {
-  const { stdout } = await runMediaBinary(
-    ffprobePath,
-    ["-v", "error", "-show_streams", "-show_format", "-of", "json", path.resolve(filePath)],
-    { signal },
-  );
-  return JSON.parse(stdout) as ProbedMediaInfo;
-}
-
-function fitFilter(aspectRatio: AspectRatio): string {
-  const [w, h] = videoDimensions(aspectRatio);
-  return `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=#0e1014,fps=30,setsar=1`;
-}
-
-function extractSvgCardMeta(svgPath: string, shot: Shot, take: Take): { bgHex: string; label: string } {
-  let bgHex = "0x1b2029";
-  try {
-    const raw = readFileSync(svgPath, "utf8");
-    const stops = [...raw.matchAll(/stop-color="(#[0-9a-fA-F]{6})"/g)].map((m) => m[1]!);
-    const chosen = stops[1] ?? stops[0];
-    if (chosen) bgHex = `0x${chosen.slice(1)}`;
-  } catch {
-    // Keep neutral studio dark card color
-  }
-  const label = `${shot.title}（版本 ${take.versionNumber}）`;
-  return { bgHex, label };
-}
-
-async function renderShotSegment(params: {
-  dir: string;
-  index: number;
-  shot: Shot;
-  take: Take;
-  speechTake: Take | null;
-  projectDir: string;
-  aspectRatio: AspectRatio;
-  ffmpegPath: string;
-  ffprobePath: string;
-  signal?: AbortSignal;
-}): Promise<string> {
-  const { dir, index, shot, take, speechTake, projectDir, aspectRatio, ffmpegPath, ffprobePath, signal } =
-    params;
-  const segName = `seg_${String(index).padStart(3, "0")}.mp4`;
-  const win = resolveShotTrimWindow(shot);
-  const durNum = win.effectiveDurationSec;
-  const dur = String(durNum);
-  const [w, h] = videoDimensions(aspectRatio);
-
-  const visualAbs = resolveConfinedMediaPath(projectDir, take.mediaPath);
-  if (!visualAbs || !existsSync(visualAbs)) {
-    throw new Error(`镜头「${shot.title}」的素材文件不存在：${take.mediaPath}`);
-  }
-
-  const speechAbs = speechTake ? resolveConfinedMediaPath(projectDir, speechTake.mediaPath) : null;
-  const args: string[] = [...BASE_FFMPEG];
-  let audioSourceSpec = "1:a:0";
-
-  if (isVideoMediaPath(visualAbs)) {
-    const info = await probeMedia(visualAbs, ffprobePath, signal);
-    const hasClipAudio = Boolean(info.streams?.some((s) => s.codec_type === "audio"));
-    const rawClipDur = resolveEffectiveVideoDurationSec(info) ?? 0;
-    const clipDur = Math.max(0, rawClipDur - win.trimInSec);
-    const padSec =
-      Number.isFinite(clipDur) && clipDur > 0 && clipDur + 0.05 < durNum
-        ? durNum - clipDur + 0.5
-        : 0;
-    const vf = `${fitFilter(aspectRatio)}${padSec > 0 ? `,tpad=stop_mode=clone:stop_duration=${padSec.toFixed(2)}` : ""}`;
-
-    if (win.trimInSec > 0.01) {
-      args.push("-ss", String(win.trimInSec));
-    }
-    args.push("-i", visualAbs);
-    if (speechAbs) {
-      args.push("-i", speechAbs);
-      audioSourceSpec = "1:a:0";
-    } else if (hasClipAudio) {
-      audioSourceSpec = "0:a:0";
-    } else {
-      args.push("-f", "lavfi", "-t", dur, "-i", "anullsrc=r=48000:cl=stereo");
-      audioSourceSpec = "1:a:0";
-    }
-    args.push(
-      "-map",
-      "0:v:0",
-      "-map",
-      audioSourceSpec,
-      "-vf",
-      vf,
-      "-af",
-      `apad=whole_dur=${durNum}`,
-      "-t",
-      dur,
-      ...VIDEO_ENC,
-      ...AUDIO_ENC,
-      segName,
-    );
-  } else if (isSvgPlaceholderPath(visualAbs)) {
-    const { bgHex, label } = extractSvgCardMeta(visualAbs, shot, take);
-    const cardAss = `card_${String(index).padStart(3, "0")}.ass`;
-    const assContent =
-      buildAssHeader(aspectRatio, "white") +
-      `Dialogue: 0,0:00:00.00,0:59:59.00,Default,,0,0,0,,{\\an5\\pos(${Math.round(w / 2)},${Math.round(h / 2)})\\fs${aspectRatio === "9:16" ? 56 : 64}}${escapeAssText(label)}\n`;
-    await writeFile(path.join(dir, cardAss), assContent, "utf8");
-
-    args.push("-f", "lavfi", "-t", dur, "-i", `color=c=${bgHex}:s=${w}x${h}:r=30`);
-    if (speechAbs) {
-      args.push("-i", speechAbs);
-    } else {
-      args.push("-f", "lavfi", "-t", dur, "-i", "anullsrc=r=48000:cl=stereo");
-    }
-    args.push(
-      "-map",
-      "0:v:0",
-      "-map",
-      "1:a:0",
-      "-vf",
-      `ass=filename=${cardAss}`,
-      "-af",
-      `apad=whole_dur=${durNum}`,
-      "-t",
-      dur,
-      ...VIDEO_ENC,
-      ...AUDIO_ENC,
-      segName,
-    );
-  } else {
-    // Real raster image (.png / .jpg / .webp) with optional Ken Burns zoompan motion
-    const motionFilter = buildRasterMotionFilter(aspectRatio, shot.cameraMove, durNum, 30);
-    args.push("-framerate", "30", "-loop", "1", "-t", dur, "-i", visualAbs);
-    if (speechAbs) {
-      args.push("-i", speechAbs);
-    } else {
-      args.push("-f", "lavfi", "-t", dur, "-i", "anullsrc=r=48000:cl=stereo");
-    }
-    args.push(
-      "-map",
-      "0:v:0",
-      "-map",
-      "1:a:0",
-      "-vf",
-      motionFilter,
-      "-af",
-      `apad=whole_dur=${durNum}`,
-      "-t",
-      dur,
-      ...VIDEO_ENC,
-      ...AUDIO_ENC,
-      segName,
-    );
-  }
-
-  await runMediaBinary(ffmpegPath, args, { cwd: dir, signal });
-  return segName;
-}
-
-async function atomicPublishFile(srcPath: string, destPath: string): Promise<string> {
-  const target = path.resolve(destPath);
-  await mkdir(path.dirname(target), { recursive: true });
-  const tempDest = `${target}.part-${Date.now()}`;
-  await copyFile(srcPath, tempDest);
-  try {
-    await rename(tempDest, target);
-  } catch {
-    await copyFile(tempDest, target);
-    await rm(tempDest, { force: true });
-  }
-  return target;
-}
+import { generateSubtitles } from "./subtitles";
 
 export async function exportEpisodeToMp4(params: {
   workspace: ProjectWorkspace;
@@ -228,6 +51,8 @@ export async function exportEpisodeToMp4(params: {
   episodeId: string;
   outputPath: string;
   runQc?: boolean;
+  exportMode?: ExportMode;
+  fsOps?: Partial<ExclusivePublishFsOps>;
   onProgress?: (event: ExportProgressEvent) => void;
   signal?: AbortSignal;
 }): Promise<ExportEpisodeResult> {
@@ -267,7 +92,35 @@ export async function exportEpisodeToMp4(params: {
     };
   }
 
+  const placeholderShots = resolvedShots.filter((item) => isSvgPlaceholderPath(item.take?.mediaPath));
+  const effectiveMode: ExportMode =
+    params.exportMode ?? (placeholderShots.length > 0 ? "preview" : "formal");
+  if (params.exportMode === "formal" && placeholderShots.length > 0) {
+    return {
+      ok: false,
+      exportMode: "formal",
+      message: `包含 ${placeholderShots.length} 个占位画板镜头（如「${placeholderShots[0]!.shot.title}」），不可作为正式成片交付；请补齐真实画面素材或改选「导出试片」。`,
+    };
+  }
+
+  // F05 fail-fast before expensive FFmpeg work (publishFileExclusively still enforces atomic EEXIST at publish)
+  if (!params.fsOps && existsSync(path.resolve(params.outputPath))) {
+    return {
+      ok: false,
+      targetAlreadyExists: true,
+      exportMode: effectiveMode,
+      message: `目标文件已存在（${path.basename(params.outputPath)}），为防覆盖已有成片已拒绝写入，请另选新文件名保存。`,
+    };
+  }
+
+  const snapshotDigest = computeEpisodeExportSnapshotDigest(params.workspace, params.episodeId);
   const scratchDir = await mkdtemp(path.join(tmpdir(), EXPORT_TEMP_PREFIX));
+  let publishedPath: string | null = null;
+  let publishedDurationSec = 0;
+  let publishedWidth: number | undefined;
+  let publishedHeight: number | undefined;
+  let publishedLoudnessApplied = false;
+
   try {
     assertNotAborted();
     emit(5, "准备导出", `共 ${resolvedShots.length} 个镜头，正在规范化画面与音轨…`);
@@ -297,7 +150,13 @@ export async function exportEpisodeToMp4(params: {
         signal,
       });
       segmentFiles.push(seg);
-      shotWindows.push({ shotId: item.shot.id, shotIndex: i + 1, shotTitle: item.shot.title, startSec: cursorSec, endSec: cursorSec + effDur });
+      shotWindows.push({
+        shotId: item.shot.id,
+        shotIndex: i + 1,
+        shotTitle: item.shot.title,
+        startSec: cursorSec,
+        endSec: cursorSec + effDur,
+      });
       if (item.shot.subtitle.trim()) {
         cues.push({
           shotId: item.shot.id,
@@ -316,29 +175,16 @@ export async function exportEpisodeToMp4(params: {
     }
 
     assertNotAborted();
-    // 1. Concat normalized segments
     const concatList = segmentFiles.map((file) => `file '${file}'`).join("\n") + "\n";
     await writeFile(path.join(scratchDir, "concat.txt"), concatList, "utf8");
     emit(60, "拼接时间轴", "正在拼接所有镜头与音轨…");
     await runStep(
       ffmpegPath,
-      [
-        ...BASE_FFMPEG,
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        "concat.txt",
-        "-c",
-        "copy",
-        "stitched.mp4",
-      ],
+      [...BASE_FFMPEG, "-f", "concat", "-safe", "0", "-i", "concat.txt", "-c", "copy", "stitched.mp4"],
       { cwd: scratchDir },
     );
 
     assertNotAborted();
-    // 2. Mix optional BGM with automatic -8 dB ducking during dialogue intervals
     let preMasterFile = "stitched.mp4";
     const bgmAsset = params.workspace.project.bgmAssetId
       ? params.workspace.assets.find((a) => a.id === params.workspace.project.bgmAssetId)
@@ -355,20 +201,14 @@ export async function exportEpisodeToMp4(params: {
         ffmpegPath,
         [
           ...BASE_FFMPEG,
-          "-i",
-          "stitched.mp4",
-          "-stream_loop",
-          "-1",
-          "-i",
-          bgmAbs,
+          "-i", "stitched.mp4",
+          "-stream_loop", "-1",
+          "-i", bgmAbs,
           "-filter_complex",
           `[1:a:0]${bgmVolExpr}[bgm];[0:a:0][bgm]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]`,
-          "-map",
-          "0:v:0",
-          "-map",
-          "[aout]",
-          "-c:v",
-          "copy",
+          "-map", "0:v:0",
+          "-map", "[aout]",
+          "-c:v", "copy",
           ...AUDIO_ENC,
           "-shortest",
           "mixed.mp4",
@@ -379,7 +219,6 @@ export async function exportEpisodeToMp4(params: {
     }
 
     assertNotAborted();
-    // 3. Subtitle burn-in + two-pass -16 LUFS normalization
     const subs = generateSubtitles(cues, {
       aspectRatio: params.workspace.project.aspectRatio,
       style: params.workspace.project.subtitleStyle,
@@ -442,16 +281,22 @@ export async function exportEpisodeToMp4(params: {
     }
 
     assertNotAborted();
-    // Atomic publish intentionally runs un-aborted so target MP4 is never half-written
-    const published = await atomicPublishFile(masterAbs, params.outputPath);
+    // F05: Exclusive atomic publish (fsync + hard-link + temp unlink). NEVER overwrites an existing target.
+    const pub = await publishFileExclusively(masterAbs, params.outputPath, { fsOps: params.fsOps });
+    const published = pub.outputPath;
+    publishedPath = published;
+    publishedDurationSec = actualDuration;
+    publishedWidth = vStream.width;
+    publishedHeight = vStream.height;
+    publishedLoudnessApplied = loudnessApplied;
 
     let qcReport: NonNullable<ExportEpisodeResult["qcReport"]>;
     if (params.runQc === false) {
-      qcReport = buildSkippedQcReport(actualDuration);
+      qcReport = { ...buildSkippedQcReport(actualDuration), snapshotDigest };
     } else {
       emit(97, "成片质检", "正在扫描黑屏、静帧、无声与 -16 LUFS 峰值…");
       try {
-        qcReport = await runPostExportQc({
+        const scanned = await runPostExportQc({
           mp4Path: published,
           ffmpegPath,
           durationSec: actualDuration,
@@ -461,28 +306,71 @@ export async function exportEpisodeToMp4(params: {
           loudnessNormalized: loudnessApplied,
           signal,
         });
+        qcReport = { ...scanned, snapshotDigest };
       } catch (qcErr) {
-        // Non-blocking: MP4 is already safely published on disk; report scan failure truthfully
-        qcReport = buildFailedQcReport(actualDuration, qcErr instanceof Error ? qcErr.message : String(qcErr));
+        if (qcErr instanceof MediaProcessAbortedError || signal?.aborted) {
+          qcReport = {
+            ...buildSkippedQcReport(actualDuration),
+            snapshotDigest,
+            summary: "成片已安全发布保存（导出后质检已取消，可随时重新体检）。",
+          };
+        } else {
+          qcReport = {
+            ...buildFailedQcReport(actualDuration, qcErr instanceof Error ? qcErr.message : String(qcErr)),
+            snapshotDigest,
+          };
+        }
       }
     }
-    emit(100, "导出完成", `已保存成片：${published}`);
+    emit(100, "导出完成", `已保存${effectiveMode === "preview" ? "试片" : "成片"}：${published}`);
 
+    const baseMsg = resolveExportResultMessage(qcReport);
     return {
       ok: true,
+      exportMode: effectiveMode,
+      snapshotDigest,
       outputPath: published,
       durationSec: actualDuration,
       width: vStream.width,
       height: vStream.height,
       loudnessApplied,
       qcReport,
-      message: resolveExportResultMessage(qcReport),
+      message: effectiveMode === "preview" ? `试片已导出（非正式交付版本）。${baseMsg}` : baseMsg,
     };
   } catch (err) {
+    // F05 Cancel-vs-Published boundary: once publishedPath is on disk, NEVER misreport as canceled!
+    if (publishedPath) {
+      const fallbackQc = {
+        ...buildSkippedQcReport(publishedDurationSec),
+        snapshotDigest,
+        summary: "成片已安全发布保存（质检阶段中断，文件完整可播）。",
+      };
+      return {
+        ok: true,
+        exportMode: effectiveMode,
+        snapshotDigest,
+        outputPath: publishedPath,
+        durationSec: publishedDurationSec,
+        width: publishedWidth,
+        height: publishedHeight,
+        loudnessApplied: publishedLoudnessApplied,
+        qcReport: fallbackQc,
+        message: "成片已安全发布保存（质检阶段已中断，文件完整可播）。",
+      };
+    }
+    if (err instanceof ExclusivePublishError) {
+      return {
+        ok: false,
+        targetAlreadyExists: err.code === "TARGET_EXISTS",
+        exportMode: effectiveMode,
+        message: err.message,
+      };
+    }
     if (err instanceof MediaProcessAbortedError || signal?.aborted) {
       return {
         ok: false,
         canceled: true,
+        exportMode: effectiveMode,
         message: "已取消成片导出，临时文件已清理，未生成损坏成片。",
       };
     }

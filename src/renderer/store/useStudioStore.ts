@@ -66,11 +66,11 @@ interface StudioStore {
   importShotTake: (shotId: string, kind: TakeKind, sourceFilePath?: string) => Promise<void>;
   importProjectBgm: (sourceFilePath?: string) => Promise<void>;
   clearProjectBgm: () => Promise<void>;
-  exportCurrentEpisode: (options?: { runQc?: boolean }) => Promise<void>;
+  exportCurrentEpisode: (options?: { runQc?: boolean; exportMode?: "formal" | "preview" }) => Promise<void>;
   revealPath: (filePath: string) => Promise<void>;
   updateProjectSettings: (patch: Omit<UpdateProjectSettingsInput, "projectId">) => Promise<void>;
   exportArchive: () => Promise<void>;
-  importArchive: () => Promise<void>;
+  importArchive: () => Promise<{ ok: boolean; canceled?: boolean; message: string }>;
   cleanUnreferencedAssets: () => Promise<void>;
   saveProvider: (input: SaveProviderConfigInput) => Promise<void>;
   deleteProvider: (providerId: string) => Promise<void>;
@@ -423,7 +423,7 @@ export const useStudioStore = create<StudioStore>((set, get) => {
       set({ exporting: true, lastExportResult: null, exportProgress: { percent: 2, stage: "准备导出", detail: "请选择 MP4 成片保存路径…" } });
       const unsub = client.onExportProgress((ev) => set({ exportProgress: ev }));
       try {
-        const res = await client.exportEpisodeVideo({ projectId: ws.project.id, episodeId: epId, runQc: options?.runQc });
+        const res = await client.exportEpisodeVideo({ projectId: ws.project.id, episodeId: epId, runQc: options?.runQc, exportMode: options?.exportMode });
         set({ lastExportResult: res, exporting: false });
         if (!res.canceled) flashToast(res.message);
       } catch (err) {
@@ -435,40 +435,37 @@ export const useStudioStore = create<StudioStore>((set, get) => {
       }
     },
 
-    async revealPath(filePath) {
-      await client.revealPathInFolder(filePath);
-    },
-
+    async revealPath(filePath) { await client.revealPathInFolder(filePath); },
     async updateProjectSettings(patch) {
       const ws = get().workspace;
       if (!ws) return;
-      const fresh = await client.updateProjectSettings({ projectId: ws.project.id, ...patch });
-      set({ workspace: fresh, saveState: "saved" });
+      set({ workspace: await client.updateProjectSettings({ projectId: ws.project.id, ...patch }), saveState: "saved" });
     },
-
     async exportArchive() {
       const ws = get().workspace;
       if (!ws || !(await guardFlush())) return;
-      const res = await client.exportProjectArchive(ws.project.id);
-      flashToast(res.message);
+      flashToast((await client.exportProjectArchive(ws.project.id)).message);
     },
-
     async importArchive() {
-      const res = await client.importProjectArchive();
-      if (res.ok && res.project) {
-        enterWorkspace(res.project);
-        await get().refreshProjects();
+      try {
+        const res = await client.importProjectArchive();
+        if (res.ok && res.project) {
+          enterWorkspace(res.project);
+          await get().refreshProjects();
+        }
+        if (!res.canceled) flashToast(res.message);
+        return { ok: res.ok, canceled: res.canceled, message: res.message };
+      } catch (err) {
+        const message = `导入备份包失败：${err instanceof Error ? err.message : String(err)}`;
+        flashToast(message);
+        return { ok: false, canceled: false, message };
       }
-      flashToast(res.message);
     },
-
     async cleanUnreferencedAssets() {
       const ws = get().workspace;
       if (!ws || !(await guardFlush())) return;
-      const res = await client.cleanUnreferencedAssets(ws.project.id);
-      flashToast(res.message);
+      flashToast((await client.cleanUnreferencedAssets(ws.project.id)).message);
     },
-
     async saveProvider(input) {
       const saved = await client.saveProviderConfig(input);
       let mc = await client.getModelCenter();
@@ -482,13 +479,11 @@ export const useStudioStore = create<StudioStore>((set, get) => {
       }
       set({ modelCenter: mc });
     },
-
     async deleteProvider(providerId) {
       await client.deleteProviderConfig(providerId);
       set({ modelCenter: await client.getModelCenter() });
       flashToast("已移除厂家配置");
     },
-
     async updateRouting(routing) {
       await client.updateModelRouting(routing);
       set({ modelCenter: await client.getModelCenter() });

@@ -1,6 +1,7 @@
 import { dialog, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from "electron";
+import { existsSync } from "node:fs";
 import path from "node:path";
-import { IPC_CHANNELS, type ExportProgressEvent } from "../../shared/ipc-contract";
+import { IPC_CHANNELS, type ExportMode, type ExportProgressEvent } from "../../shared/ipc-contract";
 import type {
   AssetKind,
   CreateProjectInput,
@@ -255,7 +256,7 @@ export function registerIpcHandlers(deps: {
 
   handle(
     IPC_CHANNELS.EXPORT_EPISODE_VIDEO,
-    async (input: { projectId: string; episodeId: string; runQc?: boolean }) => {
+    async (input: { projectId: string; episodeId: string; runQc?: boolean; exportMode?: ExportMode }) => {
       const win = deps.getWindow();
       if (!win) return { ok: false, message: "窗口不可用" };
       if (deps.exportGuard.isExporting()) {
@@ -265,23 +266,33 @@ export function registerIpcHandlers(deps: {
       if (!projectDir) return { ok: false, message: "找不到作品目录" };
       const workspace = deps.projects.openProject(input.projectId);
       const episode = workspace.episodes.find((e) => e.id === input.episodeId);
-      const baseName = safeFolderSegment(`${workspace.project.name}-${episode?.title ?? "成片"}`);
-      const defaultPath = path.join(projectDir, "exports", `${baseName}.mp4`);
+      const orientTag = workspace.project.aspectRatio === "9:16" ? "竖屏9x16" : "横屏16x9";
+      const modeTag = input.exportMode === "preview" ? "-试片" : "";
+      const baseName = safeFolderSegment(`${workspace.project.name}-${episode?.title ?? "成片"}-${orientTag}${modeTag}`);
+      let defaultPath = path.join(projectDir, "exports", `${baseName}.mp4`);
+      for (let seq = 2; existsSync(defaultPath) && seq <= 99; seq += 1) {
+        defaultPath = path.join(projectDir, "exports", `${baseName}_${String(seq).padStart(2, "0")}.mp4`);
+      }
 
       const chosen = await dialog.showSaveDialog(win, {
-        title: "导出 MP4 成片",
+        title: input.exportMode === "preview" ? "导出 MP4 试片" : "导出 MP4 成片",
         defaultPath,
         filters: [{ name: "MP4 视频", extensions: ["mp4"] }],
       });
       if (chosen.canceled || !chosen.filePath) {
         return { ok: false, canceled: true, message: "已取消导出成片" };
       }
+      if (existsSync(path.resolve(chosen.filePath))) {
+        return {
+          ok: false,
+          targetAlreadyExists: true,
+          message: `目标文件「${path.basename(chosen.filePath)}」已存在，为防覆盖已有成片已拒绝写入；请另存为新文件名。`,
+        };
+      }
 
       const emitProgress = (event: ExportProgressEvent) => {
         const w = deps.getWindow();
-        if (w && !w.isDestroyed()) {
-          w.webContents.send(IPC_CHANNELS.EXPORT_PROGRESS_EVENT, event);
-        }
+        if (w && !w.isDestroyed()) w.webContents.send(IPC_CHANNELS.EXPORT_PROGRESS_EVENT, event);
       };
 
       const res = await deps.exportGuard.runGuarded((signal) =>
@@ -291,6 +302,7 @@ export function registerIpcHandlers(deps: {
           episodeId: input.episodeId,
           outputPath: chosen.filePath!,
           runQc: input.runQc,
+          exportMode: input.exportMode,
           onProgress: emitProgress,
           signal,
         }),
@@ -317,16 +329,20 @@ export function registerIpcHandlers(deps: {
     if (!win) return { ok: false, message: "窗口不可用" };
     const ws = deps.projects.openProject(projectId);
     const chosen = await dialog.showSaveDialog(win, {
-      title: "导出工程备份包",
+      title: "导出工程备份包（含数据库与工程素材，不含 exports/ 成片）",
       defaultPath: `${ws.project.name}-备份.zip`,
       filters: [{ name: "AIVORA 工程备份", extensions: ["zip"] }],
     });
     if (chosen.canceled || !chosen.filePath) {
       return { ok: false, message: "已取消导出备份" };
     }
-    await deps.projects.exportArchiveToPath(projectId, chosen.filePath);
-    allowedRevealPaths.add(path.resolve(chosen.filePath));
-    return { ok: true, path: chosen.filePath, message: "工程备份包已保存" };
+    try {
+      await deps.projects.exportArchiveToPath(projectId, chosen.filePath);
+      allowedRevealPaths.add(path.resolve(chosen.filePath));
+      return { ok: true, path: chosen.filePath, message: "工程备份包已保存（含数据库与素材，不含外部导出成片）" };
+    } catch (err) {
+      return { ok: false, message: `导出工程备份失败：${err instanceof Error ? err.message : String(err)}` };
+    }
   });
 
   handle(IPC_CHANNELS.IMPORT_ARCHIVE, async () => {
@@ -338,10 +354,15 @@ export function registerIpcHandlers(deps: {
       filters: [{ name: "AIVORA 工程备份", extensions: ["zip"] }],
     });
     if (chosen.canceled || !chosen.filePaths[0]) {
-      return { ok: false, message: "已取消导入" };
+      return { ok: false, canceled: true, message: "已取消导入" };
     }
-    const project = await deps.projects.importArchiveFromPath(chosen.filePaths[0]);
-    return { ok: true, project, message: `已导入作品「${project.project.name}」` };
+    try {
+      const project = await deps.projects.importArchiveFromPath(chosen.filePaths[0]);
+      return { ok: true, project, message: `已导入作品「${project.project.name}」` };
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return { ok: false, canceled: false, message: `导入备份包失败（未写入任何工程，文件可能损坏或已截断）：${detail}` };
+    }
   });
 
   handle(IPC_CHANNELS.GET_MODEL_CENTER, () => deps.globalConfig.getSnapshot());

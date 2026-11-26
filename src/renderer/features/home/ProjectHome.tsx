@@ -36,7 +36,16 @@ export function ProjectHome() {
   const [stylePreset, setStylePreset] = useState("胶片电影感 · 温暖写实");
   const [initialScript, setInitialScript] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
   const client = getDesktopClient();
+
+  async function handleImportArchive() {
+    setImportError(null);
+    const res = await importArchive();
+    if (!res.ok && !res.canceled) {
+      setImportError(res.message);
+    }
+  }
 
   async function handleCreate() {
     if (!name.trim() || submitting) return;
@@ -72,7 +81,7 @@ export function ProjectHome() {
               我的漫剧与短剧作品
             </h1>
             <p className="text-[13px] text-[var(--text-secondary)] mt-1">
-              每部作品独立保存在本机文件夹，支持中文路径，随时一键打包备份与迁移。
+              每部作品独立保存在本机文件夹，支持中文路径，随时一键打包备份与迁移（备份包包含数据库与工程素材，不含外部导出成片）。
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -80,7 +89,7 @@ export function ProjectHome() {
               type="button"
               className="btn-secondary"
               data-testid="home-import-archive"
-              onClick={() => void importArchive()}
+              onClick={() => void handleImportArchive()}
             >
               <ArchiveRestore className="w-3.5 h-3.5" />
               <span>导入备份包</span>
@@ -109,6 +118,36 @@ export function ProjectHome() {
             )}
           </div>
         </section>
+
+        {importError && (
+          <section
+            role="alert"
+            data-testid="archive-import-error"
+            className="aivora-attention-in rounded-xl bg-[var(--accent-danger-soft)] border border-[var(--accent-danger-border)] px-4 py-3 text-[12px] text-[var(--accent-danger-ink)] flex flex-wrap items-center justify-between gap-3"
+          >
+            <div className="flex items-start gap-2 min-w-0 flex-1">
+              <AlertTriangle className="w-4 h-4 text-[var(--accent-danger-text)] shrink-0 mt-0.5" />
+              <span className="leading-relaxed break-words">{importError}</span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => void handleImportArchive()}
+                className="btn-secondary h-7 px-2.5 text-[11px]"
+              >
+                重新选择备份包
+              </button>
+              <button
+                type="button"
+                aria-label="关闭错误提示"
+                onClick={() => setImportError(null)}
+                className="aivora-pressable p-1 rounded-md hover:bg-[var(--bg-hover)] cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </section>
+        )}
 
         {projects.length === 0 ? (
           <section className="rounded-2xl border border-dashed border-[var(--border-strong)] bg-[var(--bg-surface)] px-8 py-14 text-center flex flex-col items-center gap-4">
