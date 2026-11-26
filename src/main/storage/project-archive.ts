@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
-  cpSync,
+  copyFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
+  readdirSync,
   renameSync,
   rmSync,
 } from "node:fs";
@@ -10,6 +12,25 @@ import { join, resolve } from "node:path";
 import { initProjectSchema } from "./schema";
 import { openSqlite, type SqliteDriver } from "./sqlite-driver";
 import { extractProjectZip, writeProjectZip } from "./zip-archive";
+
+/**
+ * Recursive directory copy via `mkdirSync` + `readdirSync` + `copyFileSync`.
+ * Avoids Node.js 22.x native `fs.cpSync(..., { recursive: true })`, which can
+ * hard-crash with 0xC0000409 on Windows non-ASCII (CJK) paths (nodejs/node#63970).
+ */
+function copyDirRecursiveSync(srcDir: string, dstDir: string): void {
+  mkdirSync(dstDir, { recursive: true });
+  for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) continue;
+    const srcPath = join(srcDir, entry.name);
+    const dstPath = join(dstDir, entry.name);
+    if (entry.isDirectory()) {
+      copyDirRecursiveSync(srcPath, dstPath);
+    } else if (entry.isFile()) {
+      copyFileSync(srcPath, dstPath);
+    }
+  }
+}
 
 /**
  * WAL-safe hot backup: executes SQLite `VACUUM INTO` into an isolated staging directory
@@ -35,7 +56,7 @@ export async function exportProjectArchive(
     const assetsSrc = join(projectDir, "assets");
     if (existsSync(assetsSrc)) {
       const assetsDst = join(stage, "assets");
-      cpSync(assetsSrc, assetsDst, { recursive: true });
+      copyDirRecursiveSync(assetsSrc, assetsDst);
     }
     await writeProjectZip(stage, resolve(outputZipPath));
   } finally {
