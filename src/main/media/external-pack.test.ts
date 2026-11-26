@@ -123,15 +123,16 @@ describe("external web workflow pack export & drop-folder batch import", () => {
     expect(scan.matchedCount).toBe(2);
     expect(scan.unmatchedCount).toBe(1);
 
-    // 3. Commit batch import (including manual binding of random file to Shot 3) with overwriteSelectedVideo=false
+    // 3. Commit batch import (including manual binding of random file to Shot 3) with scan-confirmed expectedSha256
+    const shaByPath = new Map(scan.items.map((i) => [i.filePath, i.sha256]));
     const commit = await commitExternalDropImport(projects, {
       projectId: demo.project.id,
       episodeId: epId,
       overwriteSelectedVideo: false,
       items: [
-        { filePath: vid1, shotId: epShots[0]!.id, mediaKind: "video" },
-        { filePath: vid2, shotId: epShots[1]!.id, mediaKind: "video" },
-        { filePath: vidRand, shotId: epShots[2]!.id, mediaKind: "video" },
+        { filePath: vid1, shotId: epShots[0]!.id, mediaKind: "video", expectedSha256: shaByPath.get(vid1)! },
+        { filePath: vid2, shotId: epShots[1]!.id, mediaKind: "video", expectedSha256: shaByPath.get(vid2)! },
+        { filePath: vidRand, shotId: epShots[2]!.id, mediaKind: "video", expectedSha256: shaByPath.get(vidRand)! },
       ],
     });
     expect(commit.ok).toBe(true);
@@ -158,6 +159,55 @@ describe("external web workflow pack export & drop-folder batch import", () => {
     const rescan = scanExternalDropFolder({ workspace: wsAfter, episodeId: epId, folderDir: dropDir });
     expect(rescan.duplicateCount).toBe(4);
     expect(rescan.matchedCount).toBe(0);
+
+    // 4. Audit #5 TOCTOU regression: user confirms file A -> path is swapped to file B before commit -> MUST REJECT B!
+    const swapPath = path.join(dropDir, "04_swap.mp4");
+    await runMediaBinary(ff.ffmpegPath!, [
+      "-hide_banner", "-nostdin", "-y",
+      "-f", "lavfi", "-i", "color=c=0x55aa55:s=320x180:r=24:d=1",
+      "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", swapPath,
+    ]);
+    const scanA = scanExternalDropFolder({ workspace: wsAfter, episodeId: epId, folderDir: dropDir });
+    const itemA = scanA.items.find((i) => i.filePath === swapPath)!;
+    expect(itemA.sha256).toMatch(/^[a-f0-9]{64}$/);
+
+    // Swap file A at the same path with completely different video B!
+    await runMediaBinary(ff.ffmpegPath!, [
+      "-hide_banner", "-nostdin", "-y",
+      "-f", "lavfi", "-i", "color=c=0xee4499:s=320x180:r=24:d=1",
+      "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", swapPath,
+    ]);
+    const takesBeforeSwap = projects.openProject(demo.project.id).takes.length;
+    const swapCommit = await commitExternalDropImport(projects, {
+      projectId: demo.project.id,
+      episodeId: epId,
+      overwriteSelectedVideo: false,
+      items: [{ filePath: swapPath, shotId: epShots[0]!.id, mediaKind: "video", expectedSha256: itemA.sha256 }],
+    });
+    expect(swapCommit.ok).toBe(false);
+    expect(swapCommit.importedCount).toBe(0);
+    expect(swapCommit.rejectedCount).toBe(1);
+    expect(swapCommit.message).toContain("内容已变更");
+    expect(projects.openProject(demo.project.id).takes.length).toBe(takesBeforeSwap);
+
+    // 5. Provenance reorder guard wired into scanExternalDropFolder: reorder shots -> old 01.mp4 routes to manual_review!
+    const reversedIds = [...epShots].reverse().map((s) => s.id);
+    projects.withProjectDb(demo.project.id, (db) => {
+      reversedIds.forEach((sid, idx) => {
+        db.run(`UPDATE shots SET order_index = ? WHERE id = ?`, idx, sid);
+      });
+    });
+    const reorderedWs = projects.openProject(demo.project.id);
+    const old01 = path.join(dropDir, "01_reordered_old.mp4");
+    await runMediaBinary(ff.ffmpegPath!, [
+      "-hide_banner", "-nostdin", "-y",
+      "-f", "lavfi", "-i", "color=c=0x8899aa:s=320x180:r=24:d=1",
+      "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", old01,
+    ]);
+    const reorderedScan = scanExternalDropFolder({ workspace: reorderedWs, episodeId: epId, folderDir: dropDir });
+    const reorderedItem = reorderedScan.items.find((i) => i.filePath === old01)!;
+    expect(reorderedItem.matchedShotId).toBeNull();
+    expect(reorderedItem.provenanceStatus).toBe("manual_review");
 
     projects.closeAll();
   });

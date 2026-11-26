@@ -19,6 +19,8 @@ export type ExternalDropMatchItem = {
   matchedShotTitle: string | null;
   isDuplicate: boolean;
   sha256: string;
+  provenanceStatus?: "matched" | "manual_review" | "unmatched";
+  provenanceReason?: string;
 };
 
 export type ExternalDropScanResult = {
@@ -36,6 +38,8 @@ export type ExternalDropCommitItem = {
   filePath: string;
   shotId: string;
   mediaKind: Exclude<TakeKind, "speech">;
+  /** SHA-256 captured at scan/confirmation time; commit MUST verify private staged bytes match this exact hash. */
+  expectedSha256: string;
 };
 
 export type ExternalDropCommitInput = {
@@ -49,6 +53,8 @@ export type ExternalDropCommitResult = {
   ok: boolean;
   importedCount: number;
   skippedCount: number;
+  rejectedCount?: number;
+  rejectedReasons?: string[];
   workspace?: ProjectWorkspace;
   message: string;
 };

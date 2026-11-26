@@ -1,5 +1,15 @@
-import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  constants as fsConstants,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { isSvgPlaceholderPath, resolveConfirmedFirstFrameTake } from "../../shared/media-selection";
 import type { ProjectWorkspace } from "../../shared/types/domain";
@@ -14,7 +24,11 @@ import { injectLockedReferences } from "../providers/ref-image-injector";
 import type { ProjectStore } from "../storage/project-store";
 import { resolveConfinedMediaPath } from "./media-protocol";
 import { probeFileDurationSec } from "./motion-filters";
-import { writeExternalPackManifest } from "./external-pack-provenance";
+import {
+  matchExternalDropWithProvenance,
+  readExternalPackManifest,
+  writeExternalPackManifest,
+} from "./external-pack-provenance";
 
 const VIDEO_EXTS = new Set([".mp4", ".webm", ".mov", ".m4v", ".mkv"]);
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
@@ -215,6 +229,8 @@ export function scanExternalDropFolder(input: {
   );
 
   const entries = readdirSync(dir).sort((a, b) => a.localeCompare(b, "zh-Hans-CN", { numeric: true }));
+  const manifest = readExternalPackManifest(dir);
+  const shotsById = new Map(epShots.map((s) => [s.id, s]));
   const items: ExternalDropMatchItem[] = [];
   let ignoredTempCount = 0;
 
@@ -243,10 +259,30 @@ export function scanExternalDropFolder(input: {
 
     const sha256 = createHash("sha256").update(readFileSync(fullPath)).digest("hex");
     const detectedIndex = parseShotIndexFromFilename(name);
-    const matchedShot =
-      detectedIndex !== null && detectedIndex >= 1 && detectedIndex <= epShots.length
-        ? epShots[detectedIndex - 1]!
-        : null;
+
+    let matchedShot = null as (typeof epShots)[number] | null;
+    let provenanceStatus: ExternalDropMatchItem["provenanceStatus"] = "unmatched";
+    let provenanceReason: string | undefined;
+
+    if (manifest) {
+      const prov = matchExternalDropWithProvenance({
+        workspace: input.workspace,
+        episodeId: input.episodeId,
+        folderDir: dir,
+        filePaths: [fullPath],
+      })[0];
+      if (prov) {
+        provenanceStatus = prov.status;
+        provenanceReason = prov.reason;
+        matchedShot =
+          prov.status === "matched" && prov.matchedShotId
+            ? (shotsById.get(prov.matchedShotId) ?? null)
+            : null;
+      }
+    } else if (detectedIndex !== null && detectedIndex >= 1 && detectedIndex <= epShots.length) {
+      matchedShot = epShots[detectedIndex - 1]!;
+      provenanceStatus = "matched";
+    }
 
     items.push({
       filePath: fullPath,
@@ -258,6 +294,8 @@ export function scanExternalDropFolder(input: {
       matchedShotTitle: matchedShot?.title ?? null,
       isDuplicate: existingShas.has(sha256),
       sha256,
+      provenanceStatus,
+      provenanceReason,
     });
   }
 
@@ -285,7 +323,7 @@ export async function commitExternalDropImport(
   input: ExternalDropCommitInput,
 ): Promise<ExternalDropCommitResult> {
   if (input.items.length === 0) {
-    return { ok: false, importedCount: 0, skippedCount: 0, message: "没有勾选可导入的文件" };
+    return { ok: false, importedCount: 0, skippedCount: 0, rejectedCount: 0, message: "没有勾选可导入的文件" };
   }
   const wsBefore = projects.openProject(input.projectId);
   const existingShasByShot = new Map<string, Set<string>>();
@@ -296,46 +334,90 @@ export async function commitExternalDropImport(
     existingShasByShot.set(take.shotId, set);
   }
 
+  const stagingDir = path.join(wsBefore.dirPath, ".tmp-external-import");
+  mkdirSync(stagingDir, { recursive: true });
+
   let importedCount = 0;
   let skippedCount = 0;
+  let rejectedCount = 0;
+  const rejectedReasons: string[] = [];
 
   for (const item of input.items) {
+    const fileLabel = path.basename(item.filePath);
+    const expectedHash = (item.expectedSha256 ?? "").trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(expectedHash)) {
+      rejectedCount += 1;
+      rejectedReasons.push(`文件「${fileLabel}」缺少有效的扫描校验摘要（expectedSha256），已拒绝导入，请重新扫描确认。`);
+      continue;
+    }
     if (!existsSync(item.filePath)) {
       skippedCount += 1;
       continue;
     }
-    const sha = createHash("sha256").update(readFileSync(item.filePath)).digest("hex");
-    const shotShas = existingShasByShot.get(item.shotId) ?? new Set<string>();
-    if (shotShas.has(sha)) {
-      skippedCount += 1;
-      continue;
-    }
-    const durationSec =
-      item.mediaKind === "video" ? await probeFileDurationSec(item.filePath, "video") : null;
 
-    // F04: External drop imports strictly create candidate takes without overwriting confirmed takes
-    projects.importShotTakeFromPath({
-      projectId: input.projectId,
-      shotId: item.shotId,
-      kind: item.mediaKind,
-      sourceFilePath: item.filePath,
-      durationSec,
-      preserveExistingSelection: true,
-    });
-    shotShas.add(sha);
-    existingShasByShot.set(item.shotId, shotShas);
-    importedCount += 1;
+    // TOCTOU-free private staging: copy external file ONCE exclusively into project-owned temp dir,
+    // verify SHA-256 on THAT immutable staged copy, and run ffprobe + DB import strictly on the staged copy!
+    const ext = path.extname(item.filePath).toLowerCase() || (item.mediaKind === "video" ? ".mp4" : ".png");
+    const stagedPath = path.join(stagingDir, `stage_${randomUUID().replaceAll("-", "")}${ext}`);
+    try {
+      copyFileSync(item.filePath, stagedPath, fsConstants.COPYFILE_EXCL);
+      const stagedSha = createHash("sha256").update(readFileSync(stagedPath)).digest("hex").toLowerCase();
+      if (stagedSha !== expectedHash) {
+        rejectedCount += 1;
+        rejectedReasons.push(
+          `文件「${fileLabel}」在确认后内容已变更（校验摘要不匹配），已拒绝导入，请重新扫描核对。`,
+        );
+        continue;
+      }
+
+      const shotShas = existingShasByShot.get(item.shotId) ?? new Set<string>();
+      if (shotShas.has(stagedSha)) {
+        skippedCount += 1;
+        continue;
+      }
+
+      const durationSec =
+        item.mediaKind === "video" ? await probeFileDurationSec(stagedPath, "video") : null;
+
+      // F04: External drop imports strictly create candidate takes without overwriting confirmed takes
+      projects.importShotTakeFromPath({
+        projectId: input.projectId,
+        shotId: item.shotId,
+        kind: item.mediaKind,
+        sourceFilePath: stagedPath,
+        durationSec,
+        preserveExistingSelection: true,
+      });
+      shotShas.add(stagedSha);
+      existingShasByShot.set(item.shotId, shotShas);
+      importedCount += 1;
+    } finally {
+      if (existsSync(stagedPath)) {
+        try {
+          unlinkSync(stagedPath);
+        } catch {
+          // Best-effort cleanup of private staging copy
+        }
+      }
+    }
   }
 
   const fresh = projects.openProject(input.projectId);
+  const summaryParts: string[] = [];
+  if (importedCount > 0) summaryParts.push(`已安全回流导入 ${importedCount} 个候选版本`);
+  if (rejectedCount > 0) summaryParts.push(`因内容变更或校验不符拦截 ${rejectedCount} 个`);
+  if (skippedCount > 0) summaryParts.push(`跳过重复/缺失 ${skippedCount} 个`);
+
   return {
     ok: importedCount > 0,
     importedCount,
     skippedCount,
+    rejectedCount,
+    rejectedReasons,
     workspace: fresh,
     message:
-      importedCount > 0
-        ? `已批量回流导入 ${importedCount} 个素材版本${skippedCount > 0 ? `（跳过重复/无效 ${skippedCount} 个）` : ""}`
+      summaryParts.length > 0
+        ? summaryParts.join("；") + (rejectedReasons[0] ? `（${rejectedReasons[0]}）` : "")
         : "所有选中文件均已存在，无需重复导入",
   };
 }

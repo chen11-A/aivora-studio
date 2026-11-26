@@ -100,6 +100,7 @@ export function ExternalWorkflowModal(props: {
       filePath: item.filePath,
       shotId: manualBindings[item.filePath]!,
       mediaKind: item.mediaKind,
+      expectedSha256: item.sha256,
     }));
 
   async function handleCommitImport() {
