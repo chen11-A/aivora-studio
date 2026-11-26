@@ -1,3 +1,4 @@
+import { runV2SchemaMigrations } from "./schema-v2-migration";
 import type { SqliteDriver } from "./sqlite-driver";
 
 export const PROJECT_SCHEMA_SQL = `
@@ -189,7 +190,7 @@ CREATE TABLE IF NOT EXISTS app_kv (
 );
 `;
 
-export function initProjectSchema(db: SqliteDriver): void {
+export function initProjectSchema(db: SqliteDriver, projectDir?: string): void {
   db.exec(PROJECT_SCHEMA_SQL);
   const sceneCols = new Set(
     db.all<{ name: string }>(`PRAGMA table_info(scenes)`).map((c) => c.name),
@@ -255,6 +256,7 @@ export function initProjectSchema(db: SqliteDriver): void {
     )
     WHERE speaker_asset_id IS NULL AND TRIM(speaker) != '';
   `);
+  runV2SchemaMigrations(db, projectDir ? { projectDir } : undefined);
 }
 
 export function initGlobalSchema(db: SqliteDriver): void {

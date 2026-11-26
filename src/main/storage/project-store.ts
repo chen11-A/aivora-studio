@@ -89,7 +89,7 @@ export class ProjectStore {
     const dir = this.resolveProjectDir(projectId);
     if (!dir) throw new Error("找不到指定作品目录");
     const db = openSqlite(join(dir, "project.db"));
-    initProjectSchema(db);
+    initProjectSchema(db, dir);
     this.openDbs.set(projectId, db);
     return db;
   }
