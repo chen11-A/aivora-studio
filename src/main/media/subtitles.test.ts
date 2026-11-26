@@ -50,7 +50,10 @@ describe("filter-path & subtitles", () => {
 
     const base = mkdtempSync(join(tmpdir(), "aivora-font-esc-"));
     try {
-      const trickyDir = join(base, "O'Brien:测试 字体");
+      const trickyDir = join(
+        base,
+        process.platform === "win32" ? "O'Brien 测试 字体" : "O'Brien:测试 字体",
+      );
       mkdirSync(trickyDir, { recursive: true });
       copyFileSync(font.fontFilePath, join(trickyDir, "NotoSansCJK-Regular.ttc"));
       const { ass } = generateSubtitles(

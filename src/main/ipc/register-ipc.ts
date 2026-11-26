@@ -487,11 +487,8 @@ export function registerIpcHandlers(deps: {
   }));
 
   registerExternalAndModelExtraIpc({
-    projects: deps.projects,
-    globalConfig: deps.globalConfig,
-    getWindow: deps.getWindow,
-    allowedRevealPaths,
+    projects: deps.projects, globalConfig: deps.globalConfig, getWindow: deps.getWindow, allowedRevealPaths, assertAuthorized,
   });
-  registerDeliveryIpcHandlers({ projects: deps.projects, allowedRevealPaths });
-  registerBudgetIpcHandlers({ projects: deps.projects, jobs: deps.jobQueue });
+  registerDeliveryIpcHandlers({ projects: deps.projects, allowedRevealPaths, assertAuthorized });
+  registerBudgetIpcHandlers({ projects: deps.projects, jobs: deps.jobQueue, assertAuthorized });
 }

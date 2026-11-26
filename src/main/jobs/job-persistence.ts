@@ -91,25 +91,41 @@ export function reconcileOrphanRunningJobs(
       let reconciled = 0;
       for (const row of running) {
         if (activeJobIds.has(row.id)) continue;
-        db.run(
-          `UPDATE jobs
-           SET status = 'unknown',
-               error_message = COALESCE(error_message, '检测到上次运行中断，为防重复扣费已暂停自动重试；请凭任务号点击「查单找回」。'),
-               updated_at = ?
-           WHERE id = ? AND status = 'running'`,
-          now,
+        const unsentLedger = db.get<{ id: string }>(
+          `SELECT id FROM budget_ledger WHERE job_id = ? AND status = 'reserved' AND dispatched_to_network = 0 LIMIT 1`,
           row.id,
         );
-        db.run(
-          `UPDATE budget_ledger
-           SET status = 'unknown_hold',
-               settled_cents = NULL,
-               note = '检测到上次运行中断，已同步转入 UNKNOWN 待核实防止重复扣费',
-               updated_at = ?
-           WHERE job_id = ? AND status = 'reserved' AND dispatched_to_network = 1`,
-          now,
-          row.id,
-        );
+        if (unsentLedger) {
+          db.run(
+            `UPDATE jobs
+             SET status = 'cancelled',
+                 error_message = COALESCE(error_message, '检测到崩溃前尚未发送网络请求，可在任务抽屉零漂移核验后安全续跑。'),
+                 updated_at = ?
+             WHERE id = ? AND status = 'running'`,
+            now,
+            row.id,
+          );
+        } else {
+          db.run(
+            `UPDATE jobs
+             SET status = 'unknown',
+                 error_message = COALESCE(error_message, '检测到上次运行中断，为防重复扣费已暂停自动重试；请凭任务号点击「查单找回」。'),
+                 updated_at = ?
+             WHERE id = ? AND status = 'running'`,
+            now,
+            row.id,
+          );
+          db.run(
+            `UPDATE budget_ledger
+             SET status = 'unknown_hold',
+                 settled_cents = NULL,
+                 note = '检测到上次运行中断，已同步转入 UNKNOWN 待核实防止重复扣费',
+                 updated_at = ?
+             WHERE job_id = ? AND status = 'reserved' AND dispatched_to_network = 1`,
+            now,
+            row.id,
+          );
+        }
         reconciled += 1;
       }
       // Transition dispatched orphan ledger entries (e.g. non-queue paid calls interrupted mid-flight)

@@ -26,10 +26,6 @@ import type {
 import type {
   DeliveryQueueView,
   EpisodeContentQcResult,
-  ExportFinishingPackInput,
-  ExportFinishingPackResult,
-  GenerateContactSheetInput,
-  GenerateContactSheetResult,
   RunMultiEpisodeDeliveryInput,
   RunMultiEpisodeDeliveryResult,
 } from "./types/delivery";
@@ -344,9 +340,7 @@ export type AivoraDesktopApi = {
   }>;
   loadDeliveryQueue: (projectId: string) => Promise<DeliveryQueueView | null>;
   runMultiEpisodeDelivery: (input: RunMultiEpisodeDeliveryInput) => Promise<RunMultiEpisodeDeliveryResult>;
-  exportFinishingPack: (input: ExportFinishingPackInput) => Promise<ExportFinishingPackResult>;
   runEpisodeContentQc: (input: { projectId: string; episodeId: string; humanSignedOff?: boolean }) => Promise<EpisodeContentQcResult>;
-  generateContactSheet: (input: GenerateContactSheetInput) => Promise<GenerateContactSheetResult>;
   getBudgetOverview: (projectId: string) => Promise<ProjectBudgetOverview>;
   setProjectBudgetCap: (input: SetProjectBudgetCapInput) => Promise<BudgetSummaryView>;
   resumePlannedLedger: (input: ResumePlannedLedgerInput) => Promise<ResumePlannedLedgerResult>;
@@ -395,9 +389,7 @@ export const IPC_CHANNELS = {
   EXPORT_PROGRESS_EVENT: "aivora:media:export-progress",
   DELIVERY_LOAD_QUEUE: "aivora:delivery:load-queue",
   DELIVERY_RUN_MULTI_EPISODE: "aivora:delivery:run-multi-episode",
-  DELIVERY_EXPORT_FINISHING_PACK: "aivora:delivery:export-finishing-pack",
   DELIVERY_RUN_CONTENT_QC: "aivora:delivery:run-content-qc",
-  MEDIA_GENERATE_CONTACT_SHEET: "aivora:media:generate-contact-sheet",
   BUDGET_GET_OVERVIEW: "aivora:budget:overview",
   BUDGET_SET_CAP: "aivora:budget:set-cap",
   BUDGET_RESUME_PLANNED: "aivora:budget:resume-planned",

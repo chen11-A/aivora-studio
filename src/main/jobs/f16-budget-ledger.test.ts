@@ -458,14 +458,36 @@ describe("F16 atomic budget ledger, full-DB pending guard, and A/B/C crash recov
         modelId: "kling-v2",
       });
       markBudgetEntryDispatched(db, orphEntry.id);
+      // Also seed an unsent Case C orphan running job (dispatched_to_network = 0)
+      authorizeAndReserveBudget(db, {
+        projectId: ws.project.id,
+        jobId: "job_orphan_unsent",
+        shotId,
+        kind: "image",
+        quotedCents: 6,
+        inputSha256: "sha_unsent",
+        providerLabel: "Img",
+        modelId: "gpt-image-1",
+      });
+      db.run(
+        `INSERT INTO jobs (id, project_id, shot_id, kind, status, idempotency_key, input_sha256, provider_snapshot, summary_text, progress, created_at, updated_at)
+         VALUES ('job_orphan_unsent', ?, ?, 'image', 'running', 'idem_unsent', 'sha_unsent', '{}', '未发包崩溃', 0, ?, ?)`,
+        ws.project.id,
+        shotId,
+        now,
+        now,
+      );
     });
 
     const jobsAfterReconcile = queue.listJobs(ws.project.id);
     expect(jobsAfterReconcile.find((j) => j.id === "job_orphan_1")?.status).toBe("unknown");
+    expect(jobsAfterReconcile.find((j) => j.id === "job_orphan_unsent")?.status).toBe("cancelled");
     projects.withProjectDb(ws.project.id, (db) => {
       const sum = getProjectBudgetSummary(db, ws.project.id);
-      expect(sum.reservedCents).toBe(0);
+      expect(sum.reservedCents).toBe(6);
       expect(sum.unknownHoldCount).toBe(2);
+      const matrix = classifyCrashRecoveryMatrix(db, ws.project.id);
+      expect(matrix.some((m) => m.jobId === "job_orphan_unsent" && m.action === "resumable_if_zero_drift")).toBe(true);
     });
 
     projects.closeAll();

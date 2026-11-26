@@ -12,5 +12,9 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    pool: "forks",
+    ...(process.platform === "win32"
+      ? { poolOptions: { forks: { maxForks: 2, minForks: 1 } } }
+      : {}),
   },
 });

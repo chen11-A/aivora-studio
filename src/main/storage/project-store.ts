@@ -103,7 +103,7 @@ export class ProjectStore {
       const dbFile = join(dir, "project.db");
       if (!existsSync(dbFile)) continue;
       try {
-        const db = openSqlite(dbFile);
+        const db = openSqlite(dbFile, { readOnly: true });
         try {
           const row = db.get<{ id: string }>(`SELECT id FROM projects LIMIT 1`);
           if (row?.id) this.dirByProjectId.set(row.id, dir);

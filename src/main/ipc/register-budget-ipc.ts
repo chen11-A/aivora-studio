@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import { IPC_CHANNELS } from "../../shared/ipc-contract";
 import type {
   BudgetSummaryView,
@@ -19,6 +19,7 @@ import type { ProjectStore } from "../storage/project-store";
 export type BudgetIpcDeps = {
   projects: ProjectStore;
   jobs: GenerationJobQueue;
+  assertAuthorized: (event: IpcMainInvokeEvent) => void;
 };
 
 export function registerBudgetIpcHandlers(deps: BudgetIpcDeps): void {
@@ -27,7 +28,10 @@ export function registerBudgetIpcHandlers(deps: BudgetIpcDeps): void {
     fn: (...args: Args) => Result | Promise<Result>,
   ) => {
     ipcMain.removeHandler(channel);
-    ipcMain.handle(channel, (_event, ...args) => fn(...(args as Args)));
+    ipcMain.handle(channel, (event, ...args) => {
+      deps.assertAuthorized(event);
+      return fn(...(args as Args));
+    });
   };
 
   handle(IPC_CHANNELS.BUDGET_GET_OVERVIEW, (projectId: string): ProjectBudgetOverview => {
@@ -70,8 +74,18 @@ export function registerBudgetIpcHandlers(deps: BudgetIpcDeps): void {
       }
       if (item.action === "skip_already_done") {
         deps.projects.withProjectDb(input.projectId, (db) => {
-          settleBudgetEntry(db, item.ledgerId, "succeeded", {
-            note: "候选素材已存在，跳过重做",
+          db.transaction(() => {
+            settleBudgetEntry(db, item.ledgerId, "succeeded", {
+              note: "候选素材已存在，跳过重做",
+            });
+            if (item.jobId) {
+              db.run(
+                `UPDATE jobs SET status = 'succeeded', error_message = NULL, progress = 100, updated_at = ?
+                 WHERE id = ? AND status IN ('running', 'unknown')`,
+                new Date().toISOString(),
+                item.jobId,
+              );
+            }
           });
         });
         return { ok: true, action: "skipped", message: item.reason };

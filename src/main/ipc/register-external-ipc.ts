@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, shell, type BrowserWindow } from "electron";
+import { app, dialog, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from "electron";
 import path from "node:path";
 import { IPC_CHANNELS } from "../../shared/ipc-contract";
 import type { ExternalDropCommitInput } from "../../shared/types/external-pack";
@@ -27,6 +27,7 @@ export type ExternalIpcDeps = {
   globalConfig: GlobalConfigStore;
   getWindow: () => BrowserWindow | null;
   allowedRevealPaths: Set<string>;
+  assertAuthorized: (event: IpcMainInvokeEvent) => void;
 };
 
 let activeDownloadWatcher: DownloadFolderWatcher | null = null;
@@ -43,7 +44,10 @@ export function registerExternalAndModelExtraIpc(deps: ExternalIpcDeps): void {
     fn: (...args: Args) => Result | Promise<Result>,
   ) => {
     ipcMain.removeHandler(channel);
-    ipcMain.handle(channel, (_event, ...args) => fn(...(args as Args)));
+    ipcMain.handle(channel, (event, ...args) => {
+      deps.assertAuthorized(event);
+      return fn(...(args as Args));
+    });
   };
 
   let defaultDownloads = getDefaultDownloadsDir();
