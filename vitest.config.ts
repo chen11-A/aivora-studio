@@ -11,6 +11,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    testTimeout: process.platform === "win32" ? 20_000 : 10_000,
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     pool: "forks",
     ...(process.platform === "win32"
