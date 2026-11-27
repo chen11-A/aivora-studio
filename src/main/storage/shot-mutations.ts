@@ -194,26 +194,6 @@ export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): str
     input.keyBeat !== undefined ? (input.keyBeat ? 1 : 0) : Number(row.key_beat ?? 0);
   const nextKeyBeatReason = input.keyBeatReason ?? String(row.key_beat_reason ?? "");
   const nextVideoPlanMode = input.videoPlanMode ?? String(row.video_plan_mode ?? "paid_video");
-  const nextVideoGenMode = input.videoGenMode ?? String(row.video_gen_mode ?? "first_frame");
-  const nextEndFramePath =
-    input.endFrameMediaPath !== undefined
-      ? input.endFrameMediaPath
-      : ((row.end_frame_media_path as string | null) ?? null);
-  const nextRefVideoPath =
-    input.referenceVideoPath !== undefined
-      ? input.referenceVideoPath
-      : ((row.reference_video_path as string | null) ?? null);
-  const nextNativeAudio =
-    input.nativeAudioEnabled !== undefined
-      ? (input.nativeAudioEnabled ? 1 : 0)
-      : row.native_audio_enabled === undefined
-        ? 1
-        : Number(row.native_audio_enabled);
-  const nextSeamType = input.seamTransitionType ?? String(row.seam_transition_type ?? "cut");
-  const nextSeamSec =
-    input.seamTransitionSec !== undefined ? input.seamTransitionSec : Number(row.seam_transition_sec ?? 0.4);
-  const nextAudioJcut =
-    input.audioJcutSec !== undefined ? input.audioJcutSec : Number(row.audio_jcut_sec ?? 0);
 
   db.transaction(() => {
     db.run(
@@ -221,8 +201,6 @@ export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): str
        trim_in_sec = ?, trim_out_sec = ?, visual_prompt = ?,
        negative_prompt = ?, dialogue = ?, speaker = ?, speaker_asset_id = ?, speaker_status = ?,
        subtitle = ?, source_span_json = ?, key_beat = ?, key_beat_reason = ?, video_plan_mode = ?,
-       video_gen_mode = ?, end_frame_media_path = ?, reference_video_path = ?, native_audio_enabled = ?,
-       seam_transition_type = ?, seam_transition_sec = ?, audio_jcut_sec = ?,
        character_asset_ids_json = ?, prop_asset_ids_json = ?, required_ref_asset_ids_json = ?,
        selected_image_take_id = ?, selected_video_take_id = ?, selected_speech_take_id = ?, updated_at = ?
        WHERE id = ?`,
@@ -243,13 +221,6 @@ export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): str
       nextKeyBeat,
       nextKeyBeatReason,
       nextVideoPlanMode,
-      nextVideoGenMode,
-      nextEndFramePath,
-      nextRefVideoPath,
-      nextNativeAudio,
-      nextSeamType,
-      nextSeamSec,
-      nextAudioJcut,
       nextCharIdsJson,
       nextPropIdsJson,
       nextReqRefIdsJson,

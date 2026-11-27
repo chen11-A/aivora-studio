@@ -76,44 +76,13 @@ export function detectGenerationPlanDrift(
     }
   }
 
-  const curVideoGenMode = shot.videoGenMode ?? "first_frame";
-  const curEndFramePath =
-    plan.kind === "video" && curVideoGenMode === "first_last"
-      ? (shot.endFrameMediaPath ?? null)
-      : null;
-  const curRefVideoPath =
-    plan.kind === "video" && curVideoGenMode === "multimodal_ref"
-      ? (shot.referenceVideoPath ?? null)
-      : null;
-
-  if (plan.kind === "video") {
-    if (locked.videoGenMode && curVideoGenMode !== locked.videoGenMode) {
-      reasons.push("视频生成模式");
-    }
-    if ((locked.lastFrameMediaPath ?? null) !== curEndFramePath) {
-      reasons.push("尾帧图");
-    }
-    if ((locked.referenceVideoMediaPath ?? null) !== curRefVideoPath) {
-      reasons.push("参考视频");
-    }
-    if (
-      locked.nativeAudioEnabled !== undefined &&
-      (shot.nativeAudioEnabled ?? true) !== locked.nativeAudioEnabled
-    ) {
-      reasons.push("原生音画开关");
-    }
-  }
-
   const prepared = injectLockedReferences(
     ws,
     ws.dirPath,
     shot,
     plan.kind === "video" ? (confirmedFirstFrame?.mediaPath ?? null) : null,
-    curEndFramePath,
   );
-  const lockedBasePrompt =
-    (locked.finalPrompt.split("\n[场记与连戏约束]")[0] ?? locked.finalPrompt)
-      .split("\n[镜头导演与音画指令]")[0] ?? locked.finalPrompt;
+  const lockedBasePrompt = locked.finalPrompt.split("\n[场记与连戏约束]")[0] ?? locked.finalPrompt;
   if (prepared.finalPrompt !== lockedBasePrompt) reasons.push("提示词");
   if (shot.negativePrompt !== locked.negativePrompt) reasons.push("反向提示词");
   if (plan.kind === "video" && shot.durationSec !== locked.durationSec) reasons.push("时长");
@@ -136,8 +105,7 @@ export function detectGenerationPlanDrift(
   if (
     (refPathChanged || refShaChanged || refListChanged) &&
     !firstFrameChanged &&
-    !reasons.includes("首帧图文件已不存在") &&
-    !reasons.includes("尾帧图")
+    !reasons.includes("首帧图文件已不存在")
   ) {
     reasons.push(locked.firstFrameMediaPath ? "首帧图" : "参考图");
   }

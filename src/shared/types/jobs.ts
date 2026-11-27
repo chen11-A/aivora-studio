@@ -7,7 +7,6 @@ import {
   VideoPlanModeSchema,
   type AspectRatio,
   type Job,
-  type VideoGenMode,
 } from "./domain";
 import type { CapabilityKey, OAuthProviderId } from "./provider";
 import {
@@ -28,7 +27,7 @@ export const DirectorProposedShotSchema = z.object({
   title: z.string().trim().min(1).max(120),
   scale: ShotScaleSchema.catch("中景"),
   cameraMove: CameraMoveSchema.catch("固定"),
-  durationSec: z.number().int().min(1).max(30).catch(4),
+  durationSec: z.number().int().min(1).max(15).catch(4),
   visualPrompt: z.string().trim().min(1),
   dialogue: z.string().default(""),
   speaker: z.string().default(""),
@@ -124,13 +123,7 @@ export type LockedGenerationInput = {
   negativePrompt: string;
   durationSec: number;
   aspectRatio: AspectRatio;
-  videoGenMode?: VideoGenMode;
   firstFrameMediaPath: string | null;
-  lastFrameMediaPath?: string | null;
-  lastFrameMediaSha256?: string | null;
-  referenceVideoMediaPath?: string | null;
-  referenceVideoMediaSha256?: string | null;
-  nativeAudioEnabled?: boolean;
   referenceMediaPath: string | null;
   referenceMediaSha256: string | null;
   referenceItems?: LockedReferenceMediaItem[];
@@ -153,11 +146,7 @@ export type GenerationPlan = {
   injectedRefs: InjectedRefSummary[];
   missingRequiredRefs?: MissingRequiredRefSummary[];
   modelPolicyNotice?: string | null;
-  videoGenMode?: VideoGenMode;
   firstFramePath?: string | null;
-  lastFramePath?: string | null;
-  referenceVideoPath?: string | null;
-  nativeAudioEnabled?: boolean;
   upstreamDurationNote?: string | null;
   idempotencyKey: string;
   inputSha256: string;

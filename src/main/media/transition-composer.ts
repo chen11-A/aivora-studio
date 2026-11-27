@@ -155,13 +155,11 @@ export async function composeSegmentsWithTransitions(input: {
   concatFiles: string[];
   exemptBlackIntervals: Array<{ start: number; end: number }>;
   totalReductionSec: number;
-  perSeamReductionSec: number[];
 }> {
   const { scratchDir, segmentFiles, segmentCacheKeys, segmentDurations, seamTransitions, cacheDir, signal } =
     input;
-  const perSeamReductionSec = new Array<number>(Math.max(0, segmentFiles.length - 1)).fill(0);
   if (!seamTransitions || Object.keys(seamTransitions).length === 0 || segmentFiles.length < 2) {
-    return { concatFiles: segmentFiles, exemptBlackIntervals: [], totalReductionSec: 0, perSeamReductionSec };
+    return { concatFiles: segmentFiles, exemptBlackIntervals: [], totalReductionSec: 0 };
   }
 
   let curPath = path.resolve(scratchDir, segmentFiles[0]!);
@@ -201,12 +199,11 @@ export async function composeSegmentsWithTransitions(input: {
         end: Number((curTimelineSec + half + 0.1).toFixed(3)),
       });
     }
-    perSeamReductionSec[i] = res.durationReductionSec;
     totalReductionSec = Number((totalReductionSec + res.durationReductionSec).toFixed(3));
     curPath = res.outputPath;
     curKey = res.cacheKey;
     curTimelineSec = Math.max(0.1, curTimelineSec + nextDur - res.durationReductionSec);
   }
   concatFiles.push(curPath);
-  return { concatFiles, exemptBlackIntervals, totalReductionSec, perSeamReductionSec };
+  return { concatFiles, exemptBlackIntervals, totalReductionSec };
 }

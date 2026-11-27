@@ -186,11 +186,20 @@ export async function renderShotSegment(params: {
         args.push("-f", "lavfi", "-t", dur, "-i", "anullsrc=r=48000:cl=stereo");
         audioSourceSpec = "1:a:0";
       }
-      const fadeOutStart = Math.max(0, Number((durNum - 0.015).toFixed(3)));
-      const antiClickAf = `apad=whole_dur=${durNum},afade=t=in:st=0:d=0.015,afade=t=out:st=${fadeOutStart}:d=0.015`;
       args.push(
-        "-map", "0:v:0", "-map", audioSourceSpec,
-        "-vf", vf, "-af", antiClickAf, "-t", dur, ...VIDEO_ENC, ...AUDIO_ENC, segName,
+        "-map",
+        "0:v:0",
+        "-map",
+        audioSourceSpec,
+        "-vf",
+        vf,
+        "-af",
+        `apad=whole_dur=${durNum}`,
+        "-t",
+        dur,
+        ...VIDEO_ENC,
+        ...AUDIO_ENC,
+        segName,
       );
     }
   } else if (isSvg) {

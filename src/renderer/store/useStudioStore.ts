@@ -450,7 +450,10 @@ export const useStudioStore = create<StudioStore>((set, get) => {
     async importArchive() {
       try {
         const res = await client.importProjectArchive();
-        if (res.ok && res.project) { enterWorkspace(res.project); await get().refreshProjects(); }
+        if (res.ok && res.project) {
+          enterWorkspace(res.project);
+          await get().refreshProjects();
+        }
         if (!res.canceled) flashToast(res.message);
         return { ok: res.ok, canceled: res.canceled, message: res.message };
       } catch (err) {

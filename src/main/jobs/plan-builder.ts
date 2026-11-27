@@ -1,12 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
 import { resolveConfirmedFirstFrameTake, resolveShotSpeechVoiceId } from "../../shared/media-selection";
-import type { VideoGenMode } from "../../shared/types/domain";
 import type { GenerationPlan, LockedGenerationInput } from "../../shared/types/jobs";
 import type { CapabilityKey } from "../../shared/types/provider";
 import { GROK_API } from "../auth/grok-oauth";
-import { resolveConfinedMediaPath } from "../media/media-protocol";
-import { buildVideoDirectionSuffix } from "../providers/cinematic-prompt-builder";
 import { checkModelPolicy } from "../providers/model-registry";
 import { buildAssetPortraitPrompt, injectLockedReferences } from "../providers/ref-image-injector";
 import { clampSeedanceDurationSec } from "../providers/seedance-adapter";
@@ -14,13 +10,6 @@ import type { GlobalConfigStore } from "../storage/global-store";
 import type { ProjectStore } from "../storage/project-store";
 import { hasPendingJobForInputInDb, type LockedProviderSnapshot } from "./job-persistence";
 import { evaluateLivePreprodForShot, runLiveVideoProviderPreflight } from "./live-preprod-gate";
-
-function hashConfinedFile(projectDir: string, mediaPath: string | null | undefined): string | null {
-  if (!mediaPath) return null;
-  const abs = resolveConfinedMediaPath(projectDir, mediaPath);
-  if (!abs || !existsSync(abs)) return null;
-  return createHash("sha256").update(readFileSync(abs)).digest("hex");
-}
 
 export function buildGenerationPlan(params: {
   projects: ProjectStore;
@@ -40,28 +29,14 @@ export function buildGenerationPlan(params: {
   if (!isPortrait && !shot) throw new Error("镜头不存在");
 
   const portraitInfo = isPortrait ? buildAssetPortraitPrompt(ws, input.assetId!) : null;
-  const videoGenMode: VideoGenMode = shot?.videoGenMode ?? "first_frame";
-  const nativeAudioEnabled = shot?.nativeAudioEnabled ?? true;
   const confirmedFirstFrame =
     shot && input.kind === "video" ? resolveConfirmedFirstFrameTake(shot, ws.takes) : null;
-  const endFramePath =
-    shot && input.kind === "video" && videoGenMode === "first_last"
-      ? (shot.endFrameMediaPath ?? null)
-      : null;
-  const refVideoPath =
-    shot && input.kind === "video" && videoGenMode === "multimodal_ref"
-      ? (shot.referenceVideoPath ?? null)
-      : null;
-  const lastFrameSha256 = hashConfinedFile(ws.dirPath, endFramePath);
-  const refVideoSha256 = hashConfinedFile(ws.dirPath, refVideoPath);
-
   const prepared = shot
     ? injectLockedReferences(
         ws,
         ws.dirPath,
         shot,
         input.kind === "video" ? (confirmedFirstFrame?.mediaPath ?? null) : null,
-        endFramePath,
       )
     : {
         finalPrompt: portraitInfo!.prompt,
@@ -135,37 +110,15 @@ export function buildGenerationPlan(params: {
     else if (policy.notice) modelPolicyNotice = policy.notice;
   }
 
-  // Validate first_last / reference_video integrity before paid dispatch
-  if (!blockingReason && shot && input.kind === "video") {
-    if (videoGenMode === "first_last") {
-      if (!confirmedFirstFrame && !prepared.primaryReferenceMediaPath) {
-        blockingReason = "首尾帧桥接模式需要先确认本镜首帧（可先 AI 生首帧或抽取上镜尾帧）。";
-      } else if (!endFramePath || !lastFrameSha256) {
-        blockingReason = "首尾帧桥接模式缺少有效尾帧图，请先在分镜属性中导入目标尾帧或切回「首帧图生」。";
-      }
-    } else if (videoGenMode === "multimodal_ref" && refVideoPath && !refVideoSha256) {
-      blockingReason = "当前镜头绑定的参考视频文件已丢失，请重新导入或清除参考视频。";
-    }
-  }
-
   // Audit #3 / M01-M04: Run official provider preflight contract checks (0 network calls on violation)
   if (!blockingReason && shot && input.kind === "video" && modelId) {
-    const subjectRefCount = prepared.orderedReferenceItems.filter(
-      (it) => it.role !== "first_frame" && it.role !== "last_frame",
-    ).length;
     const preflight = runLiveVideoProviderPreflight({
       protocol,
       modelId,
       aspectRatio: ws.project.aspectRatio,
       durationSec: shot.durationSec,
-      videoGenMode,
       hasFirstFrame: Boolean(confirmedFirstFrame || prepared.primaryReferenceMediaPath),
-      hasLastFrame: Boolean(endFramePath && lastFrameSha256),
-      hasReferenceVideo: Boolean(refVideoPath && refVideoSha256),
-      subjectImageCount:
-        videoGenMode === "multimodal_ref"
-          ? prepared.orderedReferenceItems.length
-          : subjectRefCount,
+      subjectImageCount: prepared.orderedReferenceItems.length,
     });
     if (!preflight.ok) blockingReason = preflight.reason;
     else if (preflight.notice && !modelPolicyNotice) modelPolicyNotice = preflight.notice;
@@ -194,20 +147,10 @@ export function buildGenerationPlan(params: {
     }
   }
 
-  const videoDirectionSuffix =
-    shot && input.kind === "video"
-      ? buildVideoDirectionSuffix({
-          shot,
-          mode: videoGenMode,
-          hasLastFrame: Boolean(endFramePath && lastFrameSha256),
-          hasReferenceVideo: Boolean(refVideoPath && refVideoSha256),
-          nativeAudioEnabled,
-        })
-      : "";
   const promptPreview =
     shot && input.kind === "speech"
       ? shot.dialogue.trim() || shot.subtitle.trim()
-      : `${prepared.finalPrompt}${preprod.continuityPromptSuffix}${videoDirectionSuffix}`;
+      : `${prepared.finalPrompt}${preprod.continuityPromptSuffix}`;
   const speechVoice =
     shot && input.kind === "speech" ? resolveShotSpeechVoiceId(shot, ws.assets) : "";
   const lockedInput: LockedGenerationInput = {
@@ -215,13 +158,7 @@ export function buildGenerationPlan(params: {
     negativePrompt: shot ? shot.negativePrompt : "",
     durationSec: shot ? shot.durationSec : 0,
     aspectRatio: ws.project.aspectRatio,
-    videoGenMode: input.kind === "video" ? videoGenMode : undefined,
     firstFrameMediaPath: confirmedFirstFrame?.mediaPath ?? null,
-    lastFrameMediaPath: endFramePath,
-    lastFrameMediaSha256: lastFrameSha256,
-    referenceVideoMediaPath: refVideoPath,
-    referenceVideoMediaSha256: refVideoSha256,
-    nativeAudioEnabled: input.kind === "video" ? nativeAudioEnabled : undefined,
     referenceMediaPath:
       input.kind === "speech" || isPortrait ? null : prepared.primaryReferenceMediaPath,
     referenceMediaSha256:
@@ -249,16 +186,10 @@ export function buildGenerationPlan(params: {
 
   let upstreamDurationNote: string | null = null;
   if (shot && input.kind === "video" && protocol === "kling-video") {
-    upstreamDurationNote = `可灵接口按 ${shot.durationSec >= 7 ? "10" : "5"}s 档计费生成${endFramePath ? "（含首尾帧闭环）" : ""}，成片将按本镜 ${shot.durationSec}s 区间裁切采用`;
+    upstreamDurationNote = `可灵接口按 ${shot.durationSec >= 7 ? "10" : "5"}s 档计费生成，成片将按本镜 ${shot.durationSec}s 区间裁切采用`;
   } else if (shot && input.kind === "video" && protocol === "seedance-video") {
     const sec = clampSeedanceDurationSec(modelId, shot.durationSec);
-    const modeLabel =
-      videoGenMode === "first_last"
-        ? "首尾帧桥接"
-        : videoGenMode === "multimodal_ref"
-          ? "多模态参考"
-          : "首帧图生";
-    upstreamDurationNote = `即梦 Seedance（${modeLabel}）按 ${sec}s 整数档生成${nativeAudioEnabled ? "并请求原生音画同出" : ""}，成片将按本镜 ${shot.durationSec}s 区间裁切采用`;
+    upstreamDurationNote = `即梦 Seedance 按 ${sec}s 整数档生成，成片将按本镜 ${shot.durationSec}s 区间裁切采用`;
   } else if (shot && input.kind === "video" && protocol === "gemini-official") {
     upstreamDurationNote = `Google Gemini 异步视频按模型默认时长生成，成片将按本镜 ${shot.durationSec}s 区间裁切采用`;
   } else if (shot && input.kind === "video" && protocol === "comfy-worker") {
@@ -281,11 +212,7 @@ export function buildGenerationPlan(params: {
     injectedRefs: input.kind === "speech" ? [] : prepared.injectedRefs,
     missingRequiredRefs,
     modelPolicyNotice,
-    videoGenMode: input.kind === "video" ? videoGenMode : undefined,
     firstFramePath: confirmedFirstFrame?.mediaPath ?? null,
-    lastFramePath: endFramePath,
-    referenceVideoPath: refVideoPath,
-    nativeAudioEnabled: input.kind === "video" ? nativeAudioEnabled : undefined,
     upstreamDurationNote,
     idempotencyKey: `idem_${randomUUID().replaceAll("-", "").slice(0, 16)}`,
     inputSha256,

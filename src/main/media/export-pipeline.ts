@@ -38,8 +38,6 @@ import { MediaProcessAbortedError, probeFfmpegStatus, runMediaBinary } from "./f
 import { buildAssFilterArg, resolveBundledFontInfo } from "./font-locator";
 import { resolveConfinedMediaPath } from "./media-protocol";
 import { buildSmoothDuckingFilter } from "./motion-filters";
-import { applyAudioSeamStaggering } from "./audio-seam";
-import { buildEpisodeSeamTransitions, hasEpisodeAudioSeamOverrides, realignTimelineAfterTransitions } from "./seam-plan";
 import {
   resolveEffectiveAudioDurationSec,
   resolveEffectiveVideoDurationSec,
@@ -229,32 +227,33 @@ export async function exportEpisodeToMp4(params: {
     }
 
     assertNotAborted();
-    const effectiveSeams = params.seamTransitions ?? buildEpisodeSeamTransitions(epShots);
     const composed = await composeSegmentsWithTransitions({
-      scratchDir, segmentFiles, segmentCacheKeys, segmentDurations,
-      seamTransitions: effectiveSeams, cacheDir: path.join(params.projectDir, ".cache", "transitions"), signal,
+      scratchDir,
+      segmentFiles,
+      segmentCacheKeys,
+      segmentDurations,
+      seamTransitions: params.seamTransitions,
+      cacheDir: path.join(params.projectDir, ".cache", "transitions"),
+      signal,
     });
     const exemptBlackIntervals = composed.exemptBlackIntervals;
     if (composed.totalReductionSec > 0) {
-      realignTimelineAfterTransitions({ shotWindows, cues, dialogueIntervals, perSeamReductionSec: composed.perSeamReductionSec });
       cursorSec = Math.max(0.2, Number((cursorSec - composed.totalReductionSec).toFixed(2)));
     }
-    const concatList = composed.concatFiles.map((file) => `file '${file.replaceAll("\\", "/").replaceAll("'", "'\\''")}'`).join("\n") + "\n";
+    const concatList =
+      composed.concatFiles
+        .map((file) => `file '${file.replaceAll("\\", "/").replaceAll("'", "'\\''")}'`)
+        .join("\n") + "\n";
     await writeFile(path.join(scratchDir, "concat.txt"), concatList, "utf8");
     emit(60, "拼接时间轴", "正在拼接所有镜头与音轨…");
-    await runStep(ffmpegPath, [...BASE_FFMPEG, "-f", "concat", "-safe", "0", "-i", "concat.txt", "-c", "copy", "stitched.mp4"], { cwd: scratchDir });
+    await runStep(
+      ffmpegPath,
+      [...BASE_FFMPEG, "-f", "concat", "-safe", "0", "-i", "concat.txt", "-c", "copy", "stitched.mp4"],
+      { cwd: scratchDir },
+    );
 
     assertNotAborted();
     let preMasterFile = "stitched.mp4";
-    if (hasEpisodeAudioSeamOverrides(epShots)) {
-      emit(65, "音画错峰衔接", "正在混合 J/L-Cut 与接缝平滑音轨…");
-      preMasterFile = await applyAudioSeamStaggering({
-        scratchDir, stitchedVideoFile: "stitched.mp4", segmentFiles, shotWindows,
-        jcutOffsetsSec: epShots.map((s) => s.audioJcutSec ?? 0),
-        seamTypes: epShots.map((s) => s.seamTransitionType ?? "cut"),
-        totalDurationSec: cursorSec, ffmpegPath, run: runStep,
-      });
-    }
     const bgmAsset = params.workspace.project.bgmAssetId
       ? params.workspace.assets.find((a) => a.id === params.workspace.project.bgmAssetId)
       : null;

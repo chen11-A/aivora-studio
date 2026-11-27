@@ -150,20 +150,6 @@ export type AivoraDesktopApi = {
     kind: TakeKind;
     sourceFilePath?: string;
   }) => Promise<{ ok: boolean; workspace?: ProjectWorkspace; message: string }>;
-  extractPrevShotTailFrame: (input: {
-    projectId: string;
-    shotId: string;
-  }) => Promise<{ ok: boolean; mediaPath?: string; workspace?: ProjectWorkspace; message: string }>;
-  importShotEndFrame: (input: {
-    projectId: string;
-    shotId: string;
-    sourceFilePath?: string;
-  }) => Promise<{ ok: boolean; mediaPath?: string; workspace?: ProjectWorkspace; message: string }>;
-  importShotReferenceVideo: (input: {
-    projectId: string;
-    shotId: string;
-    sourceFilePath?: string;
-  }) => Promise<{ ok: boolean; mediaPath?: string; workspace?: ProjectWorkspace; message: string }>;
 
   // External web workflow pack export & drop-folder batch import
   exportExternalShotPack: (input: {
@@ -384,9 +370,6 @@ export const IPC_CHANNELS = {
   SELECT_TAKE: "aivora:takes:select",
   ADD_SYNTHETIC_TAKE: "aivora:takes:add-synthetic",
   IMPORT_SHOT_TAKE: "aivora:takes:import-file",
-  SHOT_EXTRACT_PREV_TAIL_FRAME: "aivora:shots:extract-prev-tail-frame",
-  SHOT_IMPORT_END_FRAME: "aivora:shots:import-end-frame",
-  SHOT_IMPORT_REF_VIDEO: "aivora:shots:import-ref-video",
   EXPORT_EXTERNAL_PACK: "aivora:external:export-pack",
   SCAN_EXTERNAL_DROP: "aivora:external:scan-drop",
   COMMIT_EXTERNAL_DROP: "aivora:external:commit-drop",

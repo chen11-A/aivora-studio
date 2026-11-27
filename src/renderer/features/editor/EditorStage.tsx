@@ -7,7 +7,6 @@ import { useStudioStore } from "../../store/useStudioStore";
 import { BgmTrackControls } from "./BgmTrackControls";
 import { EditorClipsBin, type EditorClipBinItem } from "./EditorClipsBin";
 import { EditorTimeline } from "./EditorTimeline";
-import { ShotSeamControls } from "./ShotSeamControls";
 import { SubtitleStylePicker, subtitlePreviewClass } from "./SubtitleStylePicker";
 import { useTimelinePlayback } from "./useTimelinePlayback";
 
@@ -437,22 +436,26 @@ export function EditorStage() {
               </div>
             )}
 
-            {currentShot && (
-              <ShotSeamControls
-                shot={currentShot}
-                isLastShot={(playback.activeSegment?.index ?? 0) >= epShots.length - 1}
-                onUpdate={(patch) => editShot({ shotId: currentShot.id, ...patch })}
-              />
-            )}
-
-            <SubtitleStylePicker value={workspace.project.subtitleStyle} onChange={(subtitleStyle) => void updateProjectSettings({ subtitleStyle })} />
+            <SubtitleStylePicker
+              value={workspace.project.subtitleStyle}
+              onChange={(subtitleStyle) => void updateProjectSettings({ subtitleStyle })}
+            />
 
             <BgmTrackControls
-              projectId={workspace.project.id} projectName={workspace.project.name} stylePreset={workspace.project.stylePreset}
-              episodeTitle={workspace.episodes.find((e) => e.id === activeEpisodeId)?.title ?? "第 1 集"}
-              bgmAsset={bgmAsset} bgmCandidates={workspace.assets.filter((a) => a.kind === "music" && a.id !== workspace.project.bgmAssetId)}
-              bgmVolumeDb={workspace.project.bgmVolumeDb} onImportBgm={(fp) => void importProjectBgm(fp)}
-              onClearBgm={() => void clearProjectBgm()} onVolumeChange={(db) => void updateProjectSettings({ bgmVolumeDb: db })}
+              projectId={workspace.project.id}
+              projectName={workspace.project.name}
+              stylePreset={workspace.project.stylePreset}
+              episodeTitle={
+                workspace.episodes.find((e) => e.id === activeEpisodeId)?.title ?? "第 1 集"
+              }
+              bgmAsset={bgmAsset}
+              bgmCandidates={workspace.assets.filter(
+                (a) => a.kind === "music" && a.id !== workspace.project.bgmAssetId,
+              )}
+              bgmVolumeDb={workspace.project.bgmVolumeDb}
+              onImportBgm={(fp) => void importProjectBgm(fp)}
+              onClearBgm={() => void clearProjectBgm()}
+              onVolumeChange={(db) => void updateProjectSettings({ bgmVolumeDb: db })}
             />
 
             <label className="flex items-start gap-2.5 p-2.5 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] cursor-pointer">

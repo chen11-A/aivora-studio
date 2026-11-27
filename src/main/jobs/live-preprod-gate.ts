@@ -31,38 +31,22 @@ export function runLiveVideoProviderPreflight(input: {
   modelId: string;
   aspectRatio: "16:9" | "9:16";
   durationSec: number;
-  videoGenMode?: "first_frame" | "first_last" | "multimodal_ref";
   hasFirstFrame: boolean;
   hasLastFrame?: boolean;
-  hasReferenceVideo?: boolean;
   subjectImageCount: number;
 }): { ok: true; notice?: string } | { ok: false; reason: string } {
   const m = input.modelId.toLowerCase();
-  const mode = input.videoGenMode ?? (input.hasLastFrame ? "first_last" : "first_frame");
   if (input.protocol === "seedance-video" || m.includes("seedance")) {
     const content: Parameters<typeof validateSeedanceContract>[0]["content"] = [
       { type: "text", text: "preflight" },
     ];
-    if (mode === "multimodal_ref") {
-      for (let i = 0; i < Math.min(input.subjectImageCount, 9); i += 1) {
-        content.push({ type: "image_url", role: "reference_image", url: "data:image/png;base64,AA==" });
-      }
-      if (input.hasReferenceVideo) {
-        content.push({ type: "video_url", role: "reference_video", url: "data:video/mp4;base64,AA==" });
-      }
-    } else {
-      if (input.hasFirstFrame) {
-        content.push({ type: "image_url", role: "first_frame", url: "data:image/png;base64,AA==" });
-      }
-      if (mode === "first_last" && input.hasLastFrame) {
-        content.push({ type: "image_url", role: "last_frame", url: "data:image/png;base64,AA==" });
-      }
+    if (input.hasFirstFrame) {
+      content.push({ type: "image_url", role: "first_frame", url: "data:image/png;base64,AA==" });
     }
-    const maxSec = /seedance-2-5/i.test(input.modelId) ? 30 : 15;
     const v = validateSeedanceContract({
       modelId: input.modelId,
-      ratio: mode !== "multimodal_ref" && input.hasFirstFrame ? "adaptive" : input.aspectRatio,
-      durationSec: Math.max(4, Math.min(maxSec, Math.round(input.durationSec || 5))),
+      ratio: input.hasFirstFrame ? "adaptive" : input.aspectRatio,
+      durationSec: Math.max(4, Math.min(15, Math.round(input.durationSec || 5))),
       content,
     });
     return v.ok ? { ok: true, notice: v.notice } : { ok: false, reason: v.reason };
@@ -73,17 +57,17 @@ export function runLiveVideoProviderPreflight(input: {
       modelId: input.modelId,
       durationSec: input.durationSec,
       hasFirstFrame: input.hasFirstFrame,
-      hasLastFrame: mode === "first_last" && Boolean(input.hasLastFrame),
+      hasLastFrame: input.hasLastFrame,
       subjectImageCount: input.subjectImageCount,
     });
     return v.ok ? { ok: true, notice: v.notice } : { ok: false, reason: v.reason };
   }
 
   if (input.protocol === "kling-video" || m.includes("kling")) {
-    const kMode = input.hasFirstFrame ? "image2video" : "text2video";
+    const mode = input.hasFirstFrame ? "image2video" : "text2video";
     const v = validateKlingContract({
       modelId: input.modelId,
-      mode: kMode,
+      mode,
       durationSec: input.durationSec,
       hasFirstFrame: input.hasFirstFrame,
     });
