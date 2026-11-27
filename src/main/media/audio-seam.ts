@@ -103,9 +103,10 @@ export async function applyAudioSeamStaggering(input: {
   if (mixInputs.length === 0) return stitchedVideoFile;
 
   const mixGraph =
+    `anullsrc=r=48000:cl=stereo,atrim=0:${totalDur.toFixed(3)},asetpts=PTS-STARTPTS[bed];` +
     `${filterChains.join(";")};` +
-    `${mixInputs.join("")}amix=inputs=${mixInputs.length}:duration=longest:dropout_transition=0:normalize=0,` +
-    `apad=whole_dur=${totalDur.toFixed(3)},atrim=0:${totalDur.toFixed(3)},asetpts=PTS-STARTPTS[aout]`;
+    `[bed]${mixInputs.join("")}amix=inputs=${mixInputs.length + 1}:duration=first:dropout_transition=0:normalize=0,` +
+    `atrim=0:${totalDur.toFixed(3)},asetpts=PTS-STARTPTS[aout]`;
 
   const outFile = "stitched_jcut.mp4";
   args.push(

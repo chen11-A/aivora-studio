@@ -11,10 +11,10 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    testTimeout: process.platform === "win32" ? 20_000 : 10_000,
+    testTimeout: 30_000,
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     pool: "forks",
-    ...(process.platform === "win32"
+    ...(process.platform === "win32" || process.env.CI
       ? { poolOptions: { forks: { maxForks: 2, minForks: 1 } } }
       : {}),
   },

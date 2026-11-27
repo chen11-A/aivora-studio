@@ -265,7 +265,7 @@ export async function exportEpisodeToMp4(params: {
       if (dialogueIntervals.length > 0) {
         try {
           const detectedSpeech = await detectSpeechActivityWindows({
-            audioPath: path.join(scratchDir, "stitched.mp4"),
+            audioPath: path.join(scratchDir, preMasterFile),
             totalDurationSec: cursorSec,
             ffmpegPath,
             run: runStep,
@@ -281,7 +281,7 @@ export async function exportEpisodeToMp4(params: {
       await runStep(
         ffmpegPath,
         [
-          ...BASE_FFMPEG, "-i", "stitched.mp4", "-stream_loop", "-1", "-i", bgmAbs,
+          ...BASE_FFMPEG, "-i", preMasterFile, "-stream_loop", "-1", "-i", bgmAbs,
           "-filter_complex", `[1:a:0]${bgmVolExpr}[bgm];[0:a:0][bgm]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]`,
           "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", ...AUDIO_ENC, "-shortest", "mixed.mp4",
         ],
