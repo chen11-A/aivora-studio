@@ -301,7 +301,7 @@ export async function exportEpisodeToMp4(params: {
         masterMp4Path: masterAbs,
         ffmpegPath,
         run: runStep,
-        maxAttempts: 2,
+        maxAttempts: 3,
       });
       if (repairRes.status === "failed") {
         throw new Error(repairRes.message);

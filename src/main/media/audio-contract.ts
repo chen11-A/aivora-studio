@@ -1,6 +1,7 @@
 import { existsSync, renameSync, rmSync } from "node:fs";
 import path from "node:path";
 import {
+  buildTruePeakLimiterChain,
   measureAudioLoudness,
   type ExecRunner,
   type LoudnessMeasurement,
@@ -229,7 +230,7 @@ export async function measureAndRepairMasterAudio(input: {
   run: ExecRunner;
   maxAttempts?: number;
 }): Promise<BoundedLoudnessResult> {
-  const maxAttempts = Math.max(1, Math.min(3, input.maxAttempts ?? 2));
+  const maxAttempts = Math.max(1, Math.min(4, input.maxAttempts ?? 3));
   let measured = await measureAudioLoudness(input.masterMp4Path, input.ffmpegPath, input.run);
   let parsed = parseLoudnessNumbers(measured);
 
@@ -254,18 +255,26 @@ export async function measureAndRepairMasterAudio(input: {
     };
   }
 
+  let ceilingDb = -2.4;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const tmpOut = path.join(
       path.dirname(input.masterMp4Path),
       `.audio-repair-${attempt}-${Date.now()}.mp4`,
     );
-    let af: string;
-    if (attempt === 1) {
-      af = `loudnorm=I=-16:TP=-1.5:LRA=11:measured_I=${measured.input_i}:measured_TP=${measured.input_tp}:measured_LRA=${measured.input_lra}:measured_thresh=${measured.input_thresh}:offset=${measured.target_offset}:linear=true,alimiter=limit=0.89:attack=5:release=50:level=disabled`;
-    } else {
-      const gainDb = parsed.lufs !== null ? Math.max(-18, Math.min(18, Number((-16 - parsed.lufs).toFixed(2)))) : 0;
-      af = `volume=${gainDb}dB,alimiter=limit=0.88:attack=5:release=50:level=disabled`;
+    const lufs = parsed.lufs ?? -16;
+    const tp = parsed.tp ?? -1.5;
+    // Dynamically lower the 4x-oversampled ceiling whenever AAC inter-sample true peak overshoots
+    const overshootDb = tp > -1.3 ? tp - -1.5 : 0;
+    if (tp > -1.0) {
+      ceilingDb = Math.max(-6.5, Number((ceilingDb - overshootDb - 0.55).toFixed(2)));
+    } else if (attempt > 1 && tp > -1.3) {
+      ceilingDb = Math.max(-6.5, Number((ceilingDb - 0.35).toFixed(2)));
     }
+    // Slight makeup factor when boosting into a brickwall limiter prevents high-crest LUFS undershoot
+    let rawGain = -16 - lufs;
+    if (rawGain > 0.5) rawGain *= 1.15;
+    const gainDb = Math.max(-18, Math.min(18, Number(rawGain.toFixed(2))));
+    const af = `volume=${gainDb}dB,${buildTruePeakLimiterChain(ceilingDb)}`;
 
     try {
       await input.run(input.ffmpegPath, [

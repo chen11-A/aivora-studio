@@ -175,7 +175,7 @@ function matchCanonicalInCue(cue: string, canonicalNames: string[]): string | nu
   // 1. Prefer exact or tail match against known canonical names (longest first)
   const sorted = [...canonicalNames].sort((a, b) => b.length - a.length);
   for (const name of sorted) {
-    if (cleanedCue === name || cleanedCue.endsWith(name) || cue.startsWith(name)) {
+    if (cleanedCue === name || cleanedCue.endsWith(name)) {
       return name;
     }
   }
@@ -284,12 +284,12 @@ export function extractCanonicalCastAndScenes(
       }
     }
 
-    // 4. General narrative subject + speech/action verb mentions
+    // 4. General narrative subject + speech/action verb mentions (and off-screen voice attribution)
     actionSubjectRe.lastIndex = 0;
     let am: RegExpExecArray | null;
-    while ((am = actionSubjectRe.exec(line)) !== null) {
-      recordChar(am[1]!, line, 1);
-    }
+    while ((am = actionSubjectRe.exec(line)) !== null) recordChar(am[1]!, line, 1);
+    const offVoiceM = /(?:院外|门外|屋外|窗外|电话那头|听筒里)传来([\u4e00-\u9fa5]{2,4}?)(?:低沉|沉稳|清冷|熟悉|沙哑|焦急)?的?(?:声音|嗓音|呼喊)/.exec(line);
+    if (offVoiceM) recordChar(offVoiceM[1]!, line, 2);
 
     // 5. Concrete scene/location mentions with explicit suffix
     LOCATION_SUFFIX_RE.lastIndex = 0;

@@ -45,6 +45,20 @@ export async function measureAudioLoudness(
   return parseMeasurement(stderr);
 }
 
+function clampNum(v: number, min: number, max: number): string {
+  return Math.max(min, Math.min(max, v)).toFixed(2);
+}
+
+/**
+ * 4x-oversampled (192 kHz) brickwall true-peak limiter that prevents lossy AAC encoding
+ * inter-sample overshoot from violating the strict <= -1.0 dBTP broadcast ceiling.
+ */
+export function buildTruePeakLimiterChain(ceilingDb: number): string {
+  const safeDb = Math.max(-6.5, Math.min(-1.4, ceilingDb));
+  const linearLimit = Math.max(0.45, Math.min(0.85, 10 ** (safeDb / 20))).toFixed(4);
+  return `aresample=192000,alimiter=limit=${linearLimit}:attack=0.5:release=50:level=disabled,aresample=48000`;
+}
+
 export async function buildAudioNormalizationFilter(
   inputPath: string,
   ffmpegPath: string,
@@ -54,12 +68,20 @@ export async function buildAudioNormalizationFilter(
   if (m.input_i === "-inf") {
     return { filter: "anull", applicable: false };
   }
-  const values = [m.input_i, m.input_tp, m.input_lra, m.input_thresh, m.target_offset];
-  if (!values.every((v) => Number.isFinite(Number(v)))) {
+  const nums = [m.input_i, m.input_tp, m.input_lra, m.input_thresh, m.target_offset].map(Number);
+  if (!nums.every((v) => Number.isFinite(v))) {
     throw new Error("音频响度测量结果无效");
   }
+  const [inI, inTp, inLra, inThresh, offset] = nums as [number, number, number, number, number];
+  const loudnormPass =
+    `loudnorm=I=-16:TP=-2.0:LRA=11:` +
+    `measured_I=${clampNum(inI, -99, 0)}:` +
+    `measured_TP=${clampNum(inTp, -99, 99)}:` +
+    `measured_LRA=${clampNum(inLra, 0, 99)}:` +
+    `measured_thresh=${clampNum(inThresh, -99, 0)}:` +
+    `offset=${clampNum(offset, -99, 99)}:linear=true`;
   return {
-    filter: `loudnorm=I=-16:TP=-1.5:LRA=11:measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}:linear=true`,
+    filter: `${loudnormPass},${buildTruePeakLimiterChain(-2.4)}`,
     applicable: true,
   };
 }

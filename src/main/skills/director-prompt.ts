@@ -11,6 +11,11 @@ import {
 } from "./cast-extractor";
 import { finalizeDirectorProposal, MAX_SHOTS_PER_SCENE } from "./director-grounding";
 import {
+  isCharacterExplicitlyOffscreen,
+  isSpeakerOffscreen,
+  resolveOnScreenCharacters,
+} from "./onscreen-characters";
+import {
   buildScreenwriterOutline,
   isChapterHeading,
   isExplicitSceneHeading,
@@ -72,7 +77,7 @@ export const DIRECTOR_SYSTEM_PROMPT = `你是 AIVORA Studio 的导演：把指�
 2. 景别仅限：远景/全景/中景/近景/特写；运镜仅限：固定/缓推/缓拉/横摇/跟拍/微摇；时长 durationSec 为 1~15 整数。
 3. 软目标建议每场控制在约 16 镜以内：优先合并同一镜能拍完的重复氛围/描写，绝不截断结尾，也绝不为了凑数字而吞并关键动作、关键反应或关键道具！
 4. 关键节拍保护：凡涉及关键动作、冲突、反应或核心道具的镜头，必须标记 keyBeat: true 并写明 keyBeatReason。
-5. 说话人规范：dialogue 忠实取自原文；speaker 只允许填写规范角色名或 "旁白"，严禁写“陆照问”“沈砚抬眼”等叙述短语！如原文无法确认是谁说的，speaker 留空 "" 并标 speakerStatus: "unconfirmed"。
+5. 说话人与出场规范：dialogue 忠实取自原文；speaker 只允许填写规范角色名或 "旁白"，严禁写“陆照问”“沈砚抬眼”等叙述短语！如原文无法确认是谁说的，speaker 留空 "" 并标 speakerStatus: "unconfirmed"。characters 仅填写本镜画面内真实入画的角色名，严禁把画外音、门外/电话那头、仅被提及或明确不入画的角色列入 characters！
 6. 成本区分：动态关键镜标 videoPlanMode: "paid_video"；纯静态环境/定场/空镜可标 videoPlanMode: "still_motion"（导出自动静帧推拉，不浪费付费视频额度）。
 7. sourceExcerpt 摘录对应原文短句（10~35 字），不得编造原文没有的情节。
 
@@ -227,12 +232,25 @@ export function sanitizeDirectorProposal(
         ? { keyBeat: true, reason: sh.keyBeatReason || "关键节拍" }
         : detectKeyBeat(`${sh.visualPrompt} ${sh.dialogue}`);
 
+      const alignedSource =
+        sh.sourceSpan
+          ? paragraphs.slice(sh.sourceSpan.paragraphStart, sh.sourceSpan.paragraphEnd + 1).join("\n")
+          : "";
+      const visibilityContext = [alignedSource, sh.sourceExcerpt, sh.visualPrompt].filter(Boolean).join("\n");
       const cleanChars = [...new Set(
         sh.characters
           .map((c) => stripActionSpeechSuffix(c))
-          .filter((c) => isValidCanonicalCharacterName(c)),
+          .filter(
+            (c) =>
+              isValidCanonicalCharacterName(c) && !isCharacterExplicitlyOffscreen(visibilityContext, c),
+          ),
       )];
-      if (speaker && speaker !== "旁白" && !cleanChars.includes(speaker)) {
+      if (
+        speaker &&
+        speaker !== "旁白" &&
+        !cleanChars.includes(speaker) &&
+        !isSpeakerOffscreen(visibilityContext, speaker)
+      ) {
         cleanChars.unshift(speaker);
       }
 
@@ -338,15 +356,11 @@ export function buildOfflineDirectorProposal(
               ? 4
               : 3;
 
-        const characters: string[] = [];
-        if (speech.speaker && speech.speaker !== "旁白") {
-          characters.push(speech.speaker);
-        }
-        for (const knownName of canonicalCharacterNames) {
-          if (text.includes(knownName) && !characters.includes(knownName)) {
-            characters.push(knownName);
-          }
-        }
+        const characters = resolveOnScreenCharacters({
+          text,
+          canonicalCharacterNames,
+          speaker: speech.speaker,
+        });
 
         const videoPlanMode = inferVideoPlanMode({
           keyBeat: beat.keyBeat,
