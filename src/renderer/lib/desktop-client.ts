@@ -467,6 +467,9 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
       projectId, maxBudgetCents, settledCents: 0, estimatedSettledCents: 0, reservedCents: 0, unknownHoldCents: 0, unknownHoldCount: 0, remainingCents: maxBudgetCents > 0 ? maxBudgetCents : null,
     }),
     resumePlannedLedger: async () => ({ ok: false, action: "blocked_unknown", message: "请在桌面端执行中断任务续跑" }),
+    extractPrevShotTailFrame: async () => ({ ok: false, message: "请在桌面端抽取上一镜真实尾帧" }),
+    importShotEndFrame: async () => ({ ok: false, message: "请在桌面端导入尾帧图片" }),
+    importShotReferenceVideo: async () => ({ ok: false, message: "请在桌面端导入运镜/特效参考视频" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
     resolveDroppedFilePath: () => null,
   };

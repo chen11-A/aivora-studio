@@ -62,10 +62,35 @@ export function ConfirmJobModal() {
               <span>预计耗时</span>
               <span className="text-[var(--text-primary)] tabular-nums">约 {activePlan.estimatedSec} 秒（后台运行不打断编辑）</span>
             </div>
+            {activePlan.kind === "video" && activePlan.videoGenMode && (
+              <div className="flex justify-between gap-2">
+                <span>生成模式</span>
+                <span className="text-[var(--text-primary)]">
+                  {activePlan.videoGenMode === "first_last"
+                    ? "首尾帧桥接"
+                    : activePlan.videoGenMode === "multimodal_ref"
+                      ? "多模态参考"
+                      : "首帧图生"}
+                  {activePlan.nativeAudioEnabled ? " · 原生音画同出" : ""}
+                </span>
+              </div>
+            )}
             {activePlan.firstFramePath && (
               <div className="flex justify-between gap-2">
                 <span>首帧参考</span>
                 <span className="text-[var(--accent-success-text)]">已锚定本镜首帧图</span>
+              </div>
+            )}
+            {activePlan.lastFramePath && (
+              <div className="flex justify-between gap-2">
+                <span>尾帧参考</span>
+                <span className="text-[var(--accent-success-text)]">已锚定目标尾帧图</span>
+              </div>
+            )}
+            {activePlan.referenceVideoPath && (
+              <div className="flex justify-between gap-2">
+                <span>运镜/特效参考视频</span>
+                <span className="text-[var(--accent-success-text)]">已绑定参考视频</span>
               </div>
             )}
             {activePlan.upstreamDurationNote && (

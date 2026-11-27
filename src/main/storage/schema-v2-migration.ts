@@ -150,6 +150,37 @@ export const V2_MIGRATIONS: ReadonlyArray<{
       `);
     },
   },
+  {
+    version: "v2.0.0_004_video_continuity_and_seams",
+    description:
+      "Add shot-level first/last frame, reference video, multimodal video generation mode, native audio toggle, and seam transition / J-L cut fields",
+    apply: (db) => {
+      const shotCols = new Set(
+        db.all<{ name: string }>(`PRAGMA table_info(shots)`).map((c) => c.name),
+      );
+      if (!shotCols.has("end_frame_media_path")) {
+        db.exec(`ALTER TABLE shots ADD COLUMN end_frame_media_path TEXT`);
+      }
+      if (!shotCols.has("reference_video_path")) {
+        db.exec(`ALTER TABLE shots ADD COLUMN reference_video_path TEXT`);
+      }
+      if (!shotCols.has("video_gen_mode")) {
+        db.exec(`ALTER TABLE shots ADD COLUMN video_gen_mode TEXT NOT NULL DEFAULT 'first_frame'`);
+      }
+      if (!shotCols.has("native_audio_enabled")) {
+        db.exec(`ALTER TABLE shots ADD COLUMN native_audio_enabled INTEGER NOT NULL DEFAULT 1`);
+      }
+      if (!shotCols.has("seam_transition_type")) {
+        db.exec(`ALTER TABLE shots ADD COLUMN seam_transition_type TEXT NOT NULL DEFAULT 'cut'`);
+      }
+      if (!shotCols.has("seam_transition_sec")) {
+        db.exec(`ALTER TABLE shots ADD COLUMN seam_transition_sec REAL NOT NULL DEFAULT 0.4`);
+      }
+      if (!shotCols.has("audio_jcut_sec")) {
+        db.exec(`ALTER TABLE shots ADD COLUMN audio_jcut_sec REAL NOT NULL DEFAULT 0`);
+      }
+    },
+  },
 ];
 
 export type MigrationRunReport = {

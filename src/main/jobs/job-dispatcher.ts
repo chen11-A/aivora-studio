@@ -1,8 +1,5 @@
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
 import { buildSpeechSnapshot } from "../../shared/media-selection";
-import type { GenerationPlan, LockedGenerationInput } from "../../shared/types/jobs";
-import { resolveConfinedMediaPath } from "../media/media-protocol";
+import type { GenerationPlan } from "../../shared/types/jobs";
 import {
   downloadVerifiedComfyVideo,
   pollAndDownloadComfyWorkerVideo,
@@ -33,12 +30,17 @@ import {
   runOpenAiImageGeneration,
   runOpenAiSpeechSynthesis,
 } from "../providers/openai-compat-adapter";
-import { prepareReferenceImageForUpload } from "../providers/ref-image-injector";
 import {
   pollAndDownloadSeedanceVideo,
   querySeedanceVideoTask,
   submitSeedanceVideoTask,
 } from "../providers/seedance-adapter";
+import {
+  loadLockedLastFrameImage,
+  loadLockedReferenceImage,
+  loadLockedReferenceImages,
+  loadLockedReferenceVideo,
+} from "./dispatch-media-loader";
 import type { LockedProviderSnapshot } from "./job-persistence";
 
 export type ResolvedCredentials = {
@@ -56,55 +58,6 @@ export type DispatchedJobOutcome =
       message: string;
       promptSnapshotOverride?: string;
     };
-
-async function loadSingleReferenceImage(
-  projectDir: string,
-  mediaPath: string,
-  expectedSha256: string | null,
-): Promise<{ base64: string; mime: "image/png" | "image/jpeg" | "image/webp"; compressed: boolean }> {
-  const absPath = resolveConfinedMediaPath(projectDir, mediaPath);
-  if (!absPath || !existsSync(absPath)) {
-    throw new Error(
-      "已确认的首帧或参考图文件已不存在，已拦截发送以避免降级为无参考图扣费，请重新确认后再生成。",
-    );
-  }
-  if (expectedSha256) {
-    const actualSha = createHash("sha256").update(readFileSync(absPath)).digest("hex");
-    if (actualSha !== expectedSha256) {
-      throw new Error("已确认的首帧或参考图文件内容已变化，已拦截发送，请重新确认后再生成。");
-    }
-  }
-  const prepared = await prepareReferenceImageForUpload(absPath);
-  if (!prepared) {
-    throw new Error("参考图文件无法读取，已拦截发送。");
-  }
-  return prepared;
-}
-
-async function loadLockedReferenceImage(
-  projectDir: string,
-  locked: LockedGenerationInput,
-): Promise<{ base64: string; mime: "image/png" | "image/jpeg" | "image/webp"; compressed: boolean } | null> {
-  if (!locked.referenceMediaPath) return null;
-  return loadSingleReferenceImage(projectDir, locked.referenceMediaPath, locked.referenceMediaSha256);
-}
-
-async function loadLockedReferenceImages(
-  projectDir: string,
-  locked: LockedGenerationInput,
-): Promise<Array<{ base64: string; mime: "image/png" | "image/jpeg" | "image/webp"; label: string }>> {
-  const items = locked.referenceItems ?? [];
-  if (items.length === 0) {
-    const single = await loadLockedReferenceImage(projectDir, locked);
-    return single ? [{ base64: single.base64, mime: single.mime, label: "reference" }] : [];
-  }
-  const out: Array<{ base64: string; mime: "image/png" | "image/jpeg" | "image/webp"; label: string }> = [];
-  for (const item of items) {
-    const loaded = await loadSingleReferenceImage(projectDir, item.mediaPath, item.mediaSha256);
-    out.push({ base64: loaded.base64, mime: loaded.mime, label: item.label });
-  }
-  return out;
-}
 
 export async function dispatchGenerationJob(ctx: {
   plan: GenerationPlan;
@@ -146,9 +99,11 @@ export async function dispatchGenerationJob(ctx: {
     };
   }
 
-  // 2. Kling official async video
+  // 2. Kling official async video (supports optional image_tail for first_last mode)
   if (plan.kind === "video" && snapshot.protocol === "kling-video") {
     const refImg = await loadLockedReferenceImage(projectDir, locked);
+    const tailImg =
+      locked.videoGenMode === "first_last" ? await loadLockedLastFrameImage(projectDir, locked) : null;
     const submitted = await submitKlingVideoTask(
       {
         baseUrl: creds.trustedBaseUrl,
@@ -160,6 +115,7 @@ export async function dispatchGenerationJob(ctx: {
         durationSec: locked.durationSec,
         aspectRatio: locked.aspectRatio,
         imageBase64: refImg?.base64 ?? null,
+        imageTailBase64: tailImg?.base64 ?? null,
       },
       fetcher,
     );
@@ -182,9 +138,16 @@ export async function dispatchGenerationJob(ctx: {
     return { target: "shot-take", kind: "video", media, message: "视频生成成功并已自动拉回本地保存" };
   }
 
-  // 3. Volcengine Ark Seedance 2.0 / 2.5 official async video
+  // 3. Volcengine Ark Seedance 2.0 / 2.5 official async video (first_frame / first_last / multimodal_ref)
   if (plan.kind === "video" && snapshot.protocol === "seedance-video") {
-    const refImg = await loadLockedReferenceImage(projectDir, locked);
+    const mode = locked.videoGenMode ?? "first_frame";
+    const refImg = mode !== "multimodal_ref" ? await loadLockedReferenceImage(projectDir, locked) : null;
+    const lastImg = mode === "first_last" ? await loadLockedLastFrameImage(projectDir, locked) : null;
+    const multiRefs =
+      mode === "multimodal_ref" ? await loadLockedReferenceImages(projectDir, locked) : [];
+    const refVideo =
+      mode === "multimodal_ref" ? loadLockedReferenceVideo(projectDir, locked) : null;
+
     const submitted = await submitSeedanceVideoTask(
       {
         baseUrl: creds.trustedBaseUrl,
@@ -193,8 +156,15 @@ export async function dispatchGenerationJob(ctx: {
         prompt: locked.finalPrompt,
         durationSec: locked.durationSec,
         aspectRatio: locked.aspectRatio,
+        videoGenMode: mode,
         imageBase64: refImg?.base64 ?? null,
         imageMime: refImg?.mime ?? "image/jpeg",
+        lastFrameBase64: lastImg?.base64 ?? null,
+        lastFrameMime: lastImg?.mime ?? "image/jpeg",
+        referenceImages: multiRefs.map((r) => ({ base64: r.base64, mime: r.mime })),
+        referenceVideoBase64: refVideo?.base64 ?? null,
+        referenceVideoMime: refVideo?.mime ?? "video/mp4",
+        generateAudio: locked.nativeAudioEnabled,
       },
       fetcher,
     );
@@ -214,9 +184,13 @@ export async function dispatchGenerationJob(ctx: {
     return { target: "shot-take", kind: "video", media, message: "即梦 Seedance 视频生成成功并已自动拉回本地保存" };
   }
 
-  // 4. Google Gemini Official async video (Interactions API)
+  // 4. Google Gemini Official async video (Interactions API: first/last frame or multi-subject refs)
   if (plan.kind === "video" && snapshot.protocol === "gemini-official") {
-    const refImg = await loadLockedReferenceImage(projectDir, locked);
+    const mode = locked.videoGenMode ?? "first_frame";
+    const refImg = mode !== "multimodal_ref" ? await loadLockedReferenceImage(projectDir, locked) : null;
+    const lastImg = mode === "first_last" ? await loadLockedLastFrameImage(projectDir, locked) : null;
+    const multiRefs =
+      mode === "multimodal_ref" ? await loadLockedReferenceImages(projectDir, locked) : [];
     const submitted = await submitGeminiVideoTask(
       {
         baseUrl: creds.trustedBaseUrl,
@@ -224,8 +198,13 @@ export async function dispatchGenerationJob(ctx: {
         modelId: snapshot.modelId,
         prompt: locked.finalPrompt,
         aspectRatio: locked.aspectRatio,
+        durationSec: locked.durationSec,
         imageBase64: refImg?.base64 ?? null,
         imageMime: refImg?.mime ?? "image/jpeg",
+        lastFrameBase64: lastImg?.base64 ?? null,
+        lastFrameMime: lastImg?.mime ?? "image/jpeg",
+        referenceImages:
+          multiRefs.length > 0 ? multiRefs.map((r) => ({ base64: r.base64, mime: r.mime })) : undefined,
       },
       fetcher,
     );
