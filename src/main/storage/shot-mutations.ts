@@ -194,14 +194,24 @@ export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): str
     input.keyBeat !== undefined ? (input.keyBeat ? 1 : 0) : Number(row.key_beat ?? 0);
   const nextKeyBeatReason = input.keyBeatReason ?? String(row.key_beat_reason ?? "");
   const nextVideoPlanMode = input.videoPlanMode ?? String(row.video_plan_mode ?? "paid_video");
-  const nextVideoGenMode = input.videoGenMode ?? String(row.video_gen_mode ?? "first_frame");
+  const sanitizeAssetRel = (val: string | null | undefined): string | null => {
+    if (!val) return null;
+    const norm = val.trim().replaceAll("\\", "/");
+    if (!norm.startsWith("assets/") || norm.includes("..") || /^[a-zA-Z]:/.test(norm)) {
+      throw new Error("镜头辅助素材路径必须位于当前工程 assets/ 目录内");
+    }
+    return norm;
+  };
+  const rawMode = input.videoGenMode ?? String(row.video_gen_mode ?? "first_frame");
+  const nextVideoGenMode =
+    rawMode === "first_last" || rawMode === "multimodal_ref" ? rawMode : "first_frame";
   const nextEndFramePath =
     input.endFrameMediaPath !== undefined
-      ? input.endFrameMediaPath
+      ? sanitizeAssetRel(input.endFrameMediaPath)
       : ((row.end_frame_media_path as string | null) ?? null);
   const nextRefVideoPath =
     input.referenceVideoPath !== undefined
-      ? input.referenceVideoPath
+      ? sanitizeAssetRel(input.referenceVideoPath)
       : ((row.reference_video_path as string | null) ?? null);
   const nextNativeAudio =
     input.nativeAudioEnabled !== undefined
@@ -209,11 +219,17 @@ export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): str
       : row.native_audio_enabled === undefined
         ? 1
         : Number(row.native_audio_enabled);
-  const nextSeamType = input.seamTransitionType ?? String(row.seam_transition_type ?? "cut");
-  const nextSeamSec =
+  const rawSeam = input.seamTransitionType ?? String(row.seam_transition_type ?? "cut");
+  const nextSeamType =
+    rawSeam === "tail_match" || rawSeam === "dissolve" || rawSeam === "dip_to_black"
+      ? rawSeam
+      : "cut";
+  const rawSeamSec =
     input.seamTransitionSec !== undefined ? input.seamTransitionSec : Number(row.seam_transition_sec ?? 0.4);
-  const nextAudioJcut =
+  const nextSeamSec = Number(Math.max(0.3, Math.min(0.8, Number.isFinite(rawSeamSec) ? rawSeamSec : 0.4)).toFixed(2));
+  const rawJcut =
     input.audioJcutSec !== undefined ? input.audioJcutSec : Number(row.audio_jcut_sec ?? 0);
+  const nextAudioJcut = Number(Math.max(-0.8, Math.min(0.8, Number.isFinite(rawJcut) ? rawJcut : 0)).toFixed(2));
 
   db.transaction(() => {
     db.run(

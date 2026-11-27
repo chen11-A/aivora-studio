@@ -68,6 +68,36 @@ export function runLiveVideoProviderPreflight(input: {
     return v.ok ? { ok: true, notice: v.notice } : { ok: false, reason: v.reason };
   }
 
+  const supportsRefVideo = input.protocol === "seedance-video" || m.includes("seedance");
+  const supportsMultimodalRef = supportsRefVideo || input.protocol === "gemini-official";
+  const supportsFirstLast =
+    supportsRefVideo ||
+    input.protocol === "gemini-official" ||
+    input.protocol === "kling-video" ||
+    m.includes("kling");
+
+  if (mode === "multimodal_ref" && input.hasReferenceVideo && !supportsRefVideo) {
+    return {
+      ok: false,
+      reason:
+        "当前视频厂家/协议暂不支持上传「运镜/特效参考视频」（目前仅即梦 Seedance 协议支持），已拦截发送以防静默丢弃参考视频并扣费；请改用即梦 Seedance 或清除参考视频后再试。",
+    };
+  }
+  if (mode === "multimodal_ref" && !supportsMultimodalRef) {
+    return {
+      ok: false,
+      reason:
+        "当前视频厂家/协议暂不支持「多参考图+视频」模式（目前仅即梦 Seedance 与 Google Gemini 支持），已拦截发送以防静默丢弃参考图；请切换支持模型或改选「首帧图生」。",
+    };
+  }
+  if (mode === "first_last" && input.hasLastFrame && !supportsFirstLast) {
+    return {
+      ok: false,
+      reason:
+        "当前视频厂家/协议暂不支持「首尾帧桥接」（目前仅即梦 Seedance、可灵 Kling、Google Gemini 支持），已拦截发送以防静默丢弃尾帧图并扣费；请切换支持模型或改选「首帧图生」。",
+    };
+  }
+
   if (input.protocol === "gemini-official" && m.includes("gemini-omni")) {
     const v = validateGeminiOmniContract({
       modelId: input.modelId,

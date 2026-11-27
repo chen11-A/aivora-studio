@@ -86,6 +86,24 @@ export function isMediaPathReferencedInDb(db: SqliteDriver, relPath: string): bo
   );
   if (takeRef) return true;
 
+  const shotCols = new Set(
+    db.all<{ name: string }>(`PRAGMA table_info(shots)`).map((c) => c.name),
+  );
+  if (shotCols.has("end_frame_media_path")) {
+    const endRef = db.get<{ c: number }>(
+      `SELECT 1 AS c FROM shots WHERE end_frame_media_path = ? LIMIT 1`,
+      normalized,
+    );
+    if (endRef) return true;
+  }
+  if (shotCols.has("reference_video_path")) {
+    const vidRef = db.get<{ c: number }>(
+      `SELECT 1 AS c FROM shots WHERE reference_video_path = ? LIMIT 1`,
+      normalized,
+    );
+    if (vidRef) return true;
+  }
+
   const undoRows = db.all<{ snapshot_json: string }>(
     `SELECT snapshot_json FROM director_undo_snapshots WHERE snapshot_json LIKE ?`,
     `%${normalized}%`,

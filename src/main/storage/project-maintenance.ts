@@ -113,6 +113,20 @@ export function cleanUnreferencedAssetsInProject(
     addRef(row.media_path);
   }
 
+  const shotCols = new Set(
+    db.all<{ name: string }>(`PRAGMA table_info(shots)`).map((c) => c.name),
+  );
+  if (shotCols.has("end_frame_media_path") || shotCols.has("reference_video_path")) {
+    const selEnd = shotCols.has("end_frame_media_path") ? "end_frame_media_path" : "NULL AS end_frame_media_path";
+    const selRef = shotCols.has("reference_video_path") ? "reference_video_path" : "NULL AS reference_video_path";
+    for (const row of db.all<{ end_frame_media_path: string | null; reference_video_path: string | null }>(
+      `SELECT ${selEnd}, ${selRef} FROM shots`,
+    )) {
+      addRef(row.end_frame_media_path);
+      addRef(row.reference_video_path);
+    }
+  }
+
   for (const row of db.all<{ snapshot_json: string }>(
     `SELECT snapshot_json FROM director_undo_snapshots`,
   )) {

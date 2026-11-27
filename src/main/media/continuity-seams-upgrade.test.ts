@@ -286,4 +286,102 @@ describe("Video continuity, first/last frame, multimodal ref, tail extraction, a
 
     projects.closeAll();
   }, 30_000);
+
+  it("P1 regressions: cleanUnreferencedAssets preserves shot end_frame/reference_video, shot-mutations rejects traversal, and preflight blocks unsupported referenceVideo/first_last providers with 0 HTTP calls", () => {
+    const base = mkdtempSync(path.join(tmpdir(), "aivora-v203-p1-"));
+    tempDirs.push(base);
+    const projects = new ProjectStore(path.join(base, "ws"));
+    const globalConfig = new GlobalConfigStore(path.join(base, "app"), mockVault);
+    const oauth = new OAuthManager(globalConfig, async () => undefined);
+    const demo = projects.openDemoProject();
+    const shotId = demo.shots[0]!.id;
+
+    // 1. Seed shot end_frame, reference_video, and one real orphan file in assets/
+    const endRel = "assets/kept_end_frame.png";
+    const refVidRel = "assets/kept_ref_video.mp4";
+    const orphanRel = "assets/orphan_unused.png";
+    writeFileSync(path.join(demo.dirPath, endRel), TINY_PNG);
+    writeFileSync(path.join(demo.dirPath, refVidRel), Buffer.from("fake-mp4-bytes"));
+    writeFileSync(path.join(demo.dirPath, orphanRel), TINY_PNG);
+
+    expect(() =>
+      projects.updateShot({ projectId: demo.project.id, shotId, seamTransitionSec: 9.9, audioJcutSec: -9.9 }),
+    ).toThrow();
+    expect(() =>
+      projects.updateShot({ projectId: demo.project.id, shotId, endFrameMediaPath: "../etc/passwd" }),
+    ).toThrow(/assets\//);
+
+    projects.updateShot({
+      projectId: demo.project.id,
+      shotId,
+      videoGenMode: "multimodal_ref",
+      endFrameMediaPath: endRel,
+      referenceVideoPath: refVidRel,
+      seamTransitionSec: 0.6,
+      audioJcutSec: -0.4,
+    });
+
+    // Asset GC MUST delete ONLY orphan_unused.png and keep BOTH end_frame & reference_video!
+    const gcRes = projects.cleanUnreferencedAssets(demo.project.id);
+    expect(gcRes.removedFiles).toBe(1);
+    expect(existsSync(path.join(demo.dirPath, endRel))).toBe(true);
+    expect(existsSync(path.join(demo.dirPath, refVidRel))).toBe(true);
+    expect(existsSync(path.join(demo.dirPath, orphanRel))).toBe(false);
+
+    // 2. Preflight blocks referenceVideo on Gemini Official (0 network calls, never silently drops!)
+    const gemProv = globalConfig.saveProvider({
+      name: "Gemini",
+      protocol: "gemini-official",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      models: ["gemini-omni-1.2-flash"],
+      apiKey: "AIza-test",
+      enabled: true,
+    });
+    globalConfig.updateRouting({
+      script: null,
+      image: null,
+      video: { source: "provider", sourceId: gemProv.id, modelId: "gemini-omni-1.2-flash" },
+      tts: null,
+    });
+    const queue = new GenerationJobQueue(projects, globalConfig, oauth, async () => {
+      throw new Error("should not dispatch");
+    });
+    const gemPlan = queue.preparePlan({ projectId: demo.project.id, shotId, kind: "video" });
+    expect(gemPlan.canRun).toBe(false);
+    expect(gemPlan.blockingReason).toContain("参考视频");
+
+    // 3. Preflight blocks first_last on ComfyUI Worker (0 network calls, never silently drops end frame!)
+    const comfyProv = globalConfig.saveProvider({
+      name: "Comfy",
+      protocol: "comfy-worker",
+      baseUrl: "http://127.0.0.1:8188",
+      models: ["wan2.2-i2v"],
+      apiKey: "tok",
+      enabled: true,
+    });
+    globalConfig.updateRouting({
+      script: null,
+      image: null,
+      video: { source: "provider", sourceId: comfyProv.id, modelId: "wan2.2-i2v" },
+      tts: null,
+    });
+    projects.importShotTakeFromPath({
+      projectId: demo.project.id,
+      shotId,
+      kind: "image",
+      sourceFilePath: path.join(demo.dirPath, endRel),
+    });
+    projects.updateShot({
+      projectId: demo.project.id,
+      shotId,
+      videoGenMode: "first_last",
+      endFrameMediaPath: endRel,
+    });
+    const comfyPlan = queue.preparePlan({ projectId: demo.project.id, shotId, kind: "video" });
+    expect(comfyPlan.canRun).toBe(false);
+    expect(comfyPlan.blockingReason).toContain("首尾帧");
+
+    projects.closeAll();
+    globalConfig.close();
+  });
 });
