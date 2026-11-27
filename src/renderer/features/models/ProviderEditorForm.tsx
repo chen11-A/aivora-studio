@@ -103,6 +103,7 @@ export function ProviderEditorForm(props: {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [connectCodeInput, setConnectCodeInput] = useState("");
   const [connectNotice, setConnectNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const prevEditingIdRef = useRef<string | null>(editingProvider?.id ?? null);
 
   function resetToCreate() {
@@ -186,10 +187,12 @@ export function ProviderEditorForm(props: {
 
   function handleCancelEdit() {
     resetToCreate();
+    setSaveError(null);
     onCancelEdit();
   }
 
   async function handleSubmit() {
+    setSaveError(null);
     const resolvedName = name.trim() || getProtocolDefaultName(protocol);
     if (!baseUrl.trim()) return;
     const models = modelsText
@@ -198,16 +201,21 @@ export function ProviderEditorForm(props: {
       .filter(Boolean);
     if (models.length === 0) return;
 
-    await onSave({
-      id: editingProvider?.id,
-      name: resolvedName,
-      protocol,
-      baseUrl: baseUrl.trim(),
-      models,
-      apiKey: apiKey.trim() || undefined,
-      secondaryKey: isKling ? secondaryKey.trim() || undefined : undefined,
-      enabled: editingProvider ? editingProvider.enabled : true,
-    });
+    try {
+      await onSave({
+        id: editingProvider?.id,
+        name: resolvedName,
+        protocol,
+        baseUrl: baseUrl.trim(),
+        models,
+        apiKey: apiKey.trim() || undefined,
+        secondaryKey: isKling ? secondaryKey.trim() || undefined : undefined,
+        enabled: editingProvider ? editingProvider.enabled : true,
+      });
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+      return;
+    }
     setApiKey("");
     setSecondaryKey("");
     setConnectCodeInput("");
@@ -372,6 +380,15 @@ export function ProviderEditorForm(props: {
           />
         </div>
       </CollapsibleRegion>
+
+      {saveError && (
+        <div
+          data-testid="provider-save-error"
+          className="rounded-lg bg-[var(--accent-danger-soft)] border border-[var(--accent-danger-border)] px-2.5 py-1.5 text-[11px] text-[var(--accent-danger-ink)]"
+        >
+          保存失败：{saveError}
+        </div>
+      )}
 
       <div className="flex items-center justify-between gap-3 pt-0.5">
         <div className="text-[11px] text-[var(--text-muted)] min-w-0">{activeMeta.hint}</div>

@@ -424,7 +424,8 @@ export const useStudioStore = create<StudioStore>((set, get) => {
       const unsub = client.onExportProgress((ev) => set({ exportProgress: ev }));
       try {
         const res = await client.exportEpisodeVideo({ projectId: ws.project.id, episodeId: epId, runQc: options?.runQc, exportMode: options?.exportMode });
-        set({ lastExportResult: res, exporting: false });
+        const refreshed = await client.openProject(ws.project.id).catch(() => null);
+        set({ lastExportResult: res, exporting: false, ...(refreshed ? { workspace: refreshed } : {}) });
         if (!res.canceled) flashToast(res.message);
       } catch (err) {
         const msg = err instanceof Error ? err.message : "导出失败";
@@ -467,17 +468,22 @@ export const useStudioStore = create<StudioStore>((set, get) => {
       flashToast((await client.cleanUnreferencedAssets(ws.project.id)).message);
     },
     async saveProvider(input) {
-      const saved = await client.saveProviderConfig(input);
-      let mc = await client.getModelCenter();
-      const { next, filledCaps } = computeAutoFillRouting(mc.routing, saved);
-      if (filledCaps.length > 0) {
-        await client.updateModelRouting(next);
-        mc = await client.getModelCenter();
-        flashToast(`已保存「${saved.name}」，并自动设为${filledCaps.map((c) => CAPABILITY_LABELS[c]).join("、")}默认模型`);
-      } else {
-        flashToast(`已保存「${saved.name}」`);
+      try {
+        const saved = await client.saveProviderConfig(input);
+        let mc = await client.getModelCenter();
+        const { next, filledCaps } = computeAutoFillRouting(mc.routing, saved);
+        if (filledCaps.length > 0) {
+          await client.updateModelRouting(next);
+          mc = await client.getModelCenter();
+          flashToast(`已保存「${saved.name}」，并自动设为${filledCaps.map((c) => CAPABILITY_LABELS[c]).join("、")}默认模型`);
+        } else {
+          flashToast(`已保存「${saved.name}」`);
+        }
+        set({ modelCenter: mc });
+      } catch (err) {
+        flashToast(`保存厂家配置失败：${err instanceof Error ? err.message : String(err)}`);
+        throw err;
       }
-      set({ modelCenter: mc });
     },
     async deleteProvider(providerId) {
       await client.deleteProviderConfig(providerId);

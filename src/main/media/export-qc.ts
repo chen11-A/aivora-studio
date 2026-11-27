@@ -247,15 +247,15 @@ export function evaluateQcSignals(input: {
     input.integratedLufs !== null && input.integratedLufs > -60
       ? `${input.integratedLufs.toFixed(1)} LUFS`
       : "无有效音量";
-  const tpText =
+  const tpSegment =
     input.truePeakDbtp !== null && input.truePeakDbtp > -60
-      ? `${input.truePeakDbtp.toFixed(1)} dBTP`
-      : "-";
+      ? ` · 峰值 ${input.truePeakDbtp.toFixed(1)} dBTP`
+      : "";
 
   const ok = issues.length === 0;
   const summary = ok
-    ? `成片质检通过 · ${lufsText} · 峰值 ${tpText} · 无黑屏/破音/异常静音`
-    : `成片质检发现 ${issues.length} 项提醒 · ${lufsText} · 峰值 ${tpText}`;
+    ? `成片质检通过 · ${lufsText}${tpSegment} · 无黑屏/破音/异常静音`
+    : `成片质检发现 ${issues.length} 项提醒 · ${lufsText}${tpSegment}`;
 
   return {
     status: ok ? "passed" : "issues",

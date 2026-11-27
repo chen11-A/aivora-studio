@@ -279,8 +279,8 @@ export async function runOrResumeMultiEpisodeExport(input: {
         projects: input.projects,
         requireHumanSignOff: exportMode === "formal",
       });
-      rerenderedCount += 1;
       if (res.ok && res.outputPath && existsSync(res.outputPath)) {
+        rerenderedCount += 1;
         item.status = "completed";
         item.snapshotDigest = currentDigest;
         item.exportMode = exportMode;
@@ -296,7 +296,6 @@ export async function runOrResumeMultiEpisodeExport(input: {
         failedEpisodeIds.push(item.episodeId);
       }
     } catch (err) {
-      rerenderedCount += 1;
       item.status = "failed";
       item.exportMode = exportMode;
       item.qcVerified = false;

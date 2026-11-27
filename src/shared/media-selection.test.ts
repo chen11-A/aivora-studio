@@ -92,4 +92,50 @@ describe("media-selection & export readiness", () => {
     ]);
     expect(readiness.formalBlockingIssues[0]!.shotIndex).toBe(2);
   });
+
+  it("does not misreport same-snapshot formal delivery with tech QC issues as stale/modified", async () => {
+    const { computeEpisodeExportSnapshotDigest, deriveEpisodeDeliveryEligibility } = await import("./studio-truth");
+    const ws = makeWorkspace();
+    ws.takes.push({
+      id: "tk_vid_2",
+      shotId: "sh_2",
+      kind: "video",
+      versionNumber: 1,
+      mediaPath: "assets/c.mp4",
+      mediaSha256: null,
+      promptSnapshot: "",
+      providerInfo: "",
+      isSelected: true,
+      durationSec: 4,
+      createdAt: ws.project.createdAt,
+    });
+    ws.shots[1]!.selectedVideoTakeId = "tk_vid_2";
+    const digest = computeEpisodeExportSnapshotDigest(ws, "ep_1");
+
+    ws.deliveryRecords = [
+      {
+        id: "del_same",
+        projectId: "prj_1",
+        episodeId: "ep_1",
+        exportMode: "formal",
+        status: "published",
+        snapshotDigest: digest,
+        outputPath: "/tmp/ep1.mp4",
+        outputSha256: "abc",
+        contentQcOk: true,
+        techQcOk: false,
+        createdAt: ws.project.createdAt,
+        updatedAt: ws.project.createdAt,
+      },
+    ];
+    const sameSnap = deriveEpisodeDeliveryEligibility({ workspace: ws, episodeId: "ep_1" });
+    expect(sameSnap.reportStale).toBe(false);
+    expect(sameSnap.reason).not.toContain("已修改");
+    expect(sameSnap.reason).toContain("技术质检");
+
+    ws.deliveryRecords![0]!.snapshotDigest = "older_digest_before_edit";
+    const staleSnap = deriveEpisodeDeliveryEligibility({ workspace: ws, episodeId: "ep_1" });
+    expect(staleSnap.reportStale).toBe(true);
+    expect(staleSnap.reason).toContain("已修改");
+  });
 });

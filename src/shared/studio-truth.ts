@@ -159,10 +159,24 @@ export function deriveEpisodeDeliveryEligibility(input: {
       rec.contentQcOk &&
       rec.techQcOk,
   );
+  const currentUnverifiedDelivery = !verifiedDelivery
+    ? (workspace.deliveryRecords ?? []).find(
+        (rec) =>
+          rec.episodeId === episodeId &&
+          rec.exportMode === "formal" &&
+          rec.status === "published" &&
+          rec.snapshotDigest === snapshotDigest,
+      )
+    : undefined;
   const hadStaleDelivery = Boolean(
     !verifiedDelivery &&
+      !currentUnverifiedDelivery &&
       (workspace.deliveryRecords ?? []).some(
-        (rec) => rec.episodeId === episodeId && rec.exportMode === "formal" && rec.status === "published",
+        (rec) =>
+          rec.episodeId === episodeId &&
+          rec.exportMode === "formal" &&
+          rec.status === "published" &&
+          rec.snapshotDigest !== snapshotDigest,
       ),
   );
   const baseDeliveryFields = {
@@ -257,6 +271,23 @@ export function deriveEpisodeDeliveryEligibility(input: {
         intentionalStillCount,
         missingVisualCount: 0,
         reason: "当前版本已通过内容审与技术质检并完成正式交付。",
+      };
+    }
+    if (currentUnverifiedDelivery) {
+      return {
+        episodeId,
+        snapshotDigest,
+        eligibility: "ready_for_review",
+        reportStale: false,
+        canPreviewExport: true,
+        canFormalDeliver: true,
+        humanReviewed,
+        formallyDelivered: false,
+        deliveredOutputPath: null,
+        svgPlaceholderCount: 0,
+        intentionalStillCount,
+        missingVisualCount: 0,
+        reason: "当前版本已导出正式成片，但上次技术质检仍有提醒未消清，请检查后重新导出校验。",
       };
     }
     return {

@@ -376,7 +376,7 @@ export function DeliveryStage() {
               <div className="flex items-center justify-between gap-2 shrink-0">
                 <div className="min-w-0">
                   <div className="text-[14px] font-semibold text-[var(--text-primary)] truncate">
-                    第 {activePreviewCard.orderNum} 集 · {activePreviewCard.ep.title}
+                    排片 #{activePreviewCard.orderNum} · {activePreviewCard.ep.title}
                   </div>
                   <div className="text-[11px] text-[var(--text-muted)] truncate">
                     {activePreviewCard.truth.reason}

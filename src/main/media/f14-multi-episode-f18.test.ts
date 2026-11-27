@@ -106,9 +106,11 @@ describe("F14 Content QC, 10-Episode Multi-Episode Resume Gate, and F18 Standard
       exporter: fastRealExporter,
     });
     expect(run1.ok).toBe(false);
-    expect(run1.rerenderedCount).toBe(10);
+    expect(run1.rerenderedCount).toBe(9);
     expect(run1.skippedVerifiedCount).toBe(0);
     expect(run1.failedEpisodeIds).toEqual([epIds[2]]);
+    expect(run1.message).toContain("新渲染 9 集");
+    expect(run1.message).toContain("失败 1 集");
     const queueId = run1.queue.queueId;
 
     // Simulate full app quit & restart!
