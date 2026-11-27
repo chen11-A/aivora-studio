@@ -114,34 +114,74 @@ export async function submitSeedanceVideoTask(
     prompt: string;
     durationSec: number;
     aspectRatio: AspectRatio;
+    videoGenMode?: "first_frame" | "first_last" | "multimodal_ref";
     imageBase64?: string | null;
     imageMime?: string;
+    lastFrameBase64?: string | null;
+    lastFrameMime?: string;
+    referenceImages?: Array<{ base64: string; mime: string }>;
+    referenceVideoBase64?: string | null;
+    referenceVideoMime?: string;
+    generateAudio?: boolean;
   },
   fetcher: typeof fetch = fetch,
 ): Promise<{ taskId: string }> {
   const apiRoot = normalizeSeedanceBaseUrl(input.baseUrl);
   const endpoint = `${apiRoot}/contents/generations/tasks`;
   const duration = clampSeedanceDurationSec(input.modelId, input.durationSec);
+  const mode = input.videoGenMode ?? (input.lastFrameBase64 ? "first_last" : "first_frame");
 
   const content: Array<Record<string, unknown>> = [
     { type: "text", text: input.prompt },
   ];
-  if (input.imageBase64) {
-    const mime = input.imageMime || "image/jpeg";
-    content.push({
-      type: "image_url",
-      image_url: { url: `data:${mime};base64,${input.imageBase64}` },
-      role: "first_frame",
-    });
+
+  let hasFrameAnchor = false;
+  if (mode === "multimodal_ref") {
+    for (const ref of (input.referenceImages ?? []).slice(0, 9)) {
+      content.push({
+        type: "image_url",
+        image_url: { url: `data:${ref.mime || "image/jpeg"};base64,${ref.base64}` },
+        role: "reference_image",
+      });
+    }
+    if (input.referenceVideoBase64) {
+      const vMime = input.referenceVideoMime || "video/mp4";
+      content.push({
+        type: "video_url",
+        video_url: { url: `data:${vMime};base64,${input.referenceVideoBase64}` },
+        role: "reference_video",
+      });
+    }
+  } else {
+    if (input.imageBase64) {
+      hasFrameAnchor = true;
+      const mime = input.imageMime || "image/jpeg";
+      content.push({
+        type: "image_url",
+        image_url: { url: `data:${mime};base64,${input.imageBase64}` },
+        role: "first_frame",
+      });
+    }
+    if (mode === "first_last" && input.lastFrameBase64 && input.imageBase64) {
+      const lastMime = input.lastFrameMime || "image/jpeg";
+      content.push({
+        type: "image_url",
+        image_url: { url: `data:${lastMime};base64,${input.lastFrameBase64}` },
+        role: "last_frame",
+      });
+    }
   }
 
-  const body = {
+  const body: Record<string, unknown> = {
     model: input.modelId || "doubao-seedance-2-0-260128",
     content,
-    ratio: input.aspectRatio,
+    ratio: hasFrameAnchor ? "adaptive" : input.aspectRatio,
     duration,
     watermark: false,
   };
+  if (input.generateAudio !== undefined) {
+    body.generate_audio = input.generateAudio;
+  }
 
   let res: Response;
   try {

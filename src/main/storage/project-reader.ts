@@ -119,6 +119,15 @@ export function readWorkspaceFromDb(
       const videoPlanMode: Shot["videoPlanMode"] =
         rawPlanMode === "still_motion" || rawPlanMode === "skip" ? rawPlanMode : "paid_video";
 
+      const rawGenMode = String(r.video_gen_mode ?? "first_frame");
+      const videoGenMode: Shot["videoGenMode"] =
+        rawGenMode === "first_last" || rawGenMode === "multimodal_ref" ? rawGenMode : "first_frame";
+      const rawSeamType = String(r.seam_transition_type ?? "cut");
+      const seamTransitionType: Shot["seamTransitionType"] =
+        rawSeamType === "tail_match" || rawSeamType === "dissolve" || rawSeamType === "dip_to_black"
+          ? rawSeamType
+          : "cut";
+
       return {
         id: String(r.id),
         sceneId: String(r.scene_id),
@@ -142,6 +151,13 @@ export function readWorkspaceFromDb(
         keyBeat: Number(r.key_beat ?? 0) === 1,
         keyBeatReason: String(r.key_beat_reason ?? ""),
         videoPlanMode,
+        videoGenMode,
+        endFrameMediaPath: r.end_frame_media_path ? String(r.end_frame_media_path) : null,
+        referenceVideoPath: r.reference_video_path ? String(r.reference_video_path) : null,
+        nativeAudioEnabled: r.native_audio_enabled === undefined ? true : Number(r.native_audio_enabled) === 1,
+        seamTransitionType,
+        seamTransitionSec: Number(r.seam_transition_sec ?? 0.4),
+        audioJcutSec: Number(r.audio_jcut_sec ?? 0),
         characterAssetIds: JSON.parse(String(r.character_asset_ids_json ?? "[]")),
         propAssetIds: JSON.parse(String(r.prop_asset_ids_json ?? "[]")),
         requiredRefAssetIds: JSON.parse(String(r.required_ref_asset_ids_json ?? "[]")),

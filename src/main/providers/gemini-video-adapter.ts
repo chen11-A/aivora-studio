@@ -54,8 +54,12 @@ export async function submitGeminiVideoTask(
     modelId: string;
     prompt: string;
     aspectRatio: AspectRatio;
+    durationSec?: number;
     imageBase64?: string | null;
     imageMime?: string;
+    lastFrameBase64?: string | null;
+    lastFrameMime?: string;
+    referenceImages?: Array<{ base64: string; mime: string }>;
   },
   fetcher: typeof fetch = fetch,
 ): Promise<{ taskId: string }> {
@@ -63,12 +67,26 @@ export async function submitGeminiVideoTask(
   if (!policy.allowed) {
     throw new Error(policy.reason);
   }
-  const contentInput = input.imageBase64
-    ? [
-        { type: "image", data: input.imageBase64, mime_type: input.imageMime || "image/jpeg" },
-        { type: "text", text: input.prompt },
-      ]
-    : input.prompt;
+  const mediaParts: Array<Record<string, unknown>> = [];
+  if (input.referenceImages && input.referenceImages.length > 0) {
+    for (const ref of input.referenceImages.slice(0, 6)) {
+      mediaParts.push({ type: "image", data: ref.base64, mime_type: ref.mime || "image/jpeg" });
+    }
+  } else {
+    if (input.imageBase64) {
+      mediaParts.push({ type: "image", data: input.imageBase64, mime_type: input.imageMime || "image/jpeg" });
+    }
+    if (input.lastFrameBase64) {
+      mediaParts.push({ type: "image", data: input.lastFrameBase64, mime_type: input.lastFrameMime || "image/jpeg" });
+    }
+  }
+  const contentInput =
+    mediaParts.length > 0 ? [...mediaParts, { type: "text", text: input.prompt }] : input.prompt;
+
+  const responseFormat: Record<string, unknown> = { type: "video", aspect_ratio: input.aspectRatio };
+  if (input.durationSec && Number.isFinite(input.durationSec) && input.durationSec >= 3) {
+    responseFormat.duration_seconds = Math.round(input.durationSec);
+  }
 
   let res: Response;
   try {
@@ -82,7 +100,7 @@ export async function submitGeminiVideoTask(
           model: input.modelId,
           background: true,
           input: contentInput,
-          response_format: { type: "video", aspect_ratio: input.aspectRatio },
+          response_format: responseFormat,
           stream: false,
         },
         timeoutMs: 45_000,

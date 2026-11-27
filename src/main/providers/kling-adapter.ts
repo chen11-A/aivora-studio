@@ -73,6 +73,7 @@ export async function submitKlingVideoTask(
     durationSec: number;
     aspectRatio: AspectRatio;
     imageBase64?: string | null;
+    imageTailBase64?: string | null;
   },
   fetcher: typeof fetch = fetch,
 ): Promise<KlingSubmitResult> {
@@ -90,6 +91,9 @@ export async function submitKlingVideoTask(
   };
   if (mode === "image2video" && input.imageBase64) {
     body.image = input.imageBase64;
+    if (input.imageTailBase64) {
+      body.image_tail = input.imageTailBase64;
+    }
   }
 
   let res: Response;

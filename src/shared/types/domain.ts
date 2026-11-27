@@ -38,6 +38,12 @@ export type SpeakerStatus = z.infer<typeof SpeakerStatusSchema>;
 export const VideoPlanModeSchema = z.enum(["paid_video", "still_motion", "skip"]);
 export type VideoPlanMode = z.infer<typeof VideoPlanModeSchema>;
 
+export const VideoGenModeSchema = z.enum(["first_frame", "first_last", "multimodal_ref"]);
+export type VideoGenMode = z.infer<typeof VideoGenModeSchema>;
+
+export const ShotSeamTypeSchema = z.enum(["cut", "tail_match", "dissolve", "dip_to_black"]);
+export type ShotSeamType = z.infer<typeof ShotSeamTypeSchema>;
+
 export const SourceSpanSchema = z.object({
   paragraphStart: z.number().int().min(0),
   paragraphEnd: z.number().int().min(0),
@@ -143,7 +149,7 @@ export const ShotSchema = z.object({
   title: z.string().min(1).max(120),
   scale: ShotScaleSchema.default("中景"),
   cameraMove: CameraMoveSchema.default("固定"),
-  durationSec: z.number().min(0.5).max(15).default(3),
+  durationSec: z.number().min(0.5).max(30).default(3),
   trimInSec: z.number().min(0).max(60).default(0),
   trimOutSec: z.number().min(0).max(60).default(0),
   visualPrompt: z.string().default(""),
@@ -158,6 +164,13 @@ export const ShotSchema = z.object({
   keyBeat: z.boolean().default(false),
   keyBeatReason: z.string().default(""),
   videoPlanMode: VideoPlanModeSchema.default("paid_video"),
+  videoGenMode: VideoGenModeSchema.optional(),
+  endFrameMediaPath: z.string().nullable().optional(),
+  referenceVideoPath: z.string().nullable().optional(),
+  nativeAudioEnabled: z.boolean().optional(),
+  seamTransitionType: ShotSeamTypeSchema.optional(),
+  seamTransitionSec: z.number().min(0.3).max(0.8).optional(),
+  audioJcutSec: z.number().min(-0.8).max(0.8).optional(),
   characterAssetIds: z.array(z.string()).default([]),
   propAssetIds: z.array(z.string()).optional(),
   requiredRefAssetIds: z.array(z.string()).optional(),
@@ -239,7 +252,7 @@ export const UpdateShotInputSchema = z.object({
   title: z.string().trim().min(1).max(120).optional(),
   scale: ShotScaleSchema.optional(),
   cameraMove: CameraMoveSchema.optional(),
-  durationSec: z.number().min(0.5).max(15).optional(),
+  durationSec: z.number().min(0.5).max(30).optional(),
   trimInSec: z.number().min(0).max(60).optional(),
   trimOutSec: z.number().min(0).max(60).optional(),
   visualPrompt: z.string().optional(),
@@ -253,6 +266,13 @@ export const UpdateShotInputSchema = z.object({
   keyBeat: z.boolean().optional(),
   keyBeatReason: z.string().optional(),
   videoPlanMode: VideoPlanModeSchema.optional(),
+  videoGenMode: VideoGenModeSchema.optional(),
+  endFrameMediaPath: z.string().nullable().optional(),
+  referenceVideoPath: z.string().nullable().optional(),
+  nativeAudioEnabled: z.boolean().optional(),
+  seamTransitionType: ShotSeamTypeSchema.optional(),
+  seamTransitionSec: z.number().min(0.3).max(0.8).optional(),
+  audioJcutSec: z.number().min(-0.8).max(0.8).optional(),
   characterAssetIds: z.array(z.string()).optional(),
   propAssetIds: z.array(z.string()).optional(),
   requiredRefAssetIds: z.array(z.string()).optional(),

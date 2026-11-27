@@ -10,6 +10,7 @@ import type {
 } from "../../shared/types/jobs";
 import { probeFfmpegStatus, runMediaBinary } from "../media/ffmpeg-locator";
 import { resolveConfinedMediaPath } from "../media/media-protocol";
+import { buildSceneSpatialAnchorPrompt } from "./cinematic-prompt-builder";
 import { detectRasterImageMime } from "./model-registry";
 
 export type PreparedPromptWithRefs = {
@@ -305,12 +306,16 @@ export function buildAssetPortraitPrompt(
   if (!asset) throw new Error("资产不存在");
   const orientation = workspace.project.aspectRatio === "9:16" ? "竖屏 9:16 构图" : "横屏 16:9 构图";
   const style = workspace.project.stylePreset ? `统一画风：${workspace.project.stylePreset}。` : "";
+  if (asset.kind === "scene") {
+    return {
+      title: `${asset.name} · 空间场景设定图`,
+      prompt: `${orientation}。${style}${buildSceneSpatialAnchorPrompt(asset.name, asset.description)}`,
+    };
+  }
   const kindLabel =
     asset.kind === "character"
       ? "影视角色定妆照（清晰五官与标志性服饰，干净背景）"
-      : asset.kind === "scene"
-        ? "影视空镜场景设定图（无杂乱路人，突出空间层次与光影）"
-        : "影视关键道具设定图（特写质感清晰）";
+      : "影视关键道具设定图（特写质感清晰）";
   const desc = asset.description.trim() || `展现「${asset.name}」的核心特征`;
   return {
     title: `${asset.name} · 定妆候选图`,

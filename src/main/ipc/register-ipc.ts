@@ -31,6 +31,7 @@ import type { DirectorService } from "../skills/director-service";
 import type { GlobalConfigStore } from "../storage/global-store";
 import { safeFolderSegment, type ProjectStore } from "../storage/project-store";
 import { registerBudgetIpcHandlers } from "./register-budget-ipc";
+import { registerContinuityIpcHandlers } from "./register-continuity-ipc";
 import { registerDeliveryIpcHandlers } from "./register-delivery-ipc";
 import { registerExternalAndModelExtraIpc } from "./register-external-ipc";
 
@@ -493,4 +494,5 @@ export function registerIpcHandlers(deps: {
   });
   registerDeliveryIpcHandlers({ projects: deps.projects, allowedRevealPaths, assertAuthorized });
   registerBudgetIpcHandlers({ projects: deps.projects, jobs: deps.jobQueue, assertAuthorized });
+  registerContinuityIpcHandlers({ projects: deps.projects, getWindow: deps.getWindow, assertAuthorized });
 }

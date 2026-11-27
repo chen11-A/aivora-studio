@@ -8,11 +8,12 @@ import { SlidingSegmentedControl } from "../../components/ui/SlidingSegmentedCon
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
 import { ShotActionPolishBox } from "./ShotActionPolishBox";
+import { ShotContinuityControls } from "./ShotContinuityControls";
 import { ShotSpeakerWarning } from "./ShotSpeakerWarning";
 
 const SCALES: ShotScale[] = ["远景", "全景", "中景", "近景", "特写"];
 const MOVES: CameraMove[] = ["固定", "缓推", "缓拉", "横摇", "跟拍", "微摇"];
-const DURATIONS = ["2", "3", "5", "8"] as const;
+const DURATIONS = ["3", "5", "8", "12", "15"] as const;
 
 export function ShotInspector(props: {
   currentShot: Shot | null;
@@ -437,6 +438,8 @@ export function ShotInspector(props: {
               <span>AI 生视频</span>
             </button>
           </div>
+
+          <ShotContinuityControls key={currentShot.id} currentShot={currentShot} shotIndex={shotIndex} />
 
           <div className="border-t border-[var(--border-subtle)] pt-2">
             <button
