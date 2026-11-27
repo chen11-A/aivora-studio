@@ -1,5 +1,6 @@
-import { Blend } from "lucide-react";
-import type { Shot, ShotSeamType } from "@shared/types/domain";
+import { Blend, Zap } from "lucide-react";
+import { SEAM_SFX_OPTIONS } from "@shared/bgm-cues";
+import type { SeamSfxKind, Shot, ShotSeamType } from "@shared/types/domain";
 import { SlidingSegmentedControl } from "../../components/ui/SlidingSegmentedControl";
 
 const SEAM_TYPES: Array<{ id: ShotSeamType; label: string }> = [
@@ -16,6 +17,7 @@ export function ShotSeamControls(props: {
     seamTransitionType?: ShotSeamType;
     seamTransitionSec?: number;
     audioJcutSec?: number;
+    seamSfxType?: SeamSfxKind;
   }) => void;
 }) {
   const { shot, isLastShot, onUpdate } = props;
@@ -24,6 +26,7 @@ export function ShotSeamControls(props: {
   const seamType: ShotSeamType = shot.seamTransitionType ?? "cut";
   const seamSec = shot.seamTransitionSec ?? 0.4;
   const jcutSec = shot.audioJcutSec ?? 0;
+  const seamSfx: SeamSfxKind = shot.seamSfxType ?? "none";
 
   return (
     <div
@@ -33,7 +36,7 @@ export function ShotSeamControls(props: {
       <div className="flex items-center justify-between text-[11px]">
         <span className="text-[var(--text-secondary)] flex items-center gap-1.5 font-medium truncate">
           <Blend className="w-3.5 h-3.5 text-[var(--accent-primary-text)] shrink-0" />
-          <span className="truncate">接缝转场与音画错峰（本镜 → 下镜）</span>
+          <span className="truncate">接缝转场、音画错峰与短音效（本镜 → 下镜）</span>
         </span>
       </div>
 
@@ -93,6 +96,26 @@ export function ShotSeamControls(props: {
           />
         </label>
       </div>
+
+      <label className="flex items-center justify-between gap-2 text-[11px] text-[var(--text-muted)]">
+        <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0">
+          <Zap className="w-3 h-3 text-[var(--accent-amber-text)] shrink-0" />
+          <span>转场/爆点音效</span>
+        </span>
+        <select
+          data-testid="seam-sfx-select"
+          aria-label="接缝短音效"
+          value={seamSfx}
+          onChange={(e) => onUpdate({ seamSfxType: e.target.value as SeamSfxKind })}
+          className="h-6 px-1.5 rounded bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-[11px] text-[var(--text-primary)] min-w-[116px]"
+        >
+          {SEAM_SFX_OPTIONS.map((opt) => (
+            <option key={opt.id} value={opt.id}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+      </label>
     </div>
   );
 }

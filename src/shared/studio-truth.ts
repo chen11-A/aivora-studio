@@ -67,6 +67,19 @@ export function computeEpisodeExportSnapshotDigest(
   const bgmAsset = workspace.project.bgmAssetId
     ? workspace.assets.find((a) => a.id === workspace.project.bgmAssetId) ?? null
     : null;
+  const ep = workspace.episodes.find((e) => e.id === episodeId);
+  const assetById = new Map(workspace.assets.map((a) => [a.id, a]));
+  const epBgmCues = (ep?.bgmCues ?? []).map((cue) => ({
+    id: cue.id,
+    startShotIndex: cue.startShotIndex,
+    endShotIndex: cue.endShotIndex,
+    assetId: cue.assetId,
+    assetSha: cue.assetId ? (assetById.get(cue.assetId)?.mediaSha256 ?? null) : null,
+    startOffsetSec: cue.startOffsetSec,
+    volumeDb: cue.volumeDb,
+    fadeInSec: cue.fadeInSec,
+    fadeOutSec: cue.fadeOutSec,
+  }));
 
   const payload = {
     v: 2,
@@ -79,6 +92,7 @@ export function computeEpisodeExportSnapshotDigest(
       bgmSha: bgmAsset?.mediaSha256 ?? null,
     },
     episodeId,
+    bgmCues: epBgmCues,
     shots: epShots.map((shot) => {
       const visual = resolveActiveVisualTake(shot, workspace.takes);
       const speech = resolveSelectedSpeechTake(shot, workspace.takes);
@@ -95,6 +109,8 @@ export function computeEpisodeExportSnapshotDigest(
         seamTransitionType: shot.seamTransitionType ?? "cut",
         seamTransitionSec: shot.seamTransitionSec ?? 0.4,
         audioJcutSec: shot.audioJcutSec ?? 0,
+        seamSfxType: shot.seamSfxType ?? "none",
+        seamSfxVolumeDb: shot.seamSfxVolumeDb ?? -10,
         speaker: shot.speaker,
         dialogue: shot.dialogue,
         subtitle: shot.subtitle,

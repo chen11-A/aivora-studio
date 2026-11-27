@@ -3,7 +3,7 @@ import path from "node:path";
 import { IPC_CHANNELS } from "../../shared/ipc-contract";
 import type { ExternalDropCommitInput } from "../../shared/types/external-pack";
 import type { OAuthProviderId } from "../../shared/types/provider";
-import { listBuiltinBgmTracks, resolveBuiltinBgmTrackFile } from "../media/builtin-audio";
+import { listBuiltinBgmTracks } from "../media/builtin-audio";
 import { DownloadFolderWatcher, getDefaultDownloadsDir } from "../media/download-watcher";
 import {
   commitExternalDropImport,
@@ -12,6 +12,11 @@ import {
 } from "../media/external-pack";
 import { generateProjectBgmWithBudget } from "../jobs/paid-bgm-service";
 import { fetchRemoteProviderModels } from "../providers/openai-compat-adapter";
+import {
+  applyBuiltinTrackToTarget,
+  autoPlanEpisodeBgmCues,
+  saveEpisodeBgmCues,
+} from "../storage/bgm-cues-store";
 import type { GlobalConfigStore } from "../storage/global-store";
 import type { ProjectStore } from "../storage/project-store";
 
@@ -291,31 +296,48 @@ export function registerExternalAndModelExtraIpc(deps: ExternalIpcDeps): void {
 
   handle(
     IPC_CHANNELS.APPLY_BUILTIN_BGM,
-    (input: { projectId: string; trackId: string }) => {
-      const resolved = resolveBuiltinBgmTrackFile(input.trackId);
-      if (!resolved) {
-        return { ok: false, projectId: input.projectId, message: "找不到指定的内置精选配乐" };
-      }
+    (input: { projectId: string; trackId: string; episodeId?: string; cueId?: string }) => {
       try {
-        const workspace = deps.projects.importProjectBgmFromPath(
-          input.projectId,
-          resolved.filePath,
-          {
-            displayName: `内置配乐 · ${resolved.track.name}（${resolved.track.mood} · ${resolved.track.license}）`,
-            description: `${resolved.track.scene} 作者：${resolved.track.author}，许可：${resolved.track.license}`,
-          },
-        );
-        return {
-          ok: true,
-          projectId: input.projectId,
-          workspace,
-          message: `已采用内置无版权配乐「${resolved.track.name}」并拷贝至当前作品目录`,
-        };
+        return applyBuiltinTrackToTarget(deps.projects, input);
       } catch (err) {
         return {
           ok: false,
           projectId: input.projectId,
           message: err instanceof Error ? err.message : "采用内置配乐失败",
+        };
+      }
+    },
+  );
+
+  handle(
+    IPC_CHANNELS.UPDATE_EPISODE_BGM_CUES,
+    (input: {
+      projectId: string;
+      episodeId: string;
+      bgmCues: import("../../shared/types/domain").EpisodeBgmCue[];
+    }) => {
+      try {
+        const workspace = saveEpisodeBgmCues(deps.projects, input);
+        return { ok: true, workspace, message: "已保存本集分段配乐设置" };
+      } catch (err) {
+        return {
+          ok: false,
+          message: err instanceof Error ? err.message : "保存分段配乐失败",
+        };
+      }
+    },
+  );
+
+  handle(
+    IPC_CHANNELS.AUTO_PLAN_EPISODE_BGM,
+    (input: { projectId: string; episodeId: string }) => {
+      try {
+        return autoPlanEpisodeBgmCues(deps.projects, input);
+      } catch (err) {
+        return {
+          ok: false,
+          cues: [],
+          message: err instanceof Error ? err.message : "自动按场次配乐失败",
         };
       }
     },

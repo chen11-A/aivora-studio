@@ -44,6 +44,22 @@ export type VideoGenMode = z.infer<typeof VideoGenModeSchema>;
 export const ShotSeamTypeSchema = z.enum(["cut", "tail_match", "dissolve", "dip_to_black"]);
 export type ShotSeamType = z.infer<typeof ShotSeamTypeSchema>;
 
+export const SeamSfxKindSchema = z.enum(["none", "whoosh", "hit", "riser", "chime"]);
+export type SeamSfxKind = z.infer<typeof SeamSfxKindSchema>;
+
+export const EpisodeBgmCueSchema = z.object({
+  id: z.string().min(1),
+  startShotIndex: z.number().int().min(0),
+  endShotIndex: z.number().int().min(0),
+  assetId: z.string().nullable().default(null),
+  mood: z.string().max(40).default(""),
+  startOffsetSec: z.number().min(0).max(600).default(0),
+  volumeDb: z.number().min(-36).max(6).default(-14),
+  fadeInSec: z.number().min(0).max(5).default(0.8),
+  fadeOutSec: z.number().min(0).max(5).default(1.5),
+});
+export type EpisodeBgmCue = z.infer<typeof EpisodeBgmCueSchema>;
+
 export const SourceSpanSchema = z.object({
   paragraphStart: z.number().int().min(0),
   paragraphEnd: z.number().int().min(0),
@@ -94,6 +110,7 @@ export const EpisodeSchema = z.object({
   title: z.string().min(1).max(120),
   scriptText: z.string(),
   sourceAnchors: z.array(SourceAnchorSchema).default([]),
+  bgmCues: z.array(EpisodeBgmCueSchema).optional(),
   updatedAt: z.string(),
 });
 export type Episode = z.infer<typeof EpisodeSchema>;
@@ -171,6 +188,8 @@ export const ShotSchema = z.object({
   seamTransitionType: ShotSeamTypeSchema.optional(),
   seamTransitionSec: z.number().min(0.3).max(0.8).optional(),
   audioJcutSec: z.number().min(-0.8).max(0.8).optional(),
+  seamSfxType: SeamSfxKindSchema.optional(),
+  seamSfxVolumeDb: z.number().min(-30).max(0).optional(),
   characterAssetIds: z.array(z.string()).default([]),
   propAssetIds: z.array(z.string()).optional(),
   requiredRefAssetIds: z.array(z.string()).optional(),
@@ -273,6 +292,8 @@ export const UpdateShotInputSchema = z.object({
   seamTransitionType: ShotSeamTypeSchema.optional(),
   seamTransitionSec: z.number().min(0.3).max(0.8).optional(),
   audioJcutSec: z.number().min(-0.8).max(0.8).optional(),
+  seamSfxType: SeamSfxKindSchema.optional(),
+  seamSfxVolumeDb: z.number().min(-30).max(0).optional(),
   characterAssetIds: z.array(z.string()).optional(),
   propAssetIds: z.array(z.string()).optional(),
   requiredRefAssetIds: z.array(z.string()).optional(),

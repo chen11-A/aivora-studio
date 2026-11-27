@@ -448,7 +448,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     cancelEpisodeExport: async () => ({ ok: false, message: "浏览器预览模式无导出任务" }),
     onFlushBeforeClose: () => () => undefined,
     notifyFlushComplete: () => undefined,
-    getAppInfo: async () => ({ version: "2.0.3", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "2.1.0", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     loadDeliveryQueue: async () => null,
     runMultiEpisodeDelivery: async () => ({
       ok: false, queue: null, rerenderedCount: 0, skippedVerifiedCount: 0, failedEpisodeIds: [], mergedOutputPath: null,
@@ -470,6 +470,12 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     extractPrevShotTailFrame: async () => ({ ok: false, message: "请在桌面端抽取上一镜真实尾帧" }),
     importShotEndFrame: async () => ({ ok: false, message: "请在桌面端导入尾帧图片" }),
     importShotReferenceVideo: async () => ({ ok: false, message: "请在桌面端导入运镜/特效参考视频" }),
+    updateEpisodeBgmCues: async ({ projectId, episodeId, bgmCues }) => {
+      const ws = workspaces.get(projectId);
+      if (ws) ws.episodes = ws.episodes.map((e) => (e.id === episodeId ? { ...e, bgmCues } : e));
+      return { ok: Boolean(ws), workspace: ws ? structuredClone(ws) : undefined, message: "已更新预览分段配乐" };
+    },
+    autoPlanEpisodeBgm: async () => ({ ok: false, cues: [], message: "请在桌面端使用按场次自动配乐" }),
     mediaUrl: (_projectId, relativePath) => relativePath,
     resolveDroppedFilePath: () => null,
   };

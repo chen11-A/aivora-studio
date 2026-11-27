@@ -41,15 +41,25 @@ export function readWorkspaceFromDb(
 
   const episodes: Episode[] = db
     .all<Record<string, unknown>>(`SELECT * FROM episodes ORDER BY order_index ASC`)
-    .map((r) => ({
-      id: String(r.id),
-      projectId: String(r.project_id),
-      orderIndex: Number(r.order_index),
-      title: String(r.title),
-      scriptText: String(r.script_text ?? ""),
-      sourceAnchors: JSON.parse(String(r.source_anchors_json ?? "[]")),
-      updatedAt: String(r.updated_at),
-    }));
+    .map((r) => {
+      let bgmCues: Episode["bgmCues"] = [];
+      try {
+        const parsed = JSON.parse(String(r.bgm_cues_json ?? "[]")) as unknown;
+        if (Array.isArray(parsed)) bgmCues = parsed as Episode["bgmCues"];
+      } catch {
+        bgmCues = [];
+      }
+      return {
+        id: String(r.id),
+        projectId: String(r.project_id),
+        orderIndex: Number(r.order_index),
+        title: String(r.title),
+        scriptText: String(r.script_text ?? ""),
+        sourceAnchors: JSON.parse(String(r.source_anchors_json ?? "[]")),
+        bgmCues,
+        updatedAt: String(r.updated_at),
+      };
+    });
 
   const assets: Asset[] = db
     .all<Record<string, unknown>>(`SELECT * FROM assets ORDER BY updated_at DESC`)
@@ -127,6 +137,11 @@ export function readWorkspaceFromDb(
         rawSeamType === "tail_match" || rawSeamType === "dissolve" || rawSeamType === "dip_to_black"
           ? rawSeamType
           : "cut";
+      const rawSfx = String(r.seam_sfx_type ?? "none");
+      const seamSfxType: Shot["seamSfxType"] =
+        rawSfx === "whoosh" || rawSfx === "hit" || rawSfx === "riser" || rawSfx === "chime"
+          ? rawSfx
+          : "none";
 
       return {
         id: String(r.id),
@@ -158,6 +173,8 @@ export function readWorkspaceFromDb(
         seamTransitionType,
         seamTransitionSec: Number(r.seam_transition_sec ?? 0.4),
         audioJcutSec: Number(r.audio_jcut_sec ?? 0),
+        seamSfxType,
+        seamSfxVolumeDb: Number(r.seam_sfx_volume_db ?? -10),
         characterAssetIds: JSON.parse(String(r.character_asset_ids_json ?? "[]")),
         propAssetIds: JSON.parse(String(r.prop_asset_ids_json ?? "[]")),
         requiredRefAssetIds: JSON.parse(String(r.required_ref_asset_ids_json ?? "[]")),

@@ -1,18 +1,27 @@
 import { useEffect, useState } from "react";
 import { Check, Disc3, Loader2, Music, Sparkles, Trash2, Upload, X } from "lucide-react";
+import { splitOrSetCueAtShot } from "@shared/bgm-cues";
 import type { BuiltinBgmTrack } from "@shared/ipc-contract";
-import type { Asset } from "@shared/types/domain";
+import type { Asset, EpisodeBgmCue } from "@shared/types/domain";
 import { CollapsibleRegion } from "../../components/ui/CollapsibleRegion";
 import { ConfirmInlineAction } from "../../components/ui/ConfirmInlineAction";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useStudioStore } from "../../store/useStudioStore";
+import { BgmCueInspector } from "./BgmCueInspector";
 
 export function BgmTrackControls(props: {
   projectId: string;
+  episodeId: string;
   projectName: string;
   stylePreset: string;
   episodeTitle: string;
+  shotCount: number;
+  activeShotIndex: number;
+  bgmCues: EpisodeBgmCue[];
+  selectedCueId: string | null;
+  onSelectCue: (cueId: string | null) => void;
   bgmAsset: Asset | null;
+  musicAssets: Asset[];
   bgmCandidates: Asset[];
   bgmVolumeDb: number;
   onImportBgm: (filePath?: string) => void;
@@ -36,6 +45,67 @@ export function BgmTrackControls(props: {
     setPromptDraft(defaultPrompt);
   }, [props.projectId, defaultPrompt]);
 
+  async function saveCues(nextCues: EpisodeBgmCue[], toastMsg?: string) {
+    const res = await client.updateEpisodeBgmCues({
+      projectId: props.projectId,
+      episodeId: props.episodeId,
+      bgmCues: nextCues,
+    });
+    if (res.ok && res.workspace) {
+      useStudioStore.setState({ workspace: res.workspace });
+    }
+    if (toastMsg || !res.ok) useStudioStore.getState().showToast(toastMsg ?? res.message);
+  }
+
+  async function handleAutoPlan() {
+    if (busyAssetId) return;
+    setBusyAssetId("auto-plan");
+    try {
+      const res = await client.autoPlanEpisodeBgm({
+        projectId: props.projectId,
+        episodeId: props.episodeId,
+      });
+      if (res.ok && res.workspace) {
+        useStudioStore.setState({ workspace: res.workspace });
+        if (res.cues[0]) props.onSelectCue(res.cues[0].id);
+      }
+      useStudioStore.getState().showToast(res.message, 4200);
+    } finally {
+      setBusyAssetId(null);
+    }
+  }
+
+  async function handleSplitOrSilence(mode: "split_music" | "silence_drop") {
+    const fallbackAsset = props.bgmAsset?.id ?? props.musicAssets[0]?.id ?? null;
+    const { cues: nextCues, focusCueId } = splitOrSetCueAtShot({
+      existingCues: props.bgmCues,
+      shotCount: props.shotCount,
+      shotIndex: props.activeShotIndex,
+      mode,
+      defaultAssetId: fallbackAsset,
+      defaultVolumeDb: props.bgmVolumeDb,
+      newId: `cue_${Date.now().toString(36)}`,
+    });
+    props.onSelectCue(focusCueId);
+    await saveCues(
+      nextCues,
+      mode === "silence_drop"
+        ? `已将第 ${props.activeShotIndex + 1} 镜设为留白静音段`
+        : `已从第 ${props.activeShotIndex + 1} 镜切分出新配乐段`,
+    );
+  }
+
+  async function handleUpdateCue(cueId: string, patch: Partial<EpisodeBgmCue>) {
+    const nextCues = props.bgmCues.map((c) => (c.id === cueId ? { ...c, ...patch } : c));
+    await saveCues(nextCues);
+  }
+
+  async function handleDeleteCue(cueId: string) {
+    const nextCues = props.bgmCues.filter((c) => c.id !== cueId);
+    props.onSelectCue(nextCues[0]?.id ?? null);
+    await saveCues(nextCues, "已移除该配乐段");
+  }
+
   async function handleToggleLibrary() {
     const next = !libraryOpen;
     setLibraryOpen(next);
@@ -55,7 +125,15 @@ export function BgmTrackControls(props: {
     const targetProjectId = props.projectId;
     setBusyAssetId(trackId);
     try {
-      const res = await client.applyBuiltinBgm({ projectId: targetProjectId, trackId });
+      const targetCueId = props.bgmCues.some((c) => c.id === props.selectedCueId)
+        ? (props.selectedCueId ?? undefined)
+        : undefined;
+      const res = await client.applyBuiltinBgm({
+        projectId: targetProjectId,
+        trackId,
+        episodeId: props.episodeId,
+        cueId: targetCueId,
+      });
       if (useStudioStore.getState().workspace?.project.id !== targetProjectId) return;
       if (res.ok && res.workspace) {
         useStudioStore.setState({ workspace: res.workspace });
@@ -112,6 +190,11 @@ export function BgmTrackControls(props: {
     const targetProjectId = props.projectId;
     setBusyAssetId(assetId);
     try {
+      if (props.bgmCues.length > 0 && props.selectedCueId && props.bgmCues.some((c) => c.id === props.selectedCueId)) {
+        await handleUpdateCue(props.selectedCueId, { assetId });
+        useStudioStore.getState().showToast("已将该候选配乐套用到所选配乐段");
+        return;
+      }
       const res = await client.applyProjectBgmCandidate({ projectId: targetProjectId, assetId });
       if (useStudioStore.getState().workspace?.project.id !== targetProjectId) return;
       if (res.ok && res.workspace) {
@@ -143,6 +226,8 @@ export function BgmTrackControls(props: {
     }
   }
 
+  const hasAnyBgm = props.bgmCues.length > 0 || Boolean(props.bgmAsset);
+
   return (
     <div
       onDragOver={(e) => {
@@ -162,12 +247,31 @@ export function BgmTrackControls(props: {
       <div className="flex items-center justify-between text-[11px]">
         <span className="text-[var(--text-secondary)] flex items-center gap-1.5">
           <Music className="w-3.5 h-3.5 text-[var(--accent-primary-text)]" />
-          <span>背景配乐（对白时自动轻柔压低）</span>
+          <span>分段背景配乐（对白自动压低）</span>
         </span>
-        {props.bgmAsset && (
+        {props.bgmCues.length > 0 ? (
+          <span className="font-medium tabular-nums text-[var(--accent-primary-text)]">
+            {props.bgmCues.length} 段
+          </span>
+        ) : props.bgmAsset ? (
           <span className="font-medium tabular-nums text-[var(--text-primary)]">{props.bgmVolumeDb} dB</span>
-        )}
+        ) : null}
       </div>
+
+      <BgmCueInspector
+        cues={props.bgmCues}
+        selectedCueId={props.selectedCueId}
+        activeShotIndex={props.activeShotIndex}
+        shotCount={props.shotCount}
+        musicAssets={props.musicAssets}
+        busy={Boolean(busyAssetId)}
+        onSelectCue={(id) => props.onSelectCue(id)}
+        onAutoPlan={() => void handleAutoPlan()}
+        onSplitAtActiveShot={() => void handleSplitOrSilence("split_music")}
+        onInsertSilenceAtActiveShot={() => void handleSplitOrSilence("silence_drop")}
+        onUpdateCue={(id, patch) => void handleUpdateCue(id, patch)}
+        onDeleteCue={(id) => void handleDeleteCue(id)}
+      />
 
       <div
         className={`flex items-center justify-between gap-2 rounded-lg bg-[var(--bg-inset)] border border-[var(--border-subtle)] px-2.5 py-1.5 text-[11px] transition-colors ${
@@ -176,15 +280,17 @@ export function BgmTrackControls(props: {
       >
         <span
           className={`truncate ${
-            props.bgmAsset || dragActive ? "text-[var(--text-primary)]" : "text-[var(--text-muted)]"
+            hasAnyBgm || dragActive ? "text-[var(--text-primary)]" : "text-[var(--text-muted)]"
           }`}
-          title="支持直接拖入本地音频文件作为背景配乐"
+          title="支持直接拖入本地音频或 Suno/Udio 成品至本剧音乐库"
         >
           {dragActive
             ? "松手导入音频作为配乐"
-            : props.bgmAsset
-              ? props.bgmAsset.name
-              : "未选用配乐"}
+            : props.bgmCues.length > 0
+              ? `本集已配 ${props.bgmCues.length} 段（可换曲/拖入）`
+              : props.bgmAsset
+                ? props.bgmAsset.name
+                : "未选用配乐"}
         </span>
         <div className="flex items-center gap-2 shrink-0">
           <button
@@ -217,13 +323,16 @@ export function BgmTrackControls(props: {
             className="aivora-pressable text-[var(--accent-primary-text)] hover:underline flex items-center gap-0.5 cursor-pointer"
           >
             <Upload className="w-3 h-3" />
-            <span>{props.bgmAsset ? "更换" : "导入"}</span>
+            <span>{hasAnyBgm ? "更换" : "导入"}</span>
           </button>
-          {props.bgmAsset && (
+          {hasAnyBgm && (
             <ConfirmInlineAction
-              confirmLabel="移除"
-              title="移除背景音乐"
-              onConfirm={props.onClearBgm}
+              confirmLabel="清空"
+              title="清空本集背景音乐"
+              onConfirm={async () => {
+                if (props.bgmCues.length > 0) await saveCues([], "已清空本集分段配乐");
+                if (props.bgmAsset) props.onClearBgm();
+              }}
               className="text-[var(--accent-danger-text)] hover:opacity-80 cursor-pointer"
             >
               <Trash2 className="w-3 h-3" />
@@ -359,8 +468,8 @@ export function BgmTrackControls(props: {
         </div>
       )}
 
-      {/* Only show volume slider when BGM is active */}
-      <CollapsibleRegion open={Boolean(props.bgmAsset)}>
+      {/* Only show legacy global volume slider when project BGM is active without segmented cues */}
+      <CollapsibleRegion open={Boolean(props.bgmAsset) && props.bgmCues.length === 0}>
         <input
           type="range"
           min={-30}

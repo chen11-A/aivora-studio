@@ -1,7 +1,8 @@
 import { memo, useMemo, useRef, useState } from "react";
 import { Film, Music, Subtitles, Volume2 } from "lucide-react";
+import { SEAM_SFX_OPTIONS } from "@shared/bgm-cues";
 import { resolveActiveVisualTake, resolveSelectedSpeechTake } from "@shared/media-selection";
-import type { Asset, Shot, Take } from "@shared/types/domain";
+import type { Asset, EpisodeBgmCue, Shot, Take } from "@shared/types/domain";
 import type { TimelineSegment } from "./useTimelinePlayback";
 
 function fmtTime(sec: number): string {
@@ -63,8 +64,26 @@ const TimelineTracks = memo(function TimelineTracks(props: {
   activeIndex: number | null;
   bgmAsset: Asset | null;
   bgmVolumeDb: number;
+  bgmCues: EpisodeBgmCue[];
+  musicAssets: Asset[];
+  selectedCueId: string | null;
+  onSelectBgmCue?: (cueId: string) => void;
 }) {
-  const { segments, layouts, activeVersionByShotId, hasSpeechByShotId, activeIndex, bgmAsset, bgmVolumeDb } = props;
+  const {
+    segments,
+    layouts,
+    activeVersionByShotId,
+    hasSpeechByShotId,
+    activeIndex,
+    bgmAsset,
+    bgmVolumeDb,
+    bgmCues,
+    musicAssets,
+    selectedCueId,
+    onSelectBgmCue,
+  } = props;
+  const musicById = useMemo(() => new Map(musicAssets.map((a) => [a.id, a])), [musicAssets]);
+
   return (
     <>
       {/* Video Track */}
@@ -77,6 +96,10 @@ const TimelineTracks = memo(function TimelineTracks(props: {
             const { shot } = seg;
             const versionNumber = activeVersionByShotId.get(shot.id) ?? null;
             const active = idx === activeIndex;
+            const sfxLabel =
+              idx < segments.length - 1 && shot.seamSfxType && shot.seamSfxType !== "none"
+                ? SEAM_SFX_OPTIONS.find((o) => o.id === shot.seamSfxType)?.shortLabel ?? ""
+                : "";
             return (
               <div
                 key={shot.id}
@@ -91,15 +114,28 @@ const TimelineTracks = memo(function TimelineTracks(props: {
                 <span className="block truncate min-w-0 tabular-nums">
                   {shot.title} ({seg.durationSec}s)
                 </span>
-                {versionNumber !== null && (
-                  <span
-                    className={`text-[10px] shrink-0 tabular-nums ${
-                      active ? "text-white/85" : "text-[var(--accent-primary-text)]"
-                    }`}
-                  >
-                    v{versionNumber}
-                  </span>
-                )}
+                <div className="flex items-center gap-1 shrink-0">
+                  {sfxLabel && (
+                    <span
+                      className={`px-1 rounded text-[9px] font-medium ${
+                        active
+                          ? "bg-black/25 text-[#fde68a]"
+                          : "bg-[var(--accent-amber-soft)] text-[var(--accent-amber-text)]"
+                      }`}
+                    >
+                      ⚡{sfxLabel}
+                    </span>
+                  )}
+                  {versionNumber !== null && (
+                    <span
+                      className={`text-[10px] tabular-nums ${
+                        active ? "text-white/85" : "text-[var(--accent-primary-text)]"
+                      }`}
+                    >
+                      v{versionNumber}
+                    </span>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -139,18 +175,58 @@ const TimelineTracks = memo(function TimelineTracks(props: {
         </div>
       </div>
 
-      {/* BGM Track */}
+      {/* BGM Track (Interactive Segmented Cue Blocks) */}
       <div className="grid grid-cols-[64px_minmax(0,1fr)] items-center gap-2 h-7">
         <span className="text-[11px] text-[var(--text-secondary)] flex items-center gap-1">
           <Music className="w-3 h-3 text-[var(--accent-primary-text)]" /> 配乐
         </span>
-        <div className="h-full rounded-md bg-[var(--track-bgm-bg)] border border-[var(--track-bgm-border)] px-2.5 flex items-center overflow-hidden text-[10px] text-[var(--track-bgm-text)]">
-          <span className="block truncate min-w-0 tabular-nums">
-            {bgmAsset
-              ? `背景配乐：${bgmAsset.name} · ${bgmVolumeDb} dB（对白段自动压低 8 dB）`
-              : "未选用配乐（可在右侧「内置配乐」直接试听选用）"}
-          </span>
-        </div>
+        {bgmCues.length > 0 && layouts.length > 0 ? (
+          <div className="relative h-full w-full">
+            {bgmCues.map((cue, idx) => {
+              const sIdx = Math.max(0, Math.min(layouts.length - 1, cue.startShotIndex));
+              const eIdx = Math.max(sIdx, Math.min(layouts.length - 1, cue.endShotIndex));
+              const leftPx = layouts[sIdx]!.startX;
+              const rightPx = layouts[eIdx]!.startX + layouts[eIdx]!.width;
+              const widthPx = Math.max(36, rightPx - leftPx);
+              const asset = cue.assetId ? musicById.get(cue.assetId) : null;
+              const isSilent = !cue.assetId || !asset;
+              const isSelected = cue.id === selectedCueId;
+              const label = isSilent
+                ? `🔇 留白静音（镜 ${sIdx + 1}${eIdx > sIdx ? `-${eIdx + 1}` : ""}）`
+                : `🎵 ${asset.name.replace(/^内置配乐 · /, "")}${cue.startOffsetSec > 0 ? ` · 起点${cue.startOffsetSec}s` : ""} · ${cue.volumeDb}dB`;
+              return (
+                <button
+                  key={cue.id}
+                  type="button"
+                  data-testid={`timeline-bgm-cue-${idx}`}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => onSelectBgmCue?.(cue.id)}
+                  title={label}
+                  style={{ left: `${leftPx}px`, width: `${widthPx}px` }}
+                  className={`absolute top-0 bottom-0 px-2 rounded-md border text-left flex items-center overflow-hidden text-[10px] cursor-pointer transition-colors ${
+                    isSilent
+                      ? isSelected
+                        ? "bg-[var(--bg-inset)] border-[var(--accent-primary)] border-dashed text-[var(--text-primary)]"
+                        : "bg-[var(--bg-inset)] border-dashed border-[var(--border-strong)] text-[var(--text-muted)]"
+                      : isSelected
+                        ? "bg-[var(--track-bgm-bg)] border-[var(--accent-primary)] ring-1 ring-[var(--ring-focus)] text-[var(--text-primary)] font-medium"
+                        : "bg-[var(--track-bgm-bg)] border-[var(--track-bgm-border)] text-[var(--track-bgm-text)] hover:border-[var(--accent-primary)]"
+                  }`}
+                >
+                  <span className="block truncate min-w-0 tabular-nums">{label}</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="h-full rounded-md bg-[var(--track-bgm-bg)] border border-[var(--track-bgm-border)] px-2.5 flex items-center overflow-hidden text-[10px] text-[var(--track-bgm-text)]">
+            <span className="block truncate min-w-0 tabular-nums">
+              {bgmAsset
+                ? `背景配乐：${bgmAsset.name} · ${bgmVolumeDb} dB（对白段自动压低 8 dB）`
+                : "未选用配乐（可在右侧点「按场自动配乐」或「内置配乐」一键铺设）"}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Subtitle Track */}
@@ -190,6 +266,10 @@ export function EditorTimeline(props: {
   seekMotion?: "glide" | "instant";
   bgmAsset: Asset | null;
   bgmVolumeDb: number;
+  bgmCues?: EpisodeBgmCue[];
+  musicAssets?: Asset[];
+  selectedCueId?: string | null;
+  onSelectBgmCue?: (cueId: string) => void;
   onSeekTime: (sec: number, motion?: "glide" | "instant") => void;
   onScrubStart?: () => void;
 }) {
@@ -203,6 +283,10 @@ export function EditorTimeline(props: {
     seekMotion = "glide",
     bgmAsset,
     bgmVolumeDb,
+    bgmCues = [],
+    musicAssets = [],
+    selectedCueId = null,
+    onSelectBgmCue,
     onSeekTime,
     onScrubStart,
   } = props;
@@ -344,6 +428,10 @@ export function EditorTimeline(props: {
             activeIndex={activeIndex}
             bgmAsset={bgmAsset}
             bgmVolumeDb={bgmVolumeDb}
+            bgmCues={bgmCues}
+            musicAssets={musicAssets}
+            selectedCueId={selectedCueId}
+            onSelectBgmCue={onSelectBgmCue}
           />
         </div>
       </div>

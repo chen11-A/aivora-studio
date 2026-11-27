@@ -195,7 +195,23 @@ export type AivoraDesktopApi = {
   applyBuiltinBgm: (input: {
     projectId: string;
     trackId: string;
-  }) => Promise<{ ok: boolean; projectId: string; workspace?: ProjectWorkspace; message: string }>;
+    episodeId?: string;
+    cueId?: string;
+  }) => Promise<{ ok: boolean; projectId: string; workspace?: ProjectWorkspace; assetId?: string; message: string }>;
+  updateEpisodeBgmCues: (input: {
+    projectId: string;
+    episodeId: string;
+    bgmCues: import("./types/domain").EpisodeBgmCue[];
+  }) => Promise<{ ok: boolean; workspace?: ProjectWorkspace; message: string }>;
+  autoPlanEpisodeBgm: (input: {
+    projectId: string;
+    episodeId: string;
+  }) => Promise<{
+    ok: boolean;
+    workspace?: ProjectWorkspace;
+    cues: import("./types/domain").EpisodeBgmCue[];
+    message: string;
+  }>;
   generateProjectBgm: (input: {
     projectId: string;
     prompt: string;
@@ -396,6 +412,8 @@ export const IPC_CHANNELS = {
   IMPORT_PROJECT_BGM: "aivora:bgm:import",
   LIST_BUILTIN_BGM: "aivora:bgm:list-builtin",
   APPLY_BUILTIN_BGM: "aivora:bgm:apply-builtin",
+  UPDATE_EPISODE_BGM_CUES: "aivora:bgm:update-episode-cues",
+  AUTO_PLAN_EPISODE_BGM: "aivora:bgm:auto-plan-episode",
   GENERATE_PROJECT_BGM: "aivora:bgm:generate",
   APPLY_PROJECT_BGM_CANDIDATE: "aivora:bgm:apply-candidate",
   DELETE_PROJECT_BGM_CANDIDATE: "aivora:bgm:delete-candidate",

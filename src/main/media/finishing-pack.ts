@@ -7,6 +7,7 @@ import {
   resolveShotTrimWindow,
 } from "../../shared/media-selection";
 import type { ProjectWorkspace } from "../../shared/types/domain";
+import { renderSeamSfxBusWav, renderSegmentedBgmBusWav } from "./bgm-sfx-composer";
 import { BASE_FFMPEG } from "./export-segment";
 import { probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
 import { resolveConfinedMediaPath } from "./media-protocol";
@@ -215,38 +216,43 @@ export async function exportStandardFinishingPack(input: {
   );
   await runMediaBinary(ffmpeg, dlgArgs);
 
-  // 2. Ambience & 3. SFX stems (clean time-aligned 48kHz PCM beds ready for NLE layering)
+  // 2. Ambience stem (clean time-aligned 48kHz PCM bed ready for NLE layering)
   await generateSilentWav(ffmpeg, cursorSec, ambienceWav);
-  await generateSilentWav(ffmpeg, cursorSec, sfxWav);
 
-  // 4. BGM stem (real project BGM looped/trimmed to exact episode duration, or clean silent bed)
-  const bgmAsset = input.workspace.project.bgmAssetId
-    ? input.workspace.assets.find((a) => a.id === input.workspace.project.bgmAssetId)
-    : null;
-  const bgmAbs =
-    bgmAsset?.mediaPath ? resolveConfinedMediaPath(input.projectDir, bgmAsset.mediaPath) : null;
-  if (bgmAbs && existsSync(bgmAbs)) {
-    await runMediaBinary(ffmpeg, [
-      ...BASE_FFMPEG,
-      "-stream_loop",
-      "-1",
-      "-i",
-      bgmAbs,
-      "-t",
-      Math.max(0.5, cursorSec).toFixed(2),
-      "-af",
-      `volume=${input.workspace.project.bgmVolumeDb}dB,aresample=48000`,
-      "-c:a",
-      "pcm_s16le",
-      "-ar",
-      "48000",
-      "-ac",
-      "2",
-      bgmWav,
-    ]);
-  } else {
-    await generateSilentWav(ffmpeg, cursorSec, bgmWav);
+  // 3. SFX stem (real procedural seam SFX aligned to shot boundaries, or clean silent bed)
+  const finishingWindows: Array<{ startSec: number; endSec: number }> = [];
+  let winCursor = 0;
+  for (const s of speechSegments) {
+    finishingWindows.push({ startSec: winCursor, endSec: Number((winCursor + s.durationSec).toFixed(3)) });
+    winCursor = Number((winCursor + s.durationSec).toFixed(3));
   }
+  const runMedia = (bin: string, args: string[], opts?: { cwd?: string }) =>
+    runMediaBinary(bin, args, opts);
+  const sfxStem = await renderSeamSfxBusWav({
+    epShots,
+    shotWindows: finishingWindows,
+    totalDurationSec: Math.max(0.5, cursorSec),
+    outWavPath: sfxWav,
+    ffmpegPath: ffmpeg,
+    run: runMedia,
+  });
+  if (!sfxStem.hasSfx) await generateSilentWav(ffmpeg, cursorSec, sfxWav);
+
+  // 4. BGM stem (segmented per-episode BGM cues or legacy project BGM with smooth fades, or silent bed)
+  const bgmStem = await renderSegmentedBgmBusWav({
+    workspace: input.workspace,
+    projectDir: input.projectDir,
+    episodeId: input.episodeId,
+    epShots,
+    shotWindows: finishingWindows,
+    duckWindows: [],
+    totalDurationSec: Math.max(0.5, cursorSec),
+    outWavPath: bgmWav,
+    ffmpegPath: ffmpeg,
+    ffprobePath: ff.ffprobePath!,
+    run: runMedia,
+  });
+  if (!bgmStem.hasBgm) await generateSilentWav(ffmpeg, cursorSec, bgmWav);
 
   // Subtitles SRT
   const srtPath = path.join(packDir, "subtitles.srt");

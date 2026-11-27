@@ -17,12 +17,9 @@ import {
   publishFileExclusively,
   type ExclusivePublishFsOps,
 } from "../storage/exclusive-file-staging";
-import {
-  detectSpeechActivityWindows,
-  intersectSpeechWindowsWithDialogue,
-  measureAndRepairMasterAudio,
-} from "./audio-contract";
+import { measureAndRepairMasterAudio } from "./audio-contract";
 import { buildAudioNormalizationFilter } from "./audio-normalize";
+import { mixEpisodeBgmAndSeamSfx } from "./bgm-sfx-composer";
 import { runEpisodeContentAndSubtitleQc, type ContentQcReport } from "./content-qc";
 import { beginDeliveryPublishJournal, hasEpisodeReviewSignOff, markDeliveryAborted, markDeliveryPublished, sha256FileHex } from "./delivery-journal";
 import { buildExportTempPrefix, markExportScratchDirOwner, unregisterActiveExportScratchDir } from "./export-guard";
@@ -36,8 +33,6 @@ import {
 } from "./export-segment";
 import { MediaProcessAbortedError, probeFfmpegStatus, runMediaBinary } from "./ffmpeg-locator";
 import { buildAssFilterArg, resolveBundledFontInfo } from "./font-locator";
-import { resolveConfinedMediaPath } from "./media-protocol";
-import { buildSmoothDuckingFilter } from "./motion-filters";
 import { applyAudioSeamStaggering } from "./audio-seam";
 import { buildEpisodeSeamTransitions, hasEpisodeAudioSeamOverrides, realignTimelineAfterTransitions } from "./seam-plan";
 import {
@@ -255,40 +250,22 @@ export async function exportEpisodeToMp4(params: {
         totalDurationSec: cursorSec, ffmpegPath, run: runStep,
       });
     }
-    const bgmAsset = params.workspace.project.bgmAssetId
-      ? params.workspace.assets.find((a) => a.id === params.workspace.project.bgmAssetId)
-      : null;
-    const bgmAbs = bgmAsset?.mediaPath ? resolveConfinedMediaPath(params.projectDir, bgmAsset.mediaPath) : null;
-    if (bgmAbs && existsSync(bgmAbs)) {
-      emit(70, "混合背景音乐", `正在按 ${params.workspace.project.bgmVolumeDb} dB 混入背景音乐（仅对白区间按真实语音窗闪避）…`);
-      let duckWindows = dialogueIntervals;
-      if (dialogueIntervals.length > 0) {
-        try {
-          const detectedSpeech = await detectSpeechActivityWindows({
-            audioPath: path.join(scratchDir, preMasterFile),
-            totalDurationSec: cursorSec,
-            ffmpegPath,
-            run: runStep,
-          });
-          // FIX-07: Intersect silencedetect windows with dialogueIntervals so ambient-only shots NEVER falsely duck BGM!
-          const scoped = intersectSpeechWindowsWithDialogue(detectedSpeech, dialogueIntervals);
-          if (scoped.length > 0) duckWindows = scoped;
-        } catch {
-          // Fall back cleanly to dialogueIntervals if silencedetect fails
-        }
-      }
-      const bgmVolExpr = buildSmoothDuckingFilter(params.workspace.project.bgmVolumeDb, duckWindows);
-      await runStep(
-        ffmpegPath,
-        [
-          ...BASE_FFMPEG, "-i", preMasterFile, "-stream_loop", "-1", "-i", bgmAbs,
-          "-filter_complex", `[1:a:0]${bgmVolExpr}[bgm];[0:a:0][bgm]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]`,
-          "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", ...AUDIO_ENC, "-shortest", "mixed.mp4",
-        ],
-        { cwd: scratchDir },
-      );
-      preMasterFile = "mixed.mp4";
-    }
+    preMasterFile = await mixEpisodeBgmAndSeamSfx({
+      workspace: params.workspace,
+      projectDir: params.projectDir,
+      episodeId: params.episodeId,
+      epShots,
+      shotWindows,
+      dialogueIntervals,
+      scratchDir,
+      preMasterFile,
+      totalDurationSec: cursorSec,
+      ffmpegPath,
+      ffprobePath,
+      run: runStep,
+      signal,
+      emit,
+    });
 
     assertNotAborted();
     const fontInfo = resolveBundledFontInfo();

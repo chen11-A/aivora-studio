@@ -181,6 +181,28 @@ export const V2_MIGRATIONS: ReadonlyArray<{
       }
     },
   },
+  {
+    version: "v2.1.0_005_segmented_bgm_and_seam_sfx",
+    description:
+      "Add per-episode segmented BGM cues (bgm_cues_json) and per-shot seam SFX type/volume columns",
+    apply: (db) => {
+      const epCols = new Set(
+        db.all<{ name: string }>(`PRAGMA table_info(episodes)`).map((c) => c.name),
+      );
+      if (!epCols.has("bgm_cues_json")) {
+        db.exec(`ALTER TABLE episodes ADD COLUMN bgm_cues_json TEXT NOT NULL DEFAULT '[]'`);
+      }
+      const shotCols = new Set(
+        db.all<{ name: string }>(`PRAGMA table_info(shots)`).map((c) => c.name),
+      );
+      if (!shotCols.has("seam_sfx_type")) {
+        db.exec(`ALTER TABLE shots ADD COLUMN seam_sfx_type TEXT NOT NULL DEFAULT 'none'`);
+      }
+      if (!shotCols.has("seam_sfx_volume_db")) {
+        db.exec(`ALTER TABLE shots ADD COLUMN seam_sfx_volume_db REAL NOT NULL DEFAULT -10`);
+      }
+    },
+  },
 ];
 
 export type MigrationRunReport = {

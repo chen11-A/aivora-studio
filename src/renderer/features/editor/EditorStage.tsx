@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Download, Monitor, Pause, Play, RotateCcw, Scissors, Smartphone } from "lucide-react";
+import { resolveEffectiveEpisodeBgmCues, resolveTimelineBgmCueSpans } from "@shared/bgm-cues";
 import { evaluateEpisodeExportReadiness, isVideoMediaPath, resolveActiveVisualTake, resolveSelectedSpeechTake, resolveShotTrimWindow } from "@shared/media-selection";
 import { SlidingSegmentedControl } from "../../components/ui/SlidingSegmentedControl";
 import { getDesktopClient } from "../../lib/desktop-client";
@@ -9,6 +10,7 @@ import { EditorClipsBin, type EditorClipBinItem } from "./EditorClipsBin";
 import { EditorTimeline } from "./EditorTimeline";
 import { ShotSeamControls } from "./ShotSeamControls";
 import { SubtitleStylePicker, subtitlePreviewClass } from "./SubtitleStylePicker";
+import { useBgmPreviewSync } from "./useBgmPreviewSync";
 import { useTimelinePlayback } from "./useTimelinePlayback";
 
 function fmtTime(sec: number): string {
@@ -29,6 +31,7 @@ export function EditorStage() {
   const setExportModalOpen = useStudioStore((s) => s.setExportModalOpen);
 
   const [trimPulseSeq, setTrimPulseSeq] = useState(0);
+  const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const speechRef = useRef<HTMLAudioElement | null>(null);
   const bgmRef = useRef<HTMLAudioElement | null>(null);
@@ -37,9 +40,7 @@ export function EditorStage() {
     () => (workspace ? workspace.shots.filter((s) => s.episodeId === activeEpisodeId).sort((a, b) => a.orderIndex - b.orderIndex) : []),
     [workspace, activeEpisodeId],
   );
-
   const playback = useTimelinePlayback(epShots);
-
   const client = getDesktopClient();
   const resolveSrc = (mediaPath: string | null | undefined) => {
     if (!mediaPath || !workspace) return null;
@@ -48,24 +49,41 @@ export function EditorStage() {
 
   const currentShot = playback.activeSegment?.shot ?? null;
   const currentTrim = currentShot ? resolveShotTrimWindow(currentShot) : null;
-  const currentTake =
-    workspace && currentShot ? resolveActiveVisualTake(currentShot, workspace.takes) : null;
-  const currentSpeech =
-    workspace && currentShot ? resolveSelectedSpeechTake(currentShot, workspace.takes) : null;
+  const currentTake = workspace && currentShot ? resolveActiveVisualTake(currentShot, workspace.takes) : null;
+  const currentSpeech = workspace && currentShot ? resolveSelectedSpeechTake(currentShot, workspace.takes) : null;
   const previewSrc = resolveSrc(currentTake?.mediaPath);
   const previewIsVideo = isVideoMediaPath(currentTake?.mediaPath);
   const speechSrc = resolveSrc(currentSpeech?.mediaPath);
   const bgmAsset = workspace?.project.bgmAssetId
     ? (workspace.assets.find((a) => a.id === workspace.project.bgmAssetId) ?? null)
     : null;
-  const bgmSrc = resolveSrc(bgmAsset?.mediaPath);
+  const musicAssets = useMemo(
+    () => (workspace ? workspace.assets.filter((a) => a.kind === "music") : []),
+    [workspace],
+  );
+  const effectiveEpId = activeEpisodeId ?? workspace?.episodes[0]?.id ?? "";
+  const effectiveBgmCues = useMemo(
+    () => (workspace && effectiveEpId ? resolveEffectiveEpisodeBgmCues(workspace, effectiveEpId, epShots.length) : []),
+    [workspace, effectiveEpId, epShots.length],
+  );
+  const bgmSpans = useMemo(
+    () => resolveTimelineBgmCueSpans({ cues: effectiveBgmCues, windows: playback.segments, assets: musicAssets }),
+    [effectiveBgmCues, playback.segments, musicAssets],
+  );
+  const hasActiveDialogue = Boolean(currentSpeech || currentShot?.dialogue.trim());
+  const { activeBgmSrc } = useBgmPreviewSync({
+    bgmRef,
+    projectId: workspace?.project.id ?? "",
+    spans: bgmSpans,
+    playheadSec: playback.playheadSec,
+    playing: playback.playing,
+    hasActiveDialogue,
+  });
 
   useEffect(() => {
     const el = videoRef.current;
     if (!el || !previewIsVideo) return;
-    if (Math.abs(el.currentTime - playback.sourceVideoTimeSec) > 0.35) {
-      el.currentTime = playback.sourceVideoTimeSec;
-    }
+    if (Math.abs(el.currentTime - playback.sourceVideoTimeSec) > 0.35) el.currentTime = playback.sourceVideoTimeSec;
     if (playback.playing) void el.play().catch(() => undefined);
     else el.pause();
   }, [playback.playing, playback.sourceVideoTimeSec, currentTake?.id, previewIsVideo]);
@@ -73,24 +91,10 @@ export function EditorStage() {
   useEffect(() => {
     const el = speechRef.current;
     if (!el || !speechSrc) return;
-    if (Math.abs(el.currentTime - playback.offsetInShotSec) > 0.35) {
-      el.currentTime = playback.offsetInShotSec;
-    }
+    if (Math.abs(el.currentTime - playback.offsetInShotSec) > 0.35) el.currentTime = playback.offsetInShotSec;
     if (playback.playing) void el.play().catch(() => undefined);
     else el.pause();
   }, [playback.playing, playback.offsetInShotSec, currentSpeech?.id, speechSrc]);
-
-  const hasActiveDialogue = Boolean(currentSpeech || currentShot?.dialogue.trim());
-  useEffect(() => {
-    const el = bgmRef.current;
-    if (!el || !bgmSrc || !workspace) return;
-    const effDb = hasActiveDialogue
-      ? workspace.project.bgmVolumeDb - 8
-      : workspace.project.bgmVolumeDb;
-    el.volume = Math.min(1, Math.max(0, Math.pow(10, effDb / 20)));
-    if (playback.playing) void el.play().catch(() => undefined);
-    else el.pause();
-  }, [playback.playing, bgmSrc, workspace?.project.bgmVolumeDb, hasActiveDialogue]);
 
   const markTrimIn = () => {
     if (!currentShot || !currentTrim) return;
@@ -256,7 +260,7 @@ export function EditorStage() {
           </div>
 
           {speechSrc && <audio ref={speechRef} key={currentSpeech?.id} src={speechSrc} />}
-          {bgmSrc && <audio ref={bgmRef} src={bgmSrc} loop />}
+          {activeBgmSrc && <audio ref={bgmRef} src={activeBgmSrc} loop />}
 
           <div className="h-10 px-4 border-t border-[var(--border-subtle)] bg-[var(--bg-surface)] flex items-center justify-center gap-3 shrink-0">
             <button
@@ -448,27 +452,21 @@ export function EditorStage() {
             <SubtitleStylePicker value={workspace.project.subtitleStyle} onChange={(subtitleStyle) => void updateProjectSettings({ subtitleStyle })} />
 
             <BgmTrackControls
-              projectId={workspace.project.id} projectName={workspace.project.name} stylePreset={workspace.project.stylePreset}
-              episodeTitle={workspace.episodes.find((e) => e.id === activeEpisodeId)?.title ?? "第 1 集"}
-              bgmAsset={bgmAsset} bgmCandidates={workspace.assets.filter((a) => a.kind === "music" && a.id !== workspace.project.bgmAssetId)}
+              projectId={workspace.project.id} episodeId={effectiveEpId} projectName={workspace.project.name} stylePreset={workspace.project.stylePreset}
+              episodeTitle={workspace.episodes.find((e) => e.id === effectiveEpId)?.title ?? "第 1 集"}
+              shotCount={epShots.length} activeShotIndex={playback.activeSegment?.index ?? 0}
+              bgmCues={effectiveBgmCues} selectedCueId={selectedCueId} onSelectCue={setSelectedCueId}
+              bgmAsset={bgmAsset} musicAssets={musicAssets}
+              bgmCandidates={musicAssets.filter((a) => a.id !== workspace.project.bgmAssetId && !effectiveBgmCues.some((c) => c.assetId === a.id))}
               bgmVolumeDb={workspace.project.bgmVolumeDb} onImportBgm={(fp) => void importProjectBgm(fp)}
               onClearBgm={() => void clearProjectBgm()} onVolumeChange={(db) => void updateProjectSettings({ bgmVolumeDb: db })}
             />
 
             <label className="flex items-start gap-2.5 p-2.5 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] cursor-pointer">
-              <input
-                type="checkbox"
-                checked={workspace.project.loudnessNormalize}
-                onChange={(e) => void updateProjectSettings({ loudnessNormalize: e.target.checked })}
-                className="mt-0.5 accent-[#10b981]"
-              />
+              <input type="checkbox" checked={workspace.project.loudnessNormalize} onChange={(e) => void updateProjectSettings({ loudnessNormalize: e.target.checked })} className="mt-0.5 accent-[#10b981]" />
               <div>
-                <div className="text-[12px] font-medium text-[var(--text-primary)]">
-                  自动音量均衡（-16 LUFS）
-                </div>
-                <div className="text-[11px] text-[var(--text-muted)]">
-                  导出自动校准人声与配乐音量，清晰不破音。
-                </div>
+                <div className="text-[12px] font-medium text-[var(--text-primary)]">自动音量均衡（-16 LUFS）</div>
+                <div className="text-[11px] text-[var(--text-muted)]">导出自动校准人声与配乐音量，清晰不破音。</div>
               </div>
             </label>
           </div>
@@ -476,18 +474,12 @@ export function EditorStage() {
       </div>
 
       <EditorTimeline
-        shots={epShots}
-        takes={workspace.takes}
-        segments={playback.segments}
-        activeIndex={playback.activeSegment?.index ?? null}
-        playheadSec={playback.playheadSec}
-        totalSec={playback.totalSec}
-        playing={playback.playing}
-        seekMotion={playback.seekMotion}
-        bgmAsset={bgmAsset}
-        bgmVolumeDb={workspace.project.bgmVolumeDb}
-        onSeekTime={playback.seekToTime}
-        onScrubStart={playback.pause}
+        shots={epShots} takes={workspace.takes} segments={playback.segments}
+        activeIndex={playback.activeSegment?.index ?? null} playheadSec={playback.playheadSec}
+        totalSec={playback.totalSec} playing={playback.playing} seekMotion={playback.seekMotion}
+        bgmAsset={bgmAsset} bgmVolumeDb={workspace.project.bgmVolumeDb}
+        bgmCues={effectiveBgmCues} musicAssets={musicAssets} selectedCueId={selectedCueId}
+        onSelectBgmCue={setSelectedCueId} onSeekTime={playback.seekToTime} onScrubStart={playback.pause}
       />
     </div>
   );
