@@ -255,7 +255,9 @@ export async function measureAndRepairMasterAudio(input: {
     };
   }
 
-  let ceilingDb = -2.4;
+  let ceilingDb = -2.2;
+  let prevLufs: number | null = null;
+  let prevGainDb = 0;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const tmpOut = path.join(
       path.dirname(input.masterMp4Path),
@@ -263,18 +265,24 @@ export async function measureAndRepairMasterAudio(input: {
     );
     const lufs = parsed.lufs ?? -16;
     const tp = parsed.tp ?? -1.5;
-    // Dynamically lower the 4x-oversampled ceiling whenever AAC inter-sample true peak overshoots
-    const overshootDb = tp > -1.3 ? tp - -1.5 : 0;
-    if (tp > -1.0) {
-      ceilingDb = Math.max(-6.5, Number((ceilingDb - overshootDb - 0.55).toFixed(2)));
-    } else if (attempt > 1 && tp > -1.3) {
-      ceilingDb = Math.max(-6.5, Number((ceilingDb - 0.35).toFixed(2)));
+    const lufsErr = -16 - lufs;
+    // Only tighten the brickwall ceiling when decoded AAC true peak is actually too close to -1.0 dBTP
+    if (tp > -1.1) {
+      const dropDb = Math.min(1.5, Math.max(0.45, tp - -1.6));
+      ceilingDb = Math.max(-6.0, Number((ceilingDb - dropDb).toFixed(2)));
     }
-    // Slight makeup factor when boosting into a brickwall limiter prevents high-crest LUFS undershoot
-    let rawGain = -16 - lufs;
-    if (rawGain > 0.5) rawGain *= 1.15;
-    const gainDb = Math.max(-18, Math.min(18, Number(rawGain.toFixed(2))));
+    // Secant-slope closed-loop gain: adapts directly to real limiter compression ratio on high-crest audio
+    let slope = lufsErr > 0.5 ? 0.8 : 1.0;
+    if (prevLufs !== null && Math.abs(prevGainDb) >= 0.3) {
+      const delta = lufs - prevLufs;
+      if (delta * prevGainDb > 0) {
+        slope = Math.max(0.35, Math.min(1.2, delta / prevGainDb));
+      }
+    }
+    const gainDb = Math.max(-18, Math.min(18, Number((lufsErr / slope).toFixed(2))));
     const af = `volume=${gainDb}dB,${buildTruePeakLimiterChain(ceilingDb)}`;
+    prevLufs = lufs;
+    prevGainDb = gainDb;
 
     try {
       await input.run(input.ffmpegPath, [

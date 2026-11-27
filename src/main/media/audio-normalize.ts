@@ -50,13 +50,14 @@ function clampNum(v: number, min: number, max: number): string {
 }
 
 /**
- * 4x-oversampled (192 kHz) brickwall true-peak limiter that prevents lossy AAC encoding
- * inter-sample overshoot from violating the strict <= -1.0 dBTP broadcast ceiling.
+ * Zero-Gibbs 48 kHz lookahead brickwall limiter placed AFTER `aresample=48000` (so downsampling
+ * from loudnorm's internal 192 kHz never introduces post-limiter sinc ringing) with AAC headroom
+ * to strictly satisfy <= -1.0 dBTP on the final decoded AAC MP4.
  */
 export function buildTruePeakLimiterChain(ceilingDb: number): string {
-  const safeDb = Math.max(-6.5, Math.min(-1.4, ceilingDb));
-  const linearLimit = Math.max(0.45, Math.min(0.85, 10 ** (safeDb / 20))).toFixed(4);
-  return `aresample=192000,alimiter=limit=${linearLimit}:attack=0.5:release=50:level=disabled,aresample=48000`;
+  const safeDb = Math.max(-6.0, Math.min(-1.5, ceilingDb));
+  const linearLimit = Math.max(0.5, Math.min(0.84, 10 ** (safeDb / 20))).toFixed(4);
+  return `aresample=48000,alimiter=limit=${linearLimit}:attack=5:release=50:level=disabled`;
 }
 
 export async function buildAudioNormalizationFilter(
@@ -81,7 +82,7 @@ export async function buildAudioNormalizationFilter(
     `measured_thresh=${clampNum(inThresh, -99, 0)}:` +
     `offset=${clampNum(offset, -99, 99)}:linear=true`;
   return {
-    filter: `${loudnormPass},${buildTruePeakLimiterChain(-2.4)}`,
+    filter: `${loudnormPass},${buildTruePeakLimiterChain(-2.2)}`,
     applicable: true,
   };
 }

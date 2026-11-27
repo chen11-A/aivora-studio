@@ -85,9 +85,10 @@ describe("Real-machine audio regressions (strict QC, zero relaxation)", () => {
     // 1. Test the exact bundled BGM tracks that previously failed after 2 repair attempts (14s trial export)
     const musicDir = path.resolve(process.cwd(), "resources", "audio", "music");
     const hardTracks = [
+      "music-01a63f6d5d85.ogg", // 局外人 (previously +0.13 dBTP on pass 1)
       "music-0a80523107eb.ogg", // 神秘线索 (previously -0.63 dBTP after R2)
       "music-c8cdb7affbe1.ogg", // 计划 (previously -0.21 dBTP after R2)
-      "music-0274474ab7c4.ogg", // 游戏少年 (previously failed R1)
+      "music-0274474ab7c4.ogg", // 游戏少年 (high-crest chiptune)
     ];
 
     for (const fileName of hardTracks) {
@@ -124,10 +125,10 @@ describe("Real-machine audio regressions (strict QC, zero relaxation)", () => {
         run,
         maxAttempts: 3,
       });
-      expect(repaired.status === "passed" || repaired.status === "repaired").toBe(true);
+      expect(repaired.status, `${fileName}: ${repaired.message}`).toMatch(/^(passed|repaired)$/);
       expect(repaired.videoCopiedWithoutReencode).toBe(true);
-      expect(Math.abs((repaired.integratedLufs ?? 0) + 16)).toBeLessThanOrEqual(1.0);
-      expect(repaired.truePeakDbtp!).toBeLessThanOrEqual(-1.0);
+      expect(Math.abs((repaired.integratedLufs ?? 0) + 16), `${fileName}: ${repaired.message}`).toBeLessThanOrEqual(1.0);
+      expect(repaired.truePeakDbtp!, `${fileName}: ${repaired.message}`).toBeLessThanOrEqual(-1.0);
 
       // Independent post-decode measurement strictly matches unchanged assertNormalizedAudio
       const finalMeasured = await measureAudioLoudness(masterMp4, ffmpeg, run);
