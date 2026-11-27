@@ -448,7 +448,7 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     cancelEpisodeExport: async () => ({ ok: false, message: "浏览器预览模式无导出任务" }),
     onFlushBeforeClose: () => () => undefined,
     notifyFlushComplete: () => undefined,
-    getAppInfo: async () => ({ version: "2.0.1", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
+    getAppInfo: async () => ({ version: "2.0.2", workspaceRoot: "我的作品", sqliteEngine: "browser-preview", platform: "web" }),
     loadDeliveryQueue: async () => null,
     runMultiEpisodeDelivery: async () => ({
       ok: false, queue: null, rerenderedCount: 0, skippedVerifiedCount: 0, failedEpisodeIds: [], mergedOutputPath: null,
