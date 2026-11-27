@@ -37,6 +37,7 @@ import {
   parseDirectorProposalJson,
   sanitizeDirectorProposal,
 } from "./director-prompt";
+import { runPerformanceSheetProposal } from "./performance-sheet";
 import { stampDirectorProposalSnapshot } from "./proposal-snapshot";
 import { buildScreenwriterOutline, splitNovelParagraphs } from "./screenwriter-outline";
 import { reviewProposalAgainstScript, reviewWorkspaceEpisode } from "./script-reviewer";
@@ -467,5 +468,15 @@ export class DirectorService {
       const fallback = buildOfflineActionPolish(shot, ws.assets);
       return { ok: true, proposal: fallback, message: "AI 精修解析失败，已回退本地三拍动作建议" };
     }
+  }
+
+  async proposePerformanceSheet(input: { projectId: string; shotId: string }) {
+    const workspace = this.projects.openProject(input.projectId);
+    return runPerformanceSheetProposal({
+      workspace,
+      shotId: input.shotId,
+      hasScriptRouting: Boolean(this.globalConfig.getSnapshot().routing.script),
+      runTextModel: (req) => this.runConfiguredTextModel(req),
+    });
   }
 }

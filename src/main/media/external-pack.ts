@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { isSvgPlaceholderPath, resolveConfirmedFirstFrameTake } from "../../shared/media-selection";
+import { formatFlowPromptForShot } from "../../shared/performance-sheet";
 import type { ProjectWorkspace } from "../../shared/types/domain";
 import type {
   ExternalDropCommitInput,
@@ -111,6 +112,7 @@ export function exportExternalShotPack(input: {
     }
 
     const prepared = injectLockedReferences(input.workspace, input.projectDir, shot, null);
+    const flowRes = formatFlowPromptForShot({ workspace: input.workspace, shot, mode: "auto" });
     const refSummary =
       prepared.injectedRefs.length > 0
         ? prepared.injectedRefs.map((r) => `${r.name}(${r.description || "保持一致"})`).join("；")
@@ -131,6 +133,18 @@ export function exportExternalShotPack(input: {
       `- **景别 / 运镜 / 时长**：${shot.scale} / ${shot.cameraMove} / ${shot.durationSec}s`,
       `- **已确认参考设定**：${refSummary}`,
       shot.dialogue.trim() ? `- **台词**：${shot.speaker ? `${shot.speaker}：` : ""}${shot.dialogue.trim()}` : "- **台词**：无",
+      ...(flowRes.usedPerformanceSheet
+        ? [
+            `- **单镜表演单提示词（Google Flow / 外采优先复制）**：`,
+            "```text",
+            flowRes.prompt,
+            "```",
+          ]
+        : flowRes.skippedStaleSheet
+          ? [
+              `- **表演单状态**：待复核（镜头时长、剧本、在场角色或参考已变更，本次未沿用旧表演单，请回分镜页确认或重生成）`,
+            ]
+          : []),
       `- **中文提示词（即梦 / 可灵推荐）**：`,
       "```text",
       prepared.finalPrompt,
@@ -146,6 +160,11 @@ export function exportExternalShotPack(input: {
       `[镜 ${num}] ${shot.title} (${shot.scale} / ${shot.cameraMove} / ${shot.durationSec}s)`,
       `首帧图: ${frameNote}`,
       `回流命名: ${num}.mp4`,
+      ...(flowRes.usedPerformanceSheet
+        ? [`表演单Flow提示词:\n${flowRes.prompt}`]
+        : flowRes.skippedStaleSheet
+          ? [`表演单状态: 待复核（已按原提示词导出，未自动沿用旧单）`]
+          : []),
       `中文提示词: ${prepared.finalPrompt.replace(/\n+/g, " ")}`,
       `Flow提示词: ${enPrompt}`,
       "------------------------------------------------------------",

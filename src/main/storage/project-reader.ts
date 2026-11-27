@@ -143,6 +143,15 @@ export function readWorkspaceFromDb(
           ? rawSfx
           : "none";
 
+      let performanceSheet: Shot["performanceSheet"] = null;
+      if (r.performance_sheet_json) {
+        try {
+          performanceSheet = JSON.parse(String(r.performance_sheet_json)) as Shot["performanceSheet"];
+        } catch {
+          performanceSheet = null;
+        }
+      }
+
       return {
         id: String(r.id),
         sceneId: String(r.scene_id),
@@ -175,6 +184,7 @@ export function readWorkspaceFromDb(
         audioJcutSec: Number(r.audio_jcut_sec ?? 0),
         seamSfxType,
         seamSfxVolumeDb: Number(r.seam_sfx_volume_db ?? -10),
+        performanceSheet,
         characterAssetIds: JSON.parse(String(r.character_asset_ids_json ?? "[]")),
         propAssetIds: JSON.parse(String(r.prop_asset_ids_json ?? "[]")),
         requiredRefAssetIds: JSON.parse(String(r.required_ref_asset_ids_json ?? "[]")),

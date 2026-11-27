@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronLeft, Download, ExternalLink, Film, Image as ImageIcon, Layers, Package, Plus, Upload, X } from "lucide-react";
 import { evaluateShotVisualStatus, isAudioMediaPath, isImageMediaPath, isVideoMediaPath, resolveActiveVisualTake, resolveSelectedSpeechTake, resolveShotTrimWindow } from "@shared/media-selection";
+import { formatFlowPromptForShot } from "@shared/performance-sheet";
 import type { ExternalDownloadEvent } from "@shared/types/external-pack";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
@@ -81,21 +82,9 @@ export function StoryboardStage() {
 
   async function handleCopyPromptAndOpenFlow() {
     if (!currentShot || !workspace) return;
-    const lockedRefs = workspace.assets
-      .filter((a) => a.lockedRef && currentShot.characterAssetIds.includes(a.id))
-      .map((a) => `${a.name}：${a.description || "保持设定一致"}`)
-      .join("；");
-    const text = [
-      workspace.project.aspectRatio === "9:16" ? "竖屏 9:16" : "横屏 16:9",
-      workspace.project.stylePreset ? `画风：${workspace.project.stylePreset}` : "",
-      lockedRefs ? `参考设定：${lockedRefs}` : "",
-      `${currentShot.scale}，${currentShot.cameraMove}，${currentShot.durationSec}秒`,
-      currentShot.visualPrompt.trim() || currentShot.title,
-    ]
-      .filter(Boolean)
-      .join("。");
+    const resolved = formatFlowPromptForShot({ workspace, shot: currentShot, mode: "auto" });
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(resolved.prompt);
     } catch {
       // clipboard API may be restricted in headless mode
     }
@@ -103,9 +92,12 @@ export function StoryboardStage() {
     setTimeout(() => setCopiedFlow(false), 2000);
     await client.configureDownloadWatch({ enabled: true, projectId: workspace.project.id });
     await client.openExternalUrl(GOOGLE_FLOW_URL);
-    useStudioStore
-      .getState()
-      .showToast("已复制本镜提示词并打开 Google Flow，下载完成后将自动提示归入当前镜头", 4200);
+    const toastMsg = resolved.usedPerformanceSheet
+      ? "已复制本镜表演单提示词并打开 Google Flow，下载完成后将自动提示归入当前镜头"
+      : resolved.skippedStaleSheet
+        ? "本镜表演单待复核（未自动沿用旧单），本次已按原画面描述复制并打开 Google Flow"
+        : "已复制本镜提示词并打开 Google Flow，下载完成后将自动提示归入当前镜头";
+    useStudioStore.getState().showToast(toastMsg, 4400);
   }
 
   const resolveSrc = (mediaPath: string | null | undefined) => {

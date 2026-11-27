@@ -335,6 +335,11 @@ export type AivoraDesktopApi = {
     proposal?: import("./types/story-pipeline").ActionPolishProposal;
     message: string;
   }>;
+  proposePerformanceSheet: (input: { projectId: string; shotId: string }) => Promise<{
+    ok: boolean;
+    sheet?: import("./types/performance-sheet").ShotPerformanceSheet;
+    message: string;
+  }>;
 
   // Anti-duplicate-charge Job Queue & Incremental Batch Scheduler
   prepareGenerationPlan: (input: {
@@ -452,6 +457,7 @@ export const IPC_CHANNELS = {
   DIRECTOR_UNDO_STATE: "aivora:director:undo-state",
   SCRIPT_REVIEW_EPISODE: "aivora:director:review-episode",
   ACTION_POLISH_PROPOSE: "aivora:director:action-polish",
+  PERFORMANCE_SHEET_PROPOSE: "aivora:director:performance-sheet",
   JOB_PREPARE_PLAN: "aivora:jobs:prepare-plan",
   JOB_CONFIRM_RUN: "aivora:jobs:confirm-run",
   JOB_RECOVER_UNKNOWN: "aivora:jobs:recover-unknown",

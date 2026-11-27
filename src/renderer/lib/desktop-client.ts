@@ -396,12 +396,12 @@ function createBrowserPreviewApi(): AivoraDesktopApi {
     },
     proposeActionPolish: async ({ projectId, shotId }) => {
       const ws = workspaces.get(projectId)!;
-      return {
-        ok: true,
-        proposal: buildPreviewActionPolish(ws, shotId),
-        message: "已生成单镜动作三拍精修建议（确认后采纳）",
-      };
+      return { ok: true, proposal: buildPreviewActionPolish(ws, shotId), message: "已生成单镜动作三拍精修建议（确认后采纳）" };
     },
+    proposePerformanceSheet: async () => ({
+      ok: false,
+      message: "请在桌面端生成单镜表演单",
+    }),
     prepareGenerationPlan: async (input) =>
       buildPreviewGenerationPlan(workspaces.get(input.projectId)!, input),
     confirmAndRunJob: async () => {

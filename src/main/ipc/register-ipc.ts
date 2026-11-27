@@ -451,9 +451,11 @@ export function registerIpcHandlers(deps: {
     (input: { projectId: string; episodeId: string; softTargetShotsPerScene?: number }) =>
       deps.director.reviewEpisode(input),
   );
-  handle(
-    IPC_CHANNELS.ACTION_POLISH_PROPOSE,
-    (input: { projectId: string; shotId: string }) => deps.director.proposeActionPolish(input),
+  handle(IPC_CHANNELS.ACTION_POLISH_PROPOSE, (input: { projectId: string; shotId: string }) =>
+    deps.director.proposeActionPolish(input),
+  );
+  handle(IPC_CHANNELS.PERFORMANCE_SHEET_PROPOSE, (input: { projectId: string; shotId: string }) =>
+    deps.director.proposePerformanceSheet(input),
   );
 
   handle(

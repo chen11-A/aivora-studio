@@ -95,6 +95,7 @@ const api: AivoraDesktopApi = {
   getDirectorUndoState: (input) => ipcRenderer.invoke(IPC_CHANNELS.DIRECTOR_UNDO_STATE, input),
   reviewEpisodeShots: (input) => ipcRenderer.invoke(IPC_CHANNELS.SCRIPT_REVIEW_EPISODE, input),
   proposeActionPolish: (input) => ipcRenderer.invoke(IPC_CHANNELS.ACTION_POLISH_PROPOSE, input),
+  proposePerformanceSheet: (input) => ipcRenderer.invoke(IPC_CHANNELS.PERFORMANCE_SHEET_PROPOSE, input),
   prepareGenerationPlan: (input) => ipcRenderer.invoke(IPC_CHANNELS.JOB_PREPARE_PLAN, input),
   confirmAndRunJob: (plan) => ipcRenderer.invoke(IPC_CHANNELS.JOB_CONFIRM_RUN, plan),
   recoverUnknownJob: (input) => ipcRenderer.invoke(IPC_CHANNELS.JOB_RECOVER_UNKNOWN, input),

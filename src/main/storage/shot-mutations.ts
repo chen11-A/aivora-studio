@@ -240,6 +240,12 @@ export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): str
       ? input.seamSfxVolumeDb
       : Number(row.seam_sfx_volume_db ?? -10);
   const nextSeamSfxVol = Number(Math.max(-30, Math.min(0, Number.isFinite(rawSfxVol) ? rawSfxVol : -10)).toFixed(1));
+  const nextPerfSheetJson =
+    input.performanceSheet !== undefined
+      ? input.performanceSheet
+        ? JSON.stringify(input.performanceSheet)
+        : null
+      : ((row.performance_sheet_json as string | null) ?? null);
 
   db.transaction(() => {
     db.run(
@@ -249,7 +255,7 @@ export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): str
        subtitle = ?, source_span_json = ?, key_beat = ?, key_beat_reason = ?, video_plan_mode = ?,
        video_gen_mode = ?, end_frame_media_path = ?, reference_video_path = ?, native_audio_enabled = ?,
        seam_transition_type = ?, seam_transition_sec = ?, audio_jcut_sec = ?,
-       seam_sfx_type = ?, seam_sfx_volume_db = ?,
+       seam_sfx_type = ?, seam_sfx_volume_db = ?, performance_sheet_json = ?,
        character_asset_ids_json = ?, prop_asset_ids_json = ?, required_ref_asset_ids_json = ?,
        selected_image_take_id = ?, selected_video_take_id = ?, selected_speech_take_id = ?, updated_at = ?
        WHERE id = ?`,
@@ -279,6 +285,7 @@ export function updateShotInDb(db: SqliteDriver, rawInput: UpdateShotInput): str
       nextAudioJcut,
       nextSeamSfxType,
       nextSeamSfxVol,
+      nextPerfSheetJson,
       nextCharIdsJson,
       nextPropIdsJson,
       nextReqRefIdsJson,

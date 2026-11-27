@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ShotPerformanceSheetSchema } from "./performance-sheet";
 
 export const AspectRatioSchema = z.enum(["16:9", "9:16"]);
 export type AspectRatio = z.infer<typeof AspectRatioSchema>;
@@ -190,6 +191,7 @@ export const ShotSchema = z.object({
   audioJcutSec: z.number().min(-0.8).max(0.8).optional(),
   seamSfxType: SeamSfxKindSchema.optional(),
   seamSfxVolumeDb: z.number().min(-30).max(0).optional(),
+  performanceSheet: ShotPerformanceSheetSchema.nullable().optional(),
   characterAssetIds: z.array(z.string()).default([]),
   propAssetIds: z.array(z.string()).optional(),
   requiredRefAssetIds: z.array(z.string()).optional(),
@@ -294,6 +296,7 @@ export const UpdateShotInputSchema = z.object({
   audioJcutSec: z.number().min(-0.8).max(0.8).optional(),
   seamSfxType: SeamSfxKindSchema.optional(),
   seamSfxVolumeDb: z.number().min(-30).max(0).optional(),
+  performanceSheet: ShotPerformanceSheetSchema.nullable().optional(),
   characterAssetIds: z.array(z.string()).optional(),
   propAssetIds: z.array(z.string()).optional(),
   requiredRefAssetIds: z.array(z.string()).optional(),

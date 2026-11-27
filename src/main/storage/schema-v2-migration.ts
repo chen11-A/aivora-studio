@@ -203,6 +203,19 @@ export const V2_MIGRATIONS: ReadonlyArray<{
       }
     },
   },
+  {
+    version: "v2.1.2_006_shot_performance_sheet",
+    description:
+      "Add nullable per-shot performance_sheet_json column on shots for single-shot performance sheets & Flow export",
+    apply: (db) => {
+      const shotCols = new Set(
+        db.all<{ name: string }>(`PRAGMA table_info(shots)`).map((c) => c.name),
+      );
+      if (!shotCols.has("performance_sheet_json")) {
+        db.exec(`ALTER TABLE shots ADD COLUMN performance_sheet_json TEXT`);
+      }
+    },
+  },
 ];
 
 export type MigrationRunReport = {

@@ -1,15 +1,19 @@
-import { useEffect } from "react";
-import { Check, Film, Image as ImageIcon, Loader2, Sparkles, Star, Wand2, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, Clapperboard, Film, Image as ImageIcon, Loader2, Sparkles, Star, Wand2, X } from "lucide-react";
+import { evaluatePerformanceSheetState } from "@shared/performance-sheet";
 import type { Shot } from "@shared/types/domain";
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
+import { ShotPerformanceSheetBox } from "./ShotPerformanceSheetBox";
 
 export function ShotActionPolishBox({ currentShot }: { currentShot: Shot }) {
+  const workspace = useStudioStore((s) => s.workspace);
   const editShot = useStudioStore((s) => s.editShot);
   const loadingShotId = useAiGenerationStore((s) => s.actionPolishLoadingShotId);
   const actionPolishProposal = useAiGenerationStore((s) => s.actionPolishProposal);
   const proposeActionPolish = useAiGenerationStore((s) => s.proposeActionPolish);
   const closeActionPolish = useAiGenerationStore((s) => s.closeActionPolish);
+  const [perfOpen, setPerfOpen] = useState(false);
 
   useEffect(() => {
     if (actionPolishProposal && actionPolishProposal.shotId !== currentShot.id) {
@@ -24,6 +28,7 @@ export function ShotActionPolishBox({ currentShot }: { currentShot: Shot }) {
       : null;
 
   const isPaidVideo = (currentShot.videoPlanMode ?? "paid_video") === "paid_video";
+  const perfState = workspace ? evaluatePerformanceSheetState(workspace, currentShot).status : "none";
 
   function applyPolish() {
     if (!activePolish) return;
@@ -41,7 +46,7 @@ export function ShotActionPolishBox({ currentShot }: { currentShot: Shot }) {
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="grid grid-cols-3 gap-1.5">
+      <div className="grid grid-cols-2 gap-1.5">
         <button
           type="button"
           data-testid="toggle-shot-key-beat"
@@ -112,7 +117,32 @@ export function ShotActionPolishBox({ currentShot }: { currentShot: Shot }) {
           )}
           <span className="truncate">动作精修</span>
         </button>
+
+        <button
+          type="button"
+          data-testid="btn-toggle-performance-sheet"
+          onClick={() => setPerfOpen((v) => !v)}
+          className={`aivora-pressable h-7 px-1.5 rounded-md text-[11px] border inline-flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap ${
+            perfState === "needs_review"
+              ? "bg-[var(--accent-amber-soft)] border-[var(--accent-amber-border)] text-[var(--accent-amber-text)] font-medium"
+              : perfState === "ready" || perfOpen
+                ? "bg-[var(--accent-primary-soft)] border-[var(--accent-primary-border)] text-[var(--accent-primary-text)] font-medium"
+                : "bg-[var(--bg-inset)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)]"
+          }`}
+          title="单镜表演单：独立记录表演意图、开场状态、动作节拍与收镜状态，供 Flow 外采使用"
+        >
+          <Clapperboard className="w-3 h-3 shrink-0" />
+          <span className="truncate">
+            {perfState === "needs_review" ? "表演单·待复核" : perfState === "ready" ? "表演单·已就绪" : "表演单"}
+          </span>
+        </button>
       </div>
+
+      <ShotPerformanceSheetBox
+        currentShot={currentShot}
+        open={perfOpen}
+        onClose={() => setPerfOpen(false)}
+      />
 
       {activePolish && (
         <div
