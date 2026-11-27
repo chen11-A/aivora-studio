@@ -17,7 +17,8 @@ import type {
 } from "@shared/types/external-pack";
 import { ModalShell } from "../../components/ui/OverlayShell";
 import { getDesktopClient } from "../../lib/desktop-client";
-import { useStudioStore } from "../../store/useStudioStore";
+import { flushPendingSaves, useStudioStore } from "../../store/useStudioStore";
+import { hasAnyUnsavedPerformanceSheetDraft } from "./performance-sheet-draft-state";
 
 export function ExternalWorkflowModal(props: {
   open: boolean;
@@ -66,8 +67,17 @@ export function ExternalWorkflowModal(props: {
   }
 
   async function handleExportPack() {
+    if (hasAnyUnsavedPerformanceSheetDraft(epShots.map((s) => s.id))) {
+      flashToast("本集有未保存的表演单修改，请先点「保存表演单」后再导出外采包（避免导出旧版本）");
+      return;
+    }
     setExporting(true);
     try {
+      const saved = await flushPendingSaves();
+      if (!saved) {
+        flashToast("本地保存失败，请先重试保存后再导出外采包");
+        return;
+      }
       const res = await client.exportExternalShotPack({ projectId, episodeId });
       setExportRes(res);
       flashToast(res.message);

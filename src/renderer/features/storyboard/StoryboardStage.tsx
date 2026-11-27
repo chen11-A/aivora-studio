@@ -7,6 +7,7 @@ import { getDesktopClient } from "../../lib/desktop-client";
 import { useAiGenerationStore } from "../../store/useAiGenerationStore";
 import { useStudioStore } from "../../store/useStudioStore";
 import { ExternalWorkflowModal } from "./ExternalWorkflowModal";
+import { isPerformanceSheetDraftDirty } from "./performance-sheet-draft-state";
 import { ShotInspector } from "./ShotInspector";
 import { TrimmedShotVideo } from "./TrimmedShotVideo";
 import { useStoryboardHotkeys } from "./useStoryboardHotkeys";
@@ -82,6 +83,12 @@ export function StoryboardStage() {
 
   async function handleCopyPromptAndOpenFlow() {
     if (!currentShot || !workspace) return;
+    if (isPerformanceSheetDraftDirty(currentShot.id)) {
+      useStudioStore
+        .getState()
+        .showToast("当前镜头表演单有未保存修改，请先点「保存表演单」后再复制（避免误用旧版本）", 4400);
+      return;
+    }
     const resolved = formatFlowPromptForShot({ workspace, shot: currentShot, mode: "auto" });
     try {
       await navigator.clipboard.writeText(resolved.prompt);
@@ -93,7 +100,7 @@ export function StoryboardStage() {
     await client.configureDownloadWatch({ enabled: true, projectId: workspace.project.id });
     await client.openExternalUrl(GOOGLE_FLOW_URL);
     const toastMsg = resolved.usedPerformanceSheet
-      ? "已复制本镜表演单提示词并打开 Google Flow，下载完成后将自动提示归入当前镜头"
+      ? "已复制本镜已保存的表演单提示词并打开 Google Flow，下载完成后将自动提示归入当前镜头"
       : resolved.skippedStaleSheet
         ? "本镜表演单待复核（未自动沿用旧单），本次已按原画面描述复制并打开 Google Flow"
         : "已复制本镜提示词并打开 Google Flow，下载完成后将自动提示归入当前镜头";

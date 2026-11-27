@@ -1,10 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   AlertTriangle,
-  Check,
   Clapperboard,
-  Copy,
-  ExternalLink,
   Loader2,
   Plus,
   RefreshCw,
@@ -20,6 +17,11 @@ import type { Shot } from "@shared/types/domain";
 import type { ShotPerformanceBeat, ShotPerformanceSheet } from "@shared/types/performance-sheet";
 import { getDesktopClient } from "../../lib/desktop-client";
 import { flushPendingSaves, useStudioStore } from "../../store/useStudioStore";
+import {
+  guardFormalPerformanceSheetCopy,
+  markPerformanceSheetDraftDirty,
+} from "./performance-sheet-draft-state";
+import { ShotPerformanceSheetFooter } from "./ShotPerformanceSheetFooter";
 
 const GOOGLE_FLOW_URL = "https://flow.google.com/";
 
@@ -42,6 +44,11 @@ export function ShotPerformanceSheetBox(props: {
     setDraft(currentShot.performanceSheet ?? null);
     setDirty(false);
   }, [currentShot.id, currentShot.performanceSheet]);
+
+  useEffect(() => {
+    markPerformanceSheetDraftDirty(currentShot.id, dirty);
+    return () => markPerformanceSheetDraftDirty(currentShot.id, false);
+  }, [currentShot.id, dirty]);
 
   if (!open || !workspace) return null;
 
@@ -91,37 +98,29 @@ export function ShotPerformanceSheetBox(props: {
 
   function addBeat() {
     if (!draft) return;
-    const next: ShotPerformanceBeat[] = [
-      ...draft.beats,
-      { order: draft.beats.length + 1, timeRange: "", action: "" },
-    ];
-    updateDraft({ beats: next });
+    updateDraft({
+      beats: [...draft.beats, { order: draft.beats.length + 1, timeRange: "", action: "" }],
+    });
   }
 
   function removeBeat(index: number) {
     if (!draft || draft.beats.length <= 1) return;
-    const next = draft.beats
-      .filter((_, i) => i !== index)
-      .map((b, i) => ({ ...b, order: i + 1 }));
-    updateDraft({ beats: next });
+    updateDraft({
+      beats: draft.beats.filter((_, i) => i !== index).map((b, i) => ({ ...b, order: i + 1 })),
+    });
   }
 
   function buildCleanSheet(src: ShotPerformanceSheet): ShotPerformanceSheet | null {
     const cleanBeats = src.beats
-      .map((b, i) => ({
-        order: i + 1,
-        timeRange: (b.timeRange ?? "").trim(),
-        action: b.action.trim(),
-      }))
+      .map((b, i) => ({ order: i + 1, timeRange: (b.timeRange ?? "").trim(), action: b.action.trim() }))
       .filter((b) => b.action.length > 0);
     if (cleanBeats.length === 0) return null;
-    const cleanKeeps = src.keepConstraints.map((k) => k.trim()).filter(Boolean);
     return {
       ...src,
       intent: src.intent.trim(),
       openingState: src.openingState.trim(),
       beats: cleanBeats,
-      keepConstraints: cleanKeeps,
+      keepConstraints: src.keepConstraints.map((k) => k.trim()).filter(Boolean),
       endingState: src.endingState.trim(),
       dependencyDigest: computePerformanceSheetDependencyDigest(workspace!, currentShot),
       updatedAt: new Date().toISOString(),
@@ -139,7 +138,8 @@ export function ShotPerformanceSheetBox(props: {
     editShot({ shotId: currentShot.id, performanceSheet: cleaned });
     setDraft(cleaned);
     setDirty(false);
-    showToast("已采纳单镜表演单（未改动原有画面描述、景别、时长与参考素材）");
+    void flushPendingSaves();
+    showToast("已保存单镜表演单（未改动原有画面描述、景别、时长与参考素材）");
   }
 
   function handleConfirmReuseStale() {
@@ -149,6 +149,7 @@ export function ShotPerformanceSheetBox(props: {
     editShot({ shotId: currentShot.id, performanceSheet: cleaned });
     setDraft(cleaned);
     setDirty(false);
+    void flushPendingSaves();
     showToast("已确认继续沿用当前表演单，状态已更新为就绪");
   }
 
@@ -168,47 +169,65 @@ export function ShotPerformanceSheetBox(props: {
     editShot({ shotId: currentShot.id, performanceSheet: null });
     setDraft(null);
     setDirty(false);
+    void flushPendingSaves();
     showToast("已清除本镜表演单（恢复按原画面描述外采）");
+  }
+
+  async function writeClipboard(text: string, tag: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Clipboard may be restricted in headless mode
+    }
+    setCopiedMode(tag);
+    setTimeout(() => setCopiedMode(null), 2000);
   }
 
   async function handleCopyForFlow(useSheet: boolean, openFlow: boolean) {
     if (!workspace) return;
-    let overrideSheet: ShotPerformanceSheet | null = null;
     if (useSheet) {
-      if (!draft) return;
-      const cleaned = buildCleanSheet(draft);
-      if (!cleaned) {
-        showToast("至少需要保留 1 条可见动作节拍");
+      const check = guardFormalPerformanceSheetCopy({ dirty, hasSavedSheet, isPersistedStale });
+      if (!check.allowed) {
+        showToast(check.reason, 4200);
         return;
       }
-      overrideSheet = cleaned;
     }
+    // Formal Flow copy/open strictly reads persisted `currentShot.performanceSheet` (never unsaved draft).
     const resolved = formatFlowPromptForShot({
       workspace,
       shot: currentShot,
       mode: useSheet ? "performance_sheet" : "plain",
-      overrideSheet,
     });
-    try {
-      await navigator.clipboard.writeText(resolved.prompt);
-    } catch {
-      // Clipboard may be restricted in headless mode
-    }
-    const tag = `${useSheet ? "sheet" : "plain"}-${openFlow ? "open" : "copy"}`;
-    setCopiedMode(tag);
-    setTimeout(() => setCopiedMode(null), 2000);
+    await writeClipboard(resolved.prompt, `${useSheet ? "sheet" : "plain"}-${openFlow ? "open" : "copy"}`);
     if (openFlow) {
       await client.configureDownloadWatch({ enabled: true, projectId: workspace.project.id });
       await client.openExternalUrl(GOOGLE_FLOW_URL);
       showToast(
         useSheet
-          ? "已复制表演单提示词并打开 Google Flow，下载完成后将自动提示回流"
+          ? "已复制已保存的表演单提示词并打开 Google Flow，下载完成后将自动提示回流"
           : "已按原画面描述复制并打开 Google Flow（未使用表演单）",
         4200,
       );
     } else {
-      showToast(useSheet ? "已复制单镜表演单提示词（可直接粘贴给 Flow）" : "已复制原画面描述提示词");
+      showToast(useSheet ? "已复制已保存的表演单提示词（与外采包版本一致）" : "已复制原画面描述提示词");
     }
+  }
+
+  async function handleCopyDraftOnly() {
+    if (!workspace || !draft) return;
+    const cleaned = buildCleanSheet(draft);
+    if (!cleaned) {
+      showToast("至少需要保留 1 条可见动作节拍");
+      return;
+    }
+    const resolved = formatFlowPromptForShot({
+      workspace,
+      shot: currentShot,
+      mode: "performance_sheet",
+      overrideSheet: cleaned,
+    });
+    await writeClipboard(resolved.prompt, "draft-copy");
+    showToast("已复制未保存草稿（仅用于试测；正式复制与外采包仍使用已保存版本）", 4400);
   }
 
   const sug = draft?.suggestions;
@@ -430,54 +449,17 @@ export function ShotPerformanceSheetBox(props: {
             </div>
           )}
 
-          <div className="flex items-center justify-between gap-1.5 pt-1 border-t border-[var(--border-subtle)] flex-wrap">
-            <div className="flex items-center gap-1">
-              {hasSavedSheet && (
-                <button
-                  type="button"
-                  onClick={handleClearSheet}
-                  className="btn-secondary h-6 px-2 text-[10px] text-[var(--text-muted)]"
-                  title="删除本镜表演单，恢复按原描述外采"
-                >
-                  清除
-                </button>
-              )}
-              <button
-                type="button"
-                data-testid="btn-copy-perf-flow"
-                disabled={isPersistedStale}
-                title={
-                  isPersistedStale
-                    ? "请先点击「确认继续沿用」或「重新生成」后再按表演单复制"
-                    : "复制当前表演单提示词给 Google Flow"
-                }
-                onClick={() => void handleCopyForFlow(true, false)}
-                className="btn-secondary h-6 px-2 text-[10px]"
-              >
-                {copiedMode === "sheet-copy" ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                <span>{copiedMode === "sheet-copy" ? "已复制" : "复制给 Flow"}</span>
-              </button>
-              <button
-                type="button"
-                disabled={isPersistedStale}
-                onClick={() => void handleCopyForFlow(true, true)}
-                className="btn-secondary h-6 px-2 text-[10px]"
-                title="复制当前表演单提示词并打开 Google Flow"
-              >
-                <ExternalLink className="w-3 h-3" />
-                <span>打开 Flow</span>
-              </button>
-            </div>
-            <button
-              type="button"
-              data-testid="btn-accept-performance-sheet"
-              onClick={handleAcceptSave}
-              className="btn-primary h-6 px-2.5 text-[11px]"
-            >
-              <Check className="w-3 h-3" />
-              <span>{hasSavedSheet ? "保存表演单" : "采纳保存"}</span>
-            </button>
-          </div>
+          <ShotPerformanceSheetFooter
+            dirty={dirty}
+            hasSavedSheet={hasSavedSheet}
+            isPersistedStale={isPersistedStale}
+            copiedMode={copiedMode}
+            onClear={handleClearSheet}
+            onCopyDraft={() => void handleCopyDraftOnly()}
+            onCopyFlow={() => void handleCopyForFlow(true, false)}
+            onOpenFlow={() => void handleCopyForFlow(true, true)}
+            onAcceptSave={handleAcceptSave}
+          />
         </div>
       )}
     </div>
